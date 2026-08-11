@@ -23,15 +23,17 @@
 //! # Roadmap
 //!
 //! Landed today: date primitives ([`Date`], [`Year`], [`Month`],
-//! [`Weekday`], [`Ordinal`]), [`Period`] (a sum type over
+//! [`Weekday`], [`Ordinal`]), holiday rule primitives ([`FixedDate`],
+//! [`NthWeekday`], [`LastWeekday`], [`OneOff`], [`EasterOffset`],
+//! [`WeekendShift`]), Easter-Monday lookup tables ([`easter_monday`],
+//! [`easter_sunday`]), [`Period`] (a sum type over
 //! `Days`/`Weeks`/`Months`/`Years`) and [`Frequency`] with
 //! QuantLib-parity arithmetic, EoM-aware month/year arithmetic on
 //! [`Date`] (via `Add<Period>` / `Sub<Period>` and the unit-specific
 //! methods), the [`Weekend`] bitmask, year ranges ([`YearRange`]), and
 //! the [`TimeError`] type returned by fallible constructors.
 //!
-//! Planned: holiday rule primitives, Easter-Monday lookup tables,
-//! rule-based calendars with built-in `pub const` values,
+//! Planned: rule-based calendars with built-in `pub const` values,
 //! business-day conventions, day-count conventions returning integer
 //! rationals, and payment-schedule generation.
 
@@ -39,13 +41,17 @@
 #![forbid(unsafe_code)]
 
 mod date;
+mod easter;
 mod error;
 mod period;
+mod rules;
 mod weekend;
 mod year_range;
 
 pub use date::{Date, Month, Ordinal, Weekday, Year};
+pub use easter::{EasterMethod, easter_monday, easter_sunday};
 pub use error::TimeError;
 pub use period::{Frequency, Period};
+pub use rules::{EasterOffset, FixedDate, LastWeekday, NthWeekday, OneOff, Rule, WeekendShift};
 pub use weekend::Weekend;
 pub use year_range::YearRange;
