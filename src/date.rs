@@ -884,6 +884,59 @@ impl fmt::Display for Date {
     }
 }
 
+impl core::str::FromStr for Date {
+    type Err = TimeError;
+
+    /// Parse an ISO-8601 calendar date in strict `YYYY-MM-DD` form —
+    /// the exact format [`Display`](fmt::Display) produces, so
+    /// `to_string` / `parse` round-trip.
+    ///
+    /// Exactly ten ASCII characters, zero-padded, hyphen-separated.
+    /// No whitespace, signs, time-of-day, or timezone designators —
+    /// this crate has no time-of-day type, so there is nothing for a
+    /// trailing `T…` to mean. Malformed strings return
+    /// [`TimeError::InvalidDateString`]; well-formed strings with an
+    /// out-of-range year or a nonexistent month/day return the same
+    /// range errors as [`Date::from_ymd`].
+    ///
+    /// ```
+    /// use fasti::{Date, Month, TimeError};
+    /// let d: Date = "2026-07-04".parse()?;
+    /// assert_eq!(d, Date::from_ymd(2026, Month::Jul, 4)?);
+    /// // Round trip through Display.
+    /// assert_eq!("2026-07-04".parse::<Date>()?.to_string(), "2026-07-04");
+    /// // Malformed strings are rejected.
+    /// assert_eq!("2026-7-4".parse::<Date>(), Err(TimeError::InvalidDateString));
+    /// // Well-formed but nonexistent dates surface the range error.
+    /// assert_eq!("2026-02-30".parse::<Date>(), Err(TimeError::DayOutOfRange));
+    /// # Ok::<(), fasti::TimeError>(())
+    /// ```
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        const fn digit(b: u8) -> Result<u16, TimeError> {
+            if b.is_ascii_digit() {
+                Ok((b - b'0') as u16)
+            } else {
+                Err(TimeError::InvalidDateString)
+            }
+        }
+        let [y3, y2, y1, y0, h1, m1, m0, h2, d1, d0] = s.as_bytes() else {
+            return Err(TimeError::InvalidDateString);
+        };
+        if *h1 != b'-' || *h2 != b'-' {
+            return Err(TimeError::InvalidDateString);
+        }
+        let year = 1000 * digit(*y3)? + 100 * digit(*y2)? + 10 * digit(*y1)? + digit(*y0)?;
+        let month_num = 10 * digit(*m1)? + digit(*m0)?;
+        let day = 10 * digit(*d1)? + digit(*d0)?;
+        // Both values are at most 99, so the u16 -> u8 narrowing is exact.
+        #[allow(clippy::cast_possible_truncation)]
+        let month = Month::try_from_u8(month_num as u8)?;
+        #[allow(clippy::cast_possible_truncation)]
+        let day = day as u8;
+        Self::from_ymd(year, month, day)
+    }
+}
+
 /// Step a [`Date`] forward by a [`Period`]. Returns
 /// [`TimeError::DateOutOfRange`] if the result falls outside the
 /// supported `1901-01-01..=2199-12-31` range, and clamps the
@@ -1106,6 +1159,60 @@ mod tests {
     }
 
     #[test]
+    fn from_str_parses_display_output() {
+        for (y, m, d) in [
+            (1901u16, Month::Jan, 1u8),
+            (2026, Month::Jul, 4),
+            (2024, Month::Feb, 29),
+            (2199, Month::Dec, 31),
+        ] {
+            let date = Date::from_ymd(y, m, d).unwrap();
+            let parsed: Date = alloc::format!("{date}").parse().unwrap();
+            assert_eq!(parsed, date);
+        }
+    }
+
+    #[test]
+    fn from_str_rejects_malformed_strings() {
+        for bad in [
+            "",
+            "2026",
+            "2026-07",
+            "2026-7-4",    // not zero-padded
+            "26-07-04",    // two-digit year
+            "2026/07/04",  // wrong separator
+            "2026-07-04T", // trailing content
+            " 2026-07-04", // leading whitespace
+            "2026-07-04 ", // trailing whitespace
+            "+026-07-04",  // sign
+            "2026-0a-04",  // non-digit
+            "٢٠٢٦-07-04",  // non-ASCII digits
+        ] {
+            assert_eq!(
+                bad.parse::<Date>(),
+                Err(TimeError::InvalidDateString),
+                "{bad:?} should be rejected as malformed",
+            );
+        }
+    }
+
+    #[test]
+    fn from_str_surfaces_range_errors_for_well_formed_input() {
+        assert_eq!("1900-12-31".parse::<Date>(), Err(TimeError::YearOutOfRange));
+        assert_eq!("2200-01-01".parse::<Date>(), Err(TimeError::YearOutOfRange));
+        assert_eq!(
+            "2026-13-01".parse::<Date>(),
+            Err(TimeError::MonthOutOfRange)
+        );
+        assert_eq!(
+            "2026-00-01".parse::<Date>(),
+            Err(TimeError::MonthOutOfRange)
+        );
+        assert_eq!("2026-02-30".parse::<Date>(), Err(TimeError::DayOutOfRange));
+        assert_eq!("2026-01-00".parse::<Date>(), Err(TimeError::DayOutOfRange));
+    }
+
+    #[test]
     fn to_ymd_matches_individual_accessors() {
         let d = Date::from_ymd(2026, Month::Jul, 4).unwrap();
         let (y, m, dom) = d.to_ymd();
@@ -1232,6 +1339,14 @@ mod tests {
             let (y, m, dom) = d.to_ymd();
             let rebuilt = Date::from_ymd(y.get(), m, dom).expect("valid");
             prop_assert_eq!(rebuilt.serial(), serial);
+        }
+
+        /// Every date's `Display` output parses back to the same date.
+        #[test]
+        fn display_and_from_str_round_trip(serial in 0u32..=MAX_SERIAL) {
+            let d = Date::from_serial(serial).expect("in range");
+            let parsed: Date = alloc::format!("{d}").parse().expect("Display output is valid");
+            prop_assert_eq!(parsed, d);
         }
 
         /// `add_months(n)` then `add_months(-n)` returns the original

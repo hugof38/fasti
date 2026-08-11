@@ -33,6 +33,12 @@ pub enum TimeError {
     /// serial range.
     #[error("date arithmetic result out of range")]
     DateOutOfRange,
+    /// A string passed to [`Date`](crate::Date)'s [`FromStr`](core::str::FromStr)
+    /// impl was not in `YYYY-MM-DD` form. (A well-formed string whose
+    /// year, month, or day is invalid surfaces the corresponding
+    /// range error instead.)
+    #[error("date string is not in YYYY-MM-DD form")]
+    InvalidDateString,
     /// A [`YearRange`](crate::YearRange) was constructed with an upper
     /// bound below its lower bound.
     #[error("year range upper bound is below lower bound")]
