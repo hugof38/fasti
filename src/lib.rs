@@ -30,16 +30,23 @@
 //! `Days`/`Weeks`/`Months`/`Years`) and [`Frequency`] with
 //! QuantLib-parity arithmetic, EoM-aware month/year arithmetic on
 //! [`Date`] (via `Add<Period>` / `Sub<Period>` and the unit-specific
-//! methods), the [`Weekend`] bitmask, year ranges ([`YearRange`]), and
-//! the [`TimeError`] type returned by fallible constructors.
+//! methods), the [`Weekend`] bitmask, year ranges ([`YearRange`]),
+//! calendars ([`Calendar`], [`CalendarBuilder`]) with built-in
+//! `pub const` values under [`calendars`], [`BusinessDayConvention`]
+//! with [`Calendar::adjust`] and [`Calendar::advance`], and the
+//! [`TimeError`] type returned by fallible constructors.
 //!
-//! Planned: rule-based calendars with built-in `pub const` values,
-//! business-day conventions, day-count conventions returning integer
-//! rationals, and payment-schedule generation.
+//! Planned: day-count conventions returning integer rationals, and
+//! payment-schedule generation.
 
 #![no_std]
 #![forbid(unsafe_code)]
 
+extern crate alloc;
+
+mod business_day;
+mod calendar;
+pub mod calendars;
 mod date;
 mod easter;
 mod error;
@@ -48,6 +55,8 @@ mod rules;
 mod weekend;
 mod year_range;
 
+pub use business_day::BusinessDayConvention;
+pub use calendar::{Calendar, CalendarBuilder};
 pub use date::{Date, Month, Ordinal, Weekday, Year};
 pub use easter::{EasterMethod, easter_monday, easter_sunday};
 pub use error::TimeError;
