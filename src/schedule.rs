@@ -80,11 +80,7 @@ pub enum DateGenerationRule {
 )]
 pub struct Schedule {
     dates: Vec<Date>,
-    /// Notional boundary of the first coupon period when it is a stub;
-    /// `None` when that period is regular and its own reference.
-    front_reference: Option<Date>,
-    /// Likewise for the last coupon period.
-    back_reference: Option<Date>,
+    stubs: StubReferences,
     generation: Option<Generation>,
 }
 
@@ -136,89 +132,12 @@ impl Generation {
 impl TryFrom<Vec<Date>> for Schedule {
     type Error = TimeError;
 
-    /// Wrap a chronologically ordered date list, treating every
-    /// period as regular (reference dates = coupon dates).
+    /// Wrap a chronologically ordered date list — a term sheet's
+    /// coupon dates, say. Every period is taken as regular, and the
+    /// schedule carries no [`Generation`] because a bare date list
+    /// names no lattice.
     fn try_from(dates: Vec<Date>) -> Result<Self, Self::Error> {
-        Self::try_from((dates.clone(), dates))
-    }
-}
-
-/// Serde representation of a [`Schedule`]: both parallel lists plus
-/// the generation parameters.
-#[cfg(feature = "serde")]
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ScheduleData {
-    dates: Vec<Date>,
-    front_reference: Option<Date>,
-    back_reference: Option<Date>,
-    generation: Option<Generation>,
-}
-
-#[cfg(feature = "serde")]
-impl TryFrom<ScheduleData> for Schedule {
-    type Error = TimeError;
-
-    fn try_from(stored: ScheduleData) -> Result<Self, Self::Error> {
-        let references =
-            Self::references_from(&stored.dates, stored.front_reference, stored.back_reference);
-        Self::try_from((stored.dates, references)).map(|s| Self {
-            generation: stored.generation,
-            ..s
-        })
-    }
-}
-
-#[cfg(feature = "serde")]
-impl From<Schedule> for ScheduleData {
-    fn from(s: Schedule) -> Self {
-        Self {
-            dates: s.dates,
-            front_reference: s.front_reference,
-            back_reference: s.back_reference,
-            generation: s.generation,
-        }
-    }
-}
-
-impl TryFrom<(Vec<Date>, Vec<Date>)> for Schedule {
-    type Error = TimeError;
-
-    /// Wrap parallel `(coupon dates, reference dates)` lists. Both
-    /// must be strictly increasing and equally long, and may differ
-    /// only at the ends — interior periods are always regular.
-    fn try_from((dates, reference_dates): (Vec<Date>, Vec<Date>)) -> Result<Self, Self::Error> {
-        if dates.windows(2).any(|w| w[0] >= w[1]) {
-            return Err(TimeError::ScheduleNotMonotonic);
-        }
-        // Only the ends may diverge, so every interior pair must match.
-        let interior_diverges = dates
-            .iter()
-            .zip(&reference_dates)
-            .skip(1)
-            .take(dates.len().saturating_sub(2))
-            .any(|(date, reference)| date != reference);
-        if reference_dates.len() != dates.len()
-            || reference_dates.windows(2).any(|w| w[0] >= w[1])
-            || interior_diverges
-        {
-            return Err(TimeError::InvalidReferencePeriod);
-        }
-        // Only the ends can differ, so store those and derive the
-        // rest: a parallel list would be O(n) storage for O(1) of
-        // information.
-        let last = dates.len().saturating_sub(1);
-        Ok(Self {
-            front_reference: reference_dates
-                .first()
-                .copied()
-                .filter(|r| Some(r) != dates.first()),
-            back_reference: reference_dates
-                .get(last)
-                .copied()
-                .filter(|r| Some(r) != dates.get(last)),
-            dates,
-            generation: None,
-        })
+        Self::new(dates, StubReferences::default(), None)
     }
 }
 
@@ -229,16 +148,77 @@ impl From<Schedule> for Vec<Date> {
     }
 }
 
-impl From<Schedule> for (Vec<Date>, Vec<Date>) {
-    /// Unwrap the coupon dates and their parallel reference dates.
-    /// Inverse of [`TryFrom<(Vec<Date>, Vec<Date>)>`].
+/// Where a schedule departs from its regular lattice: the notional
+/// quasi-coupon boundary of each end period that is a stub.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+struct StubReferences {
+    front: Option<Date>,
+    back: Option<Date>,
+}
+
+/// Serde representation of a [`Schedule`], validated on the way back
+/// in through [`Schedule::new`].
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ScheduleData {
+    dates: Vec<Date>,
+    stubs: StubReferences,
+    generation: Option<Generation>,
+}
+
+#[cfg(feature = "serde")]
+impl TryFrom<ScheduleData> for Schedule {
+    type Error = TimeError;
+
+    fn try_from(stored: ScheduleData) -> Result<Self, Self::Error> {
+        Self::new(stored.dates, stored.stubs, stored.generation)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl From<Schedule> for ScheduleData {
     fn from(s: Schedule) -> Self {
-        let references = Schedule::references_from(&s.dates, s.front_reference, s.back_reference);
-        (s.dates, references)
+        Self {
+            dates: s.dates,
+            stubs: s.stubs,
+            generation: s.generation,
+        }
     }
 }
 
 impl Schedule {
+    /// The one constructor: validates that the coupon dates strictly
+    /// increase and that any stub boundary lies outside the coupon it
+    /// anchors, so every reference period is non-degenerate.
+    fn new(
+        dates: Vec<Date>,
+        stubs: StubReferences,
+        generation: Option<Generation>,
+    ) -> Result<Self, TimeError> {
+        if dates.windows(2).any(|w| w[0] >= w[1]) {
+            return Err(TimeError::ScheduleNotMonotonic);
+        }
+        let front_ok = stubs
+            .front
+            .is_none_or(|r| dates.get(1).is_some_and(|d| r < *d));
+        let back_ok = stubs.back.is_none_or(|r| {
+            dates
+                .len()
+                .checked_sub(2)
+                .and_then(|i| dates.get(i))
+                .is_some_and(|d| r > *d)
+        });
+        if !front_ok || !back_ok {
+            return Err(TimeError::InvalidReferencePeriod);
+        }
+        Ok(Self {
+            dates,
+            stubs,
+            generation,
+        })
+    }
+
     /// Borrow the adjusted coupon dates as a slice.
     #[must_use]
     pub fn dates(&self) -> &[Date] {
@@ -253,12 +233,12 @@ impl Schedule {
         let last = self.dates.len().saturating_sub(2);
         self.dates.windows(2).enumerate().map(move |(i, w)| {
             let start = if i == 0 {
-                self.front_reference.unwrap_or(w[0])
+                self.stubs.front.unwrap_or(w[0])
             } else {
                 w[0]
             };
             let end = if i == last {
-                self.back_reference.unwrap_or(w[1])
+                self.stubs.back.unwrap_or(w[1])
             } else {
                 w[1]
             };
@@ -266,21 +246,11 @@ impl Schedule {
         })
     }
 
-    /// Materialize the reference dates parallel to
-    /// [`dates`](Self::dates), for round-tripping and validation.
-    fn references_from(dates: &[Date], front: Option<Date>, back: Option<Date>) -> Vec<Date> {
-        let mut references = dates.to_vec();
-        if let (Some(r), Some(slot)) = (front, references.first_mut()) {
-            *slot = r;
-        }
-        if let (Some(r), Some(slot)) = (back, references.last_mut()) {
-            *slot = r;
-        }
-        references
-    }
-
-    /// The parameters this schedule was generated from, if it came
-    /// from a [`ScheduleBuilder`].
+    /// The lattice this schedule was generated on, absent when it was
+    /// built from a bare date list that names no tenor — mirroring
+    /// `QuantLib`'s optional `tenor_`. Only stub periods need it, and
+    /// stubs only arise from generation, so a schedule without one is
+    /// always entirely regular.
     #[must_use]
     pub const fn generation(&self) -> Option<Generation> {
         self.generation
@@ -356,8 +326,10 @@ impl Schedule {
         Self {
             dates: self.dates[idx..].to_vec(),
             // Slicing off the front drops the front stub with it.
-            front_reference: (idx == 0).then_some(self.front_reference).flatten(),
-            back_reference: self.back_reference,
+            stubs: StubReferences {
+                front: (idx == 0).then_some(self.stubs.front).flatten(),
+                ..self.stubs
+            },
             generation: self.generation,
         }
     }
@@ -371,11 +343,13 @@ impl Schedule {
         let idx = self.dates.partition_point(|d| *d <= cutoff);
         Self {
             dates: self.dates[..idx].to_vec(),
-            front_reference: self.front_reference,
             // Likewise a truncated tail is no longer the back stub.
-            back_reference: (idx == self.dates.len())
-                .then_some(self.back_reference)
-                .flatten(),
+            stubs: StubReferences {
+                back: (idx == self.dates.len())
+                    .then_some(self.stubs.back)
+                    .flatten(),
+                ..self.stubs
+            },
             generation: self.generation,
         }
     }
@@ -554,22 +528,32 @@ impl<'cal> ScheduleBuilder<'cal> {
     /// day.
     pub fn build(self) -> Result<Schedule, TimeError> {
         self.validate_inputs()?;
-        let (dates, refs) = match self.rule {
+        let (dates, stubs) = match self.rule {
             // A Zero schedule's single period is its own reference.
-            DateGenerationRule::Zero => {
-                let d = vec![self.effective, self.termination];
-                (d.clone(), d)
-            }
+            DateGenerationRule::Zero => (
+                vec![self.effective, self.termination],
+                StubReferences::default(),
+            ),
             DateGenerationRule::Forward => Generator::forward(&self).generate()?,
             DateGenerationRule::Backward => Generator::backward(&self).generate()?,
         };
-        // Both lists take the same adjustment, so a regular schedule
-        // keeps them identical.
-        let adjuster =
-            BdcAdjuster::new(self.calendar, self.convention, self.termination_convention);
+        // Stub boundaries roll under the convention that governs their
+        // side, matching the coupon date they stand in for.
+        let stubs = StubReferences {
+            front: stubs
+                .front
+                .map(|d| self.calendar.adjust(d, self.convention))
+                .transpose()?,
+            back: stubs
+                .back
+                .map(|d| self.calendar.adjust(d, self.termination_convention))
+                .transpose()?,
+        };
+        let adjusted =
+            BdcAdjuster::new(self.calendar, self.convention, self.termination_convention)
+                .apply(dates)?;
         let generation = (!matches!(self.rule, DateGenerationRule::Zero)).then(|| self.lattice());
-        Schedule::try_from((adjuster.apply(dates)?, adjuster.apply(refs)?))
-            .map(|s| Schedule { generation, ..s })
+        Schedule::new(adjusted, stubs, generation)
     }
 
     /// The lattice this builder generates on.
@@ -716,7 +700,7 @@ impl Generator {
         }
     }
 
-    fn generate(&self) -> Result<(Vec<Date>, Vec<Date>), TimeError> {
+    fn generate(&self) -> Result<(Vec<Date>, StubReferences), TimeError> {
         let seed = self.start_stub.unwrap_or(self.start_anchor);
         let stop = self.end_stub.unwrap_or(self.end_anchor);
 
@@ -730,39 +714,44 @@ impl Generator {
             out.push(candidate?);
         }
         // The lattice point the walk halted on: the stop-side
-        // quasi-coupon boundary, equal to the anchor exactly when
-        // that period is regular.
+        // quasi-coupon boundary, equal to the anchor exactly when that
+        // period is regular.
         let stopping = walk.at(walk.i)?;
         if let Some(s) = self.end_stub {
             out.push(s);
         }
         out.push(self.end_anchor);
 
-        // Reference dates match the coupon dates except at the ends,
-        // where a stub's anchor is replaced by its notional boundary.
-        // Regular ends replace it with itself, so no branch is needed.
-        // Stub boundaries step away from the stub along the lattice,
-        // which is one step *against* the walk's direction.
+        // A stub's boundary steps away from the stub along the
+        // lattice, one step *against* the walk's direction. `None`
+        // marks a regular end, which is its own reference.
         let outward = match self.direction {
             Direction::Forward => -1,
             Direction::Backward => 1,
         };
-        let mut refs = out.clone();
-        if let Some(s) = self.start_stub {
-            refs[0] = self.lattice.step(s, outward)?;
-        }
-        if let Some(back) = refs.last_mut() {
-            *back = match self.end_stub {
-                Some(s) => self.lattice.step(s, -outward)?,
-                None => stopping,
-            };
-        }
+        let seed_side = self
+            .start_stub
+            .map(|s| self.lattice.step(s, outward))
+            .transpose()?;
+        let stop_side = match self.end_stub {
+            Some(s) => Some(self.lattice.step(s, -outward)?),
+            None => (stopping != self.end_anchor).then_some(stopping),
+        };
 
-        if matches!(self.direction, Direction::Backward) {
-            out.reverse();
-            refs.reverse();
-        }
-        Ok((out, refs))
+        let stubs = match self.direction {
+            Direction::Forward => StubReferences {
+                front: seed_side,
+                back: stop_side,
+            },
+            Direction::Backward => {
+                out.reverse();
+                StubReferences {
+                    front: stop_side,
+                    back: seed_side,
+                }
+            }
+        };
+        Ok((out, stubs))
     }
 }
 
@@ -1775,48 +1764,60 @@ mod tests {
     }
 
     #[test]
-    fn try_from_parallel_lists_validates() {
-        let dates = vec![ymd(2025, Month::Jan, 15), ymd(2025, Month::Jul, 15)];
-        // Length mismatch.
+    fn construction_rejects_degenerate_stub_references() {
+        // A front stub boundary must sit before the coupon it anchors.
         assert_eq!(
-            Schedule::try_from((dates.clone(), vec![ymd(2025, Month::Jan, 15)])),
+            Schedule::new(
+                alloc::vec![ymd(2025, Month::Jan, 15), ymd(2025, Month::Jul, 15)],
+                StubReferences {
+                    front: Some(ymd(2025, Month::Aug, 1)),
+                    back: None,
+                },
+                None,
+            ),
             Err(TimeError::InvalidReferencePeriod),
         );
-        // Non-monotonic references.
+        // A back stub boundary must sit after its coupon.
         assert_eq!(
-            Schedule::try_from((
-                dates.clone(),
-                vec![ymd(2025, Month::Jul, 15), ymd(2025, Month::Jan, 15)],
-            )),
+            Schedule::new(
+                alloc::vec![ymd(2025, Month::Jan, 15), ymd(2025, Month::Jul, 15)],
+                StubReferences {
+                    front: None,
+                    back: Some(ymd(2025, Month::Jan, 1)),
+                },
+                None,
+            ),
             Err(TimeError::InvalidReferencePeriod),
         );
-        // An interior reference date may not diverge from its coupon.
-        let three = vec![
-            ymd(2025, Month::Jan, 15),
-            ymd(2025, Month::Jul, 15),
-            ymd(2026, Month::Jan, 15),
-        ];
-        let mut refs = three.clone();
-        refs[1] = ymd(2025, Month::Jul, 20);
-        assert_eq!(
-            Schedule::try_from((three, refs)),
-            Err(TimeError::InvalidReferencePeriod),
-        );
-        // Diverging ends are exactly what stubs need.
-        let s = Schedule::try_from((
-            dates.clone(),
-            vec![ymd(2025, Month::Jan, 1), ymd(2025, Month::Jul, 15)],
-        ))
+        // A boundary outside its coupon is exactly what a stub needs.
+        let s = Schedule::new(
+            alloc::vec![ymd(2025, Month::Jan, 15), ymd(2025, Month::Jul, 15)],
+            StubReferences {
+                front: Some(ymd(2025, Month::Jan, 1)),
+                back: None,
+            },
+            None,
+        )
         .unwrap();
-        assert_eq!(s.dates(), &dates[..]);
         assert_eq!(
             s.reference_periods().next().unwrap(),
             ymd(2025, Month::Jan, 1)..ymd(2025, Month::Jul, 15),
         );
-        // The parallel form round-trips out again.
-        let (out_dates, out_refs): (Vec<Date>, Vec<Date>) = s.into();
-        assert_eq!(out_dates, dates);
-        assert_eq!(out_refs[0], ymd(2025, Month::Jan, 1));
+    }
+
+    #[test]
+    fn a_bare_date_list_is_all_regular_and_names_no_lattice() {
+        let s = Schedule::try_from(alloc::vec![
+            ymd(2025, Month::Jan, 15),
+            ymd(2025, Month::Jul, 15),
+            ymd(2026, Month::Jan, 15),
+        ])
+        .unwrap();
+        assert!(s.generation().is_none());
+        assert_eq!(
+            s.periods().collect::<Vec<_>>(),
+            s.reference_periods().collect::<Vec<_>>(),
+        );
     }
 
     #[test]
