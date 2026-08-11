@@ -7,6 +7,8 @@
 //! conventions are additive across splits; the 30/360 family is
 //! intentionally not — both facts are property-tested.
 
+use core::ops::{Bound, Range, RangeBounds};
+
 use crate::{Date, Fraction, Frequency, Month, Period, Schedule, TimeError, Year};
 
 /// A day-count convention.
@@ -25,7 +27,7 @@ pub trait DayCount {
     /// Days between `start` and `end`, signed by direction. Defaults
     /// to calendar days; the 30/360 family overrides.
     fn day_count(&self, start: Date, end: Date) -> i64 {
-        Span::new(start, end).days()
+        Span::from(start..end).days()
     }
 
     /// The year fraction between `start` and `end`: signed by
@@ -39,19 +41,41 @@ pub trait DayCount {
 
 // ---- Span ---------------------------------------------------------------
 
-/// A date interval, used for both accruals and the coupon windows
-/// they are measured against.
+/// A half-open date interval `[start, end)`, used for both accruals
+/// and the coupon windows they are measured against.
+///
+/// Built from range syntax (`(start..end).into()`), whose half-open
+/// meaning is exactly this type's, and implements [`RangeBounds`] so
+/// it composes with range-taking code. It is not [`Range`] itself
+/// because `Range` is an iterator and therefore not [`Copy`], and
+/// spans are passed by value throughout; the `Copy` range types of
+/// RFC 3550 are still unstable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Span {
     start: Date,
     end: Date,
 }
 
-impl Span {
-    const fn new(start: Date, end: Date) -> Self {
-        Self { start, end }
+impl From<Range<Date>> for Span {
+    fn from(range: Range<Date>) -> Self {
+        Self {
+            start: range.start,
+            end: range.end,
+        }
+    }
+}
+
+impl RangeBounds<Date> for Span {
+    fn start_bound(&self) -> Bound<&Date> {
+        Bound::Included(&self.start)
     }
 
+    fn end_bound(&self) -> Bound<&Date> {
+        Bound::Excluded(&self.end)
+    }
+}
+
+impl Span {
     /// Elapsed days, signed by direction.
     fn days(self) -> i64 {
         i64::from(self.end.days_since(self.start))
@@ -59,7 +83,7 @@ impl Span {
 
     /// The overlap with `other`, if the two share any days.
     fn intersect(self, other: Self) -> Option<Self> {
-        let both = Self::new(self.start.max(other.start), self.end.min(other.end));
+        let both = Self::from(self.start.max(other.start)..self.end.min(other.end));
         (both.start < both.end).then_some(both)
     }
 
@@ -183,8 +207,8 @@ impl ActActISDA {
         ) else {
             return Fraction::ZERO;
         };
-        let a = Span::new(span.start, next_year_start).days();
-        let b = Span::new(this_year_start, span.end).days();
+        let a = Span::from(span.start..next_year_start).days();
+        let b = Span::from(this_year_start..span.end).days();
         // dib1·dib2 <= 366², positive.
         #[allow(clippy::cast_sign_loss)]
         Basis::of((dib1 * dib2) as u64).fraction(n * dib1 * dib2 + a * dib2 + b * dib1)
@@ -198,10 +222,10 @@ impl DayCount for ActActISDA {
 
     fn year_fraction(&self, start: Date, end: Date) -> Fraction {
         if start <= end {
-            Self::ordered_year_fraction(Span::new(start, end))
+            Self::ordered_year_fraction(Span::from(start..end))
         } else {
             // Numerators stay far below |i64::MIN|; negation cannot fail.
-            Self::ordered_year_fraction(Span::new(end, start))
+            Self::ordered_year_fraction(Span::from(end..start))
                 .checked_neg()
                 .unwrap_or_default()
         }
@@ -246,9 +270,8 @@ impl ReferenceGrid {
             i if i < 0 => (self.reference.start, i),
             i => (self.reference.end, i - 1),
         };
-        Ok(Span::new(
-            Self::step(anchor, self.period, k)?,
-            Self::step(anchor, self.period, k + 1)?,
+        Ok(Span::from(
+            Self::step(anchor, self.period, k)?..Self::step(anchor, self.period, k + 1)?,
         ))
     }
 }
@@ -364,11 +387,11 @@ impl ActActICMA {
         if start == end {
             return Ok(Fraction::ZERO);
         }
-        let reference = Span::new(ref_start, ref_end);
+        let reference = Span::from(ref_start..ref_end);
         if start < end {
-            self.accrue(Span::new(start, end), reference)
+            self.accrue(Span::from(start..end), reference)
         } else {
-            self.accrue(Span::new(end, start), reference)?
+            self.accrue(Span::from(end..start), reference)?
                 .checked_neg()
                 .ok_or(TimeError::FractionOverflow)
         }
@@ -453,12 +476,12 @@ impl BoundActActICMA<'_> {
             // Unreachable: bind requires at least two dates.
             return Fraction::ZERO;
         };
-        let Some(covered) = span.intersect(Span::new(first, last)) else {
+        let Some(covered) = span.intersect(Span::from(first..last)) else {
             return Fraction::ZERO;
         };
         let mut total = Fraction::ZERO;
         for (period, reference) in dates.windows(2).zip(references.windows(2)) {
-            let period = Span::new(period[0], period[1]);
+            let period = Span::from(period[0]..period[1]);
             if period.start >= covered.end {
                 break;
             }
@@ -472,7 +495,7 @@ impl BoundActActICMA<'_> {
             // keep the running sum in range.
             let accrued = self
                 .inner
-                .accrue(chunk, Span::new(reference[0], reference[1]))
+                .accrue(chunk, Span::from(reference[0]..reference[1]))
                 .unwrap_or_default();
             total = total.checked_add(accrued).unwrap_or_default();
         }
@@ -490,9 +513,9 @@ impl DayCount for BoundActActICMA<'_> {
             return Fraction::ZERO;
         }
         if start < end {
-            self.ordered_year_fraction(Span::new(start, end))
+            self.ordered_year_fraction(Span::from(start..end))
         } else {
-            self.ordered_year_fraction(Span::new(end, start))
+            self.ordered_year_fraction(Span::from(end..start))
                 .checked_neg()
                 .unwrap_or_default()
         }
@@ -1246,6 +1269,31 @@ mod tests {
         assert_eq!(stub.parts(), (373, 368));
         // Over a full coupon of accrual — impossible from one window.
         assert!(stub > Fraction::new(1, 1).unwrap());
+    }
+
+    /// `Span` behaves as the half-open range its syntax implies, and
+    /// `contains` comes free from its `RangeBounds` impl.
+    #[test]
+    fn span_is_a_half_open_range() {
+        let span = Span::from(ymd(2025, Month::Jan, 1)..ymd(2025, Month::Apr, 1));
+        assert!(span.contains(&ymd(2025, Month::Jan, 1))); // start included
+        assert!(span.contains(&ymd(2025, Month::Mar, 31)));
+        assert!(!span.contains(&ymd(2025, Month::Apr, 1))); // end excluded
+        assert!(!span.contains(&ymd(2024, Month::Dec, 31)));
+        assert_eq!(span.days(), 90);
+        // Intersection is itself a span, and disjoint spans give None.
+        let other = Span::from(ymd(2025, Month::Mar, 1)..ymd(2025, Month::Jun, 1));
+        assert_eq!(
+            span.intersect(other),
+            Some(Span::from(
+                ymd(2025, Month::Mar, 1)..ymd(2025, Month::Apr, 1)
+            )),
+        );
+        let disjoint = Span::from(ymd(2025, Month::Jun, 1)..ymd(2025, Month::Jul, 1));
+        assert_eq!(span.intersect(disjoint), None);
+        // Touching at a single point shares no days.
+        let touching = Span::from(ymd(2025, Month::Apr, 1)..ymd(2025, Month::May, 1));
+        assert_eq!(span.intersect(touching), None);
     }
 
     #[test]
