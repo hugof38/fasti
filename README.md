@@ -46,7 +46,7 @@ same capability surface with:
 | Holiday rules | `Rule`: fixed-date (with weekend-shift policies), nth/last weekday, Easter offsets (Western & Orthodox), one-offs, custom `fn(Date) -> bool` |
 | Calendars | `Calendar` / `CalendarBuilder`; built-ins: US Settlement, NYSE, Federal Reserve, Government Bond, SOFR, NERC, France Settlement & Exchange, plus `WEEKENDS_ONLY` / `NULL_CALENDAR` baselines |
 | Business days | `BusinessDayConvention` (Following, ModifiedFollowing, Preceding, ModifiedPreceding, Unadjusted), `adjust`, `advance` |
-| Day counts | `DayCount`: ACT/360, ACT/365F, 30/360 Bond Basis, ACT/ACT ISDA — all returning `Fraction` |
+| Day counts | `DayCount`: ACT/360, ACT/365F, 30/360 (Bond Basis, US, 30E/360, 30E/360 ISDA), ACT/ACT (ISDA and schedule-aware ICMA) — all returning `Fraction` |
 | Schedules | `Schedule` / `ScheduleBuilder`: forward/backward/zero generation, stubs, end-of-month preservation |
 
 ## Install
@@ -127,8 +127,9 @@ implementations, so they are reproducible from first principles.
 ## Status
 
 Pre-1.0. The public surface is small and deliberate but may still move.
-Planned next: more built-in calendars (TARGET, UK bank holidays), more
-day counts (ACT/ACT ICMA, 30E/360, NASD 30/360).
+Planned next: more built-in calendars (TARGET, UK bank holidays),
+calendar conveniences (business-day counting, holiday enumeration,
+joint calendars), and CDS/IMM schedule generation rules.
 
 ## License
 
