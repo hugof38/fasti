@@ -1,41 +1,10 @@
 //! [`Schedule`] — payment-date generation with business-day
-//! adjustment.
+//! adjustment. Modeled on `QuantLib`'s `ql/time/schedule.hpp`.
 //!
-//! Modeled on `QuantLib`'s
-//! [`ql/time/schedule.hpp`](https://github.com/lballabio/QuantLib/blob/master/ql/time/schedule.hpp).
-//!
-//! # Generation model
-//!
-//! A schedule is built from
-//!
-//! - an `effective` date and a `termination` date,
-//! - a regular `tenor` ([`Period`]),
-//! - a [`Calendar`] used for business-day adjustment,
-//! - a [`DateGenerationRule`] (forward / backward / zero),
-//! - optional explicit stub dates (`first_date`, `next_to_last_date`).
-//!
-//! The builder generates *unadjusted* candidate dates, then runs
-//! each through [`Calendar::adjust`] with a chosen
-//! [`BusinessDayConvention`]. The termination date can carry its
-//! own convention (commonly [`Unadjusted`](BusinessDayConvention::Unadjusted))
-//! so the literal maturity is preserved.
-//!
-//! # Stepping from a fresh seed
-//!
-//! Each candidate date is computed as `seed + i · tenor`, not by
-//! chaining `add_months` from the previous candidate. The chaining
-//! approach has a well-known clamp pathology: successive `+1M`
-//! steps from `Jan 31` collapse to `Feb 28 → Mar 28 → Apr 28 → …`
-//! and stay stuck at day 28, disagreeing with the single-hop
-//! `Jan 31 → Mar 31`. The fresh-seed approach produces the natural
-//! `Jan 31, Feb 28, Mar 31, Apr 30, May 31, …` instead.
-//!
-//! The optional `end_of_month` flag goes a step further: if the seed
-//! is the last day of its month *and* the tenor is in months/years,
-//! every generated date is snapped to the `EoM`of its own month
-//! (rather than just clamped). This restores `EoM`after a clamp where
-//! the natural day-of-month would not be `EoM`(e.g., `Feb 28 + 1M`
-//! → `Mar 28` becomes `Mar 31` under `EoM`).
+//! Candidates are `seed + i · tenor` fresh multiples (never chained,
+//! avoiding the add-months clamp pathology), optionally end-of-month
+//! snapped, then rolled through [`Calendar::adjust`]; the termination
+//! date carries its own convention.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -90,52 +59,127 @@ pub enum DateGenerationRule {
 }
 
 /// A list of business-day-adjusted scheduled dates in chronological
-/// order. Length is `periods + 1`.
+/// order (length `periods + 1`), plus a parallel list of *reference*
+/// dates.
 ///
-/// `Schedule` owns its dates; once built, it is independent of the
-/// [`Calendar`] used to construct it.
+/// The reference dates carry the regular coupon grid: for a fully
+/// regular schedule the two lists are identical, and for short/long
+/// stub periods the first/last reference date is the notional
+/// (quasi-coupon) boundary one tenor from the adjacent coupon —
+/// `QuantLib`'s quasi-payment reconciliation. Schedule-defined day
+/// counts (ACT/ACT ICMA) read them via
+/// [`reference_dates`](Self::reference_dates).
 ///
-/// # Serde
-///
-/// Under the `serde` feature, [`Schedule`] round-trips as a `Vec<Date>`.
-/// Deserialization goes through [`TryFrom<Vec<Date>>`], so the strict
-/// monotonicity invariant is enforced at the boundary — a deserialized
-/// `Schedule` is always valid.
+/// Serde round-trips both lists; deserialization re-validates, so a
+/// deserialized `Schedule` is always valid.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(try_from = "Vec<Date>", into = "Vec<Date>"))]
+#[cfg_attr(
+    feature = "serde",
+    serde(try_from = "ScheduleParts", into = "ScheduleParts")
+)]
 pub struct Schedule {
     dates: Vec<Date>,
+    reference_dates: Vec<Date>,
+}
+
+/// Serde representation of a [`Schedule`]: both parallel lists.
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ScheduleParts {
+    dates: Vec<Date>,
+    reference_dates: Vec<Date>,
+}
+
+#[cfg(feature = "serde")]
+impl TryFrom<ScheduleParts> for Schedule {
+    type Error = TimeError;
+
+    fn try_from(parts: ScheduleParts) -> Result<Self, Self::Error> {
+        Self::from_parts(parts.dates, parts.reference_dates)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl From<Schedule> for ScheduleParts {
+    fn from(s: Schedule) -> Self {
+        Self {
+            dates: s.dates,
+            reference_dates: s.reference_dates,
+        }
+    }
 }
 
 impl TryFrom<Vec<Date>> for Schedule {
     type Error = TimeError;
 
-    /// Wrap a chronologically ordered date list in a `Schedule`,
-    /// enforcing strict monotonicity. The only path from a raw
-    /// `Vec<Date>` to a `Schedule`.
+    /// Wrap a chronologically ordered date list, enforcing strict
+    /// monotonicity; every period is treated as regular (reference
+    /// dates = coupon dates).
     fn try_from(dates: Vec<Date>) -> Result<Self, Self::Error> {
-        for window in dates.windows(2) {
-            if window[0] >= window[1] {
-                return Err(TimeError::ScheduleNotMonotonic);
-            }
-        }
-        Ok(Self { dates })
+        let reference_dates = dates.clone();
+        Self::from_parts(dates, reference_dates)
     }
 }
 
 impl From<Schedule> for Vec<Date> {
-    /// Unwrap the underlying date list. Inverse of [`TryFrom<Vec<Date>>`].
+    /// Unwrap the coupon date list.
     fn from(s: Schedule) -> Self {
         s.dates
     }
 }
 
 impl Schedule {
-    /// Borrow the adjusted dates as a slice.
+    /// Build from explicit coupon and reference date lists.
+    ///
+    /// Validates: coupon dates strictly monotonic; the lists have
+    /// equal length; interior reference dates equal their coupon
+    /// dates (only the first and last may differ, for stubs); the
+    /// end reference periods are non-degenerate. Errors with
+    /// [`TimeError::ScheduleNotMonotonic`] or
+    /// [`TimeError::InvalidReferencePeriod`].
+    pub fn from_parts(dates: Vec<Date>, reference_dates: Vec<Date>) -> Result<Self, TimeError> {
+        for window in dates.windows(2) {
+            if window[0] >= window[1] {
+                return Err(TimeError::ScheduleNotMonotonic);
+            }
+        }
+        if reference_dates.len() != dates.len() {
+            return Err(TimeError::InvalidReferencePeriod);
+        }
+        let n = dates.len();
+        if n > 2 {
+            for i in 1..n - 1 {
+                if reference_dates[i] != dates[i] {
+                    return Err(TimeError::InvalidReferencePeriod);
+                }
+            }
+        }
+        if n >= 2
+            && (reference_dates[0] >= reference_dates[1]
+                || reference_dates[n - 1] <= reference_dates[n - 2])
+        {
+            return Err(TimeError::InvalidReferencePeriod);
+        }
+        Ok(Self {
+            dates,
+            reference_dates,
+        })
+    }
+
+    /// Borrow the adjusted coupon dates as a slice.
     #[must_use]
     pub fn dates(&self) -> &[Date] {
         &self.dates
+    }
+
+    /// Borrow the reference (regular-grid) dates, parallel to
+    /// [`dates`](Self::dates). Identical to the coupon dates except
+    /// at stub ends, where they carry the notional quasi-coupon
+    /// boundary.
+    #[must_use]
+    pub fn reference_dates(&self) -> &[Date] {
+        &self.reference_dates
     }
 
     /// Number of dates (i.e., `periods + 1`).
@@ -250,6 +294,7 @@ impl Schedule {
         let idx = self.dates.partition_point(|d| *d < cutoff);
         Self {
             dates: self.dates[idx..].to_vec(),
+            reference_dates: self.reference_dates[idx..].to_vec(),
         }
     }
 
@@ -262,6 +307,7 @@ impl Schedule {
         let idx = self.dates.partition_point(|d| *d <= cutoff);
         Self {
             dates: self.dates[..idx].to_vec(),
+            reference_dates: self.reference_dates[..idx].to_vec(),
         }
     }
 }
@@ -429,15 +475,40 @@ impl<'cal> ScheduleBuilder<'cal> {
     /// day.
     pub fn build(self) -> Result<Schedule, TimeError> {
         self.validate_inputs()?;
-        let unadjusted = match self.rule {
-            DateGenerationRule::Zero => vec![self.effective, self.termination],
+        let generated = match self.rule {
+            // A Zero schedule's single period is its own reference.
+            DateGenerationRule::Zero => Generated {
+                dates: vec![self.effective, self.termination],
+                front_notional: None,
+                back_notional: None,
+            },
             DateGenerationRule::Forward => Generator::forward(&self).generate()?,
             DateGenerationRule::Backward => Generator::backward(&self)?.generate()?,
         };
         let adjusted =
             BdcAdjuster::new(self.calendar, self.convention, self.termination_convention)
-                .apply(unadjusted)?;
-        Schedule::try_from(adjusted)
+                .apply(generated.dates)?;
+        let mut schedule = Schedule::try_from(adjusted)?;
+        // Reconcile stub reference dates (quasi-coupon boundaries),
+        // adjusted with the interior convention. Guards keep the
+        // parallel-list invariants; a failed adjustment falls back to
+        // treating the period as regular.
+        let n = schedule.reference_dates.len();
+        if let Some(front) = generated.front_notional
+            && let Ok(adj) = self.calendar.adjust(front, self.convention)
+            && n >= 2
+            && adj < schedule.reference_dates[1]
+        {
+            schedule.reference_dates[0] = adj;
+        }
+        if let Some(back) = generated.back_notional
+            && let Ok(adj) = self.calendar.adjust(back, self.convention)
+            && n >= 2
+            && adj > schedule.reference_dates[n - 2]
+        {
+            schedule.reference_dates[n - 1] = adj;
+        }
+        Ok(schedule)
     }
 
     fn validate_inputs(&self) -> Result<(), TimeError> {
@@ -609,7 +680,7 @@ impl Generator {
         })
     }
 
-    fn generate(&self) -> Result<Vec<Date>, TimeError> {
+    fn generate(&self) -> Result<Generated, TimeError> {
         let seed = self.start_stub.unwrap_or(self.start_anchor);
         let stop = self.end_stub.unwrap_or(self.end_anchor);
         let stepper = Stepper::new(seed, self.step, self.end_of_month);
@@ -619,18 +690,57 @@ impl Generator {
         if let Some(s) = self.start_stub {
             out.push(s);
         }
-        for candidate in Walk::new(&stepper, stop, self.direction) {
+        let mut walk = Walk::new(&stepper, stop, self.direction);
+        for candidate in walk.by_ref() {
             out.push(candidate?);
         }
+        // The walk halted on its first at-or-past-stop candidate; that
+        // grid point is the quasi-coupon boundary of the stop-side
+        // period. It differs from the anchor exactly when the period
+        // is a stub.
+        let stopping = stepper.step(walk.i).ok();
         if let Some(s) = self.end_stub {
             out.push(s);
         }
         out.push(self.end_anchor);
-        if matches!(self.direction, Direction::Backward) {
-            out.reverse();
+
+        // Notional boundary of the stop-side period: the halting grid
+        // point, or one fresh tenor step from an explicit stub anchor.
+        // A step escaping the supported range falls back to "regular".
+        let far = match self.end_stub {
+            None => stopping,
+            Some(s) => Stepper::new(s, self.step, self.end_of_month).step(1).ok(),
         }
-        Ok(out)
+        .filter(|n| *n != self.end_anchor);
+        // Likewise for an explicit stub at the seed side.
+        let near = self.start_stub.and_then(|s| {
+            Stepper::new(s, self.step, self.end_of_month)
+                .step(-1)
+                .ok()
+                .filter(|n| *n != self.start_anchor)
+        });
+
+        let (front_notional, back_notional) = match self.direction {
+            Direction::Forward => (near, far),
+            Direction::Backward => {
+                out.reverse();
+                (far, near)
+            }
+        };
+        Ok(Generated {
+            dates: out,
+            front_notional,
+            back_notional,
+        })
     }
+}
+
+/// A generator's output: the unadjusted chronological dates plus the
+/// notional quasi-coupon boundaries of any stub periods.
+struct Generated {
+    dates: Vec<Date>,
+    front_notional: Option<Date>,
+    back_notional: Option<Date>,
 }
 
 /// Per-index business-day-convention pass. The last date uses the
@@ -1400,7 +1510,7 @@ mod tests {
             WEEKENDS,
         )
         .with_next_to_last_date(ymd(2025, Month::Apr, 15));
-        let dates = Generator::forward(&b).generate().unwrap();
+        let dates = Generator::forward(&b).generate().unwrap().dates;
         assert_eq!(
             dates,
             vec![
@@ -1421,7 +1531,7 @@ mod tests {
             Period::Months(1),
             WEEKENDS,
         );
-        let dates = Generator::backward(&b).unwrap().generate().unwrap();
+        let dates = Generator::backward(&b).unwrap().generate().unwrap().dates;
         assert_eq!(
             dates,
             vec![
@@ -1549,5 +1659,99 @@ mod tests {
     fn try_from_rejects_decreasing() {
         let r = Schedule::try_from(vec![ymd(2025, Month::Feb, 15), ymd(2025, Month::Jan, 15)]);
         assert_eq!(r.unwrap_err(), TimeError::ScheduleNotMonotonic);
+    }
+
+    // ---- reference dates ----------------------------------------------
+
+    #[test]
+    fn regular_schedule_reference_dates_equal_coupon_dates() {
+        let s = ScheduleBuilder::new(
+            ymd(2025, Month::Jan, 15),
+            ymd(2026, Month::Jan, 15),
+            Period::Months(3),
+            WEEKENDS,
+        )
+        .backwards()
+        .with_convention(BusinessDayConvention::Unadjusted)
+        .with_termination_convention(BusinessDayConvention::Unadjusted)
+        .build()
+        .unwrap();
+        assert_eq!(s.reference_dates(), s.dates());
+    }
+
+    #[test]
+    fn front_stub_reference_dates_carry_the_notional_boundary() {
+        // Backward semiannual with a front stub: the first reference
+        // date is one tenor before the first coupon.
+        let s = ScheduleBuilder::new(
+            ymd(2002, Month::Aug, 15),
+            ymd(2004, Month::Jan, 15),
+            Period::Months(6),
+            WEEKENDS,
+        )
+        .backwards()
+        .with_convention(BusinessDayConvention::Unadjusted)
+        .with_termination_convention(BusinessDayConvention::Unadjusted)
+        .build()
+        .unwrap();
+        assert_eq!(s.reference_dates()[0], ymd(2002, Month::Jul, 15));
+        assert_eq!(&s.reference_dates()[1..], &s.dates()[1..]);
+    }
+
+    #[test]
+    fn back_stub_reference_dates_carry_the_notional_boundary() {
+        // Forward semiannual with a back stub: the last reference
+        // date is one tenor after the last regular coupon.
+        let s = ScheduleBuilder::new(
+            ymd(2003, Month::Jan, 15),
+            ymd(2004, Month::Jun, 30),
+            Period::Months(6),
+            WEEKENDS,
+        )
+        .forwards()
+        .with_convention(BusinessDayConvention::Unadjusted)
+        .with_termination_convention(BusinessDayConvention::Unadjusted)
+        .build()
+        .unwrap();
+        let n = s.len();
+        assert_eq!(s.reference_dates()[n - 1], ymd(2004, Month::Jul, 15));
+        assert_eq!(&s.reference_dates()[..n - 1], &s.dates()[..n - 1]);
+    }
+
+    #[test]
+    fn from_parts_validates_parallel_lists() {
+        let dates = vec![ymd(2025, Month::Jan, 15), ymd(2025, Month::Jul, 15)];
+        // Length mismatch.
+        assert_eq!(
+            Schedule::from_parts(dates.clone(), vec![ymd(2025, Month::Jan, 15)]),
+            Err(TimeError::InvalidReferencePeriod),
+        );
+        // Interior reference date differing from its coupon date.
+        let three = vec![
+            ymd(2025, Month::Jan, 15),
+            ymd(2025, Month::Jul, 15),
+            ymd(2026, Month::Jan, 15),
+        ];
+        let mut bad_refs = three.clone();
+        bad_refs[1] = ymd(2025, Month::Jul, 20);
+        assert_eq!(
+            Schedule::from_parts(three, bad_refs),
+            Err(TimeError::InvalidReferencePeriod),
+        );
+        // Degenerate end reference period.
+        assert_eq!(
+            Schedule::from_parts(
+                dates.clone(),
+                vec![ymd(2025, Month::Jul, 15), ymd(2025, Month::Jul, 15)],
+            ),
+            Err(TimeError::InvalidReferencePeriod),
+        );
+        // Valid stub refs round-trip.
+        let s = Schedule::from_parts(
+            dates.clone(),
+            vec![ymd(2025, Month::Jan, 1), ymd(2025, Month::Jul, 15)],
+        )
+        .unwrap();
+        assert_eq!(s.dates(), &dates[..]);
     }
 }
