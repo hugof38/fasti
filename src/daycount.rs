@@ -198,33 +198,6 @@ impl DayCount for ActActISDA {
 
 // ---- ACT/ACT (ICMA) -----------------------------------------------------
 
-/// The regular coupon grid a reference period sits on: window 0 is
-/// the reference period itself, negative windows step back from its
-/// start and positive ones forward from its end.
-///
-/// A [`Schedule`] names one reference period per coupon period, which
-/// covers regular and short-stub accruals. A *long* stub is longer
-/// than one coupon period, so its accrual reaches past the named
-/// reference period into adjacent notional ones — this grid supplies
-/// those, which is why extending the grid is accrual math rather than
-/// something a schedule can tabulate.
-#[derive(Debug, Clone)]
-struct ReferenceGrid {
-    reference: Range<Date>,
-    lattice: Generation,
-}
-
-impl ReferenceGrid {
-    fn window(&self, i: i32) -> Result<Range<Date>, TimeError> {
-        let (anchor, k) = match i {
-            0 => return Ok(self.reference.clone()),
-            i if i < 0 => (self.reference.start, i),
-            i => (self.reference.end, i - 1),
-        };
-        Ok(self.lattice.step(anchor, k)?..self.lattice.step(anchor, k + 1)?)
-    }
-}
-
 /// Actual/Actual (ICMA), ICMA Rule 251 — the standard for fixed-rate
 /// bond accruals: a regular coupon period accrues exactly
 /// `1 / frequency`, days accrue proportionally against their period's
@@ -394,14 +367,13 @@ impl ActActICMA {
         reference: Range<Date>,
         lattice: Generation,
     ) -> Result<Fraction, TimeError> {
-        let grid = ReferenceGrid { reference, lattice };
         let mut i = 0;
-        while grid.window(i)?.start > span.start {
+        while lattice.window(&reference, i)?.start > span.start {
             i -= 1;
         }
         let mut total = Fraction::ZERO;
         loop {
-            let window = grid.window(i)?;
+            let window = lattice.window(&reference, i)?;
             if let Some(chunk) = span.intersect(&window) {
                 total = total
                     .checked_add(self.coupon_share(&chunk, &window)?)
@@ -1220,8 +1192,8 @@ mod tests {
     /// clamping semantics.
     /// A *long* stub is longer than one coupon period, so its accrual
     /// reaches past the schedule's named reference period into
-    /// adjacent notional ones — the case [`ReferenceGrid`] exists for,
-    /// and one a single-window implementation could not produce.
+    /// adjacent notional ones, which is why the lattice supplies
+    /// windows beyond the one a schedule names.
     #[test]
     fn bound_icma_long_stub_spans_several_notional_periods() {
         // Issued 2002-01-10 with the first coupon at 2003-01-15: a

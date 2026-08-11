@@ -743,6 +743,37 @@ impl Date {
         self.add_months(months)
     }
 
+    /// `self + period`, preserving end-of-month when `end_of_month`
+    /// is set and `self` is itself the last day of its month.
+    ///
+    /// This is the crate's one stepping rule: [`Calendar::advance`](crate::Calendar::advance)
+    /// rolls its result onto a business day, and
+    /// [`Generation::step`](crate::Generation::step) scales the tenor
+    /// before calling it. The flag is inert for `Days` and `Weeks`
+    /// periods, where end-of-month has no meaning. Semantics match
+    /// `QuantLib`'s `Date::advance`.
+    ///
+    /// ```
+    /// use fasti::{Date, Month, Period};
+    /// let feb_end = Date::from_ymd(2025, Month::Feb, 28)?;
+    /// assert_eq!(feb_end.advance(Period::Months(1), false)?, Date::from_ymd(2025, Month::Mar, 28)?);
+    /// assert_eq!(feb_end.advance(Period::Months(1), true)?, Date::from_ymd(2025, Month::Mar, 31)?);
+    /// # Ok::<(), fasti::TimeError>(())
+    /// ```
+    pub fn advance(self, period: Period, end_of_month: bool) -> Result<Self, TimeError> {
+        let stepped = (self + period)?;
+        Ok(
+            if end_of_month
+                && self.is_end_of_month()
+                && matches!(period, Period::Months(_) | Period::Years(_))
+            {
+                stepped.end_of_month()
+            } else {
+                stepped
+            },
+        )
+    }
+
     /// The last day of `self`'s month.
     ///
     /// ```

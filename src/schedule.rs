@@ -115,17 +115,22 @@ impl Generation {
     /// outside the supported range.
     pub fn step(self, anchor: Date, i: i32) -> Result<Date, TimeError> {
         let scaled = self.tenor.checked_mul(i).ok_or(TimeError::DateOutOfRange)?;
-        let stepped = (anchor + scaled)?;
-        Ok(
-            if self.end_of_month
-                && anchor.is_end_of_month()
-                && matches!(self.tenor, Period::Months(_) | Period::Years(_))
-            {
-                stepped.end_of_month()
-            } else {
-                stepped
-            },
-        )
+        anchor.advance(scaled, self.end_of_month)
+    }
+
+    /// The notional coupon window `i` steps from `reference` along
+    /// this lattice: window 0 is `reference` itself, negative windows
+    /// precede it and positive ones follow.
+    ///
+    /// Schedule-defined day counts walk these when a stub period
+    /// reaches beyond the reference period a schedule names for it.
+    pub fn window(self, reference: &Range<Date>, i: i32) -> Result<Range<Date>, TimeError> {
+        let (anchor, k) = match i {
+            0 => return Ok(reference.clone()),
+            i if i < 0 => (reference.start, i),
+            i => (reference.end, i - 1),
+        };
+        Ok(self.step(anchor, k)?..self.step(anchor, k + 1)?)
     }
 }
 
