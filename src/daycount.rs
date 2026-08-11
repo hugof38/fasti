@@ -7,7 +7,35 @@
 //! conventions are additive across splits; the 30/360 family is
 //! intentionally not — both facts are property-tested.
 
-use crate::{Date, Fraction, Frequency, Month, Period, Schedule, Span, TimeError, Year};
+use core::ops::Range;
+
+use crate::{Date, Fraction, Frequency, Month, Period, Schedule, TimeError, Year};
+
+/// Date-range operations the accrual math needs. An extension trait
+/// rather than a newtype so schedules, coupon periods, and notional
+/// windows are all plain `Range<Date>` — the vocabulary type callers
+/// already know, with `contains` and range syntax for free.
+trait DateRange {
+    /// Elapsed days, signed by direction.
+    fn days(&self) -> i64;
+
+    /// The overlap with `other`, if the two share any days. Ranges
+    /// that merely touch at a boundary share none.
+    fn intersect(&self, other: &Self) -> Option<Self>
+    where
+        Self: Sized;
+}
+
+impl DateRange for Range<Date> {
+    fn days(&self) -> i64 {
+        i64::from(self.end.days_since(self.start))
+    }
+
+    fn intersect(&self, other: &Self) -> Option<Self> {
+        let both = self.start.max(other.start)..self.end.min(other.end);
+        (both.start < both.end).then_some(both)
+    }
+}
 
 /// A day-count convention.
 ///
@@ -25,7 +53,7 @@ pub trait DayCount {
     /// Days between `start` and `end`, signed by direction. Defaults
     /// to calendar days; the 30/360 family overrides.
     fn day_count(&self, start: Date, end: Date) -> i64 {
-        Span::from(start..end).days()
+        (start..end).days()
     }
 
     /// The year fraction between `start` and `end`: signed by
@@ -127,7 +155,7 @@ impl ActActISDA {
     /// `(N·dib1·dib2 + a·dib2 + b·dib1) / (dib1·dib2)` for an ordered
     /// span: `N` full middle years, `a`/`b` partial days in the end
     /// years, `dib*` those years' lengths.
-    fn ordered_year_fraction(span: Span) -> Fraction {
+    fn ordered_year_fraction(span: &Range<Date>) -> Fraction {
         if span.start == span.end {
             return Fraction::ZERO;
         }
@@ -145,8 +173,8 @@ impl ActActISDA {
         ) else {
             return Fraction::ZERO;
         };
-        let a = Span::from(span.start..next_year_start).days();
-        let b = Span::from(this_year_start..span.end).days();
+        let a = (span.start..next_year_start).days();
+        let b = (this_year_start..span.end).days();
         // dib1·dib2 <= 366², positive.
         #[allow(clippy::cast_sign_loss)]
         Basis::of((dib1 * dib2) as u64).fraction(n * dib1 * dib2 + a * dib2 + b * dib1)
@@ -160,10 +188,10 @@ impl DayCount for ActActISDA {
 
     fn year_fraction(&self, start: Date, end: Date) -> Fraction {
         if start <= end {
-            Self::ordered_year_fraction(Span::from(start..end))
+            Self::ordered_year_fraction(&(start..end))
         } else {
             // Numerators stay far below |i64::MIN|; negation cannot fail.
-            Self::ordered_year_fraction(Span::from(end..start))
+            Self::ordered_year_fraction(&(end..start))
                 .checked_neg()
                 .unwrap_or_default()
         }
@@ -202,9 +230,9 @@ impl GridShape {
 /// reference period into adjacent notional ones — this grid supplies
 /// those, which is why extending the grid is accrual math rather than
 /// something a schedule can tabulate.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct ReferenceGrid {
-    reference: Span,
+    reference: Range<Date>,
     period: Period,
     end_of_month: bool,
 }
@@ -212,7 +240,7 @@ struct ReferenceGrid {
 impl ReferenceGrid {
     /// `anchor + i·period` as a fresh multiple (never chained), with
     /// the schedule generator's end-of-month snap.
-    fn step(self, anchor: Date, i: i32) -> Result<Date, TimeError> {
+    fn step(&self, anchor: Date, i: i32) -> Result<Date, TimeError> {
         let stepped = (anchor
             + self
                 .period
@@ -230,13 +258,13 @@ impl ReferenceGrid {
         )
     }
 
-    fn window(self, i: i32) -> Result<Span, TimeError> {
+    fn window(&self, i: i32) -> Result<Range<Date>, TimeError> {
         let (anchor, k) = match i {
-            0 => return Ok(self.reference),
+            0 => return Ok(self.reference.clone()),
             i if i < 0 => (self.reference.start, i),
             i => (self.reference.end, i - 1),
         };
-        Ok(Span::from(self.step(anchor, k)?..self.step(anchor, k + 1)?))
+        Ok(self.step(anchor, k)?..self.step(anchor, k + 1)?)
     }
 }
 
@@ -367,12 +395,12 @@ impl ActActICMA {
         if start == end {
             return Ok(Fraction::ZERO);
         }
-        let reference = Span::from(ref_start..ref_end);
+        let reference = ref_start..ref_end;
         let shape = GridShape::of(self.frequency);
         if start < end {
-            self.accrue(Span::from(start..end), reference, shape)
+            self.accrue(start..end, reference.clone(), shape)
         } else {
-            self.accrue(Span::from(end..start), reference, shape)?
+            self.accrue(end..start, reference.clone(), shape)?
                 .checked_neg()
                 .ok_or(TimeError::FractionOverflow)
         }
@@ -383,7 +411,11 @@ impl ActActICMA {
     /// sum upward until the span is covered.
     /// The share of one coupon that `chunk` represents inside the
     /// notional `window` it falls in.
-    fn coupon_share(self, chunk: Span, window: Span) -> Result<Fraction, TimeError> {
+    fn coupon_share(
+        self,
+        chunk: &Range<Date>,
+        window: &Range<Date>,
+    ) -> Result<Fraction, TimeError> {
         let window_days =
             u64::try_from(window.days()).map_err(|_| TimeError::InvalidReferencePeriod)?;
         let denominator = u64::from(self.frequency.per_year())
@@ -394,8 +426,8 @@ impl ActActICMA {
 
     fn accrue(
         self,
-        span: Span,
-        reference: Span,
+        span: Range<Date>,
+        reference: Range<Date>,
         grid_shape: GridShape,
     ) -> Result<Fraction, TimeError> {
         let grid = ReferenceGrid {
@@ -410,9 +442,9 @@ impl ActActICMA {
         let mut total = Fraction::ZERO;
         loop {
             let window = grid.window(i)?;
-            if let Some(chunk) = span.intersect(window) {
+            if let Some(chunk) = span.intersect(&window) {
                 total = total
-                    .checked_add(self.coupon_share(chunk, window)?)
+                    .checked_add(self.coupon_share(&chunk, &window)?)
                     .ok_or(TimeError::FractionOverflow)?;
             }
             if window.end >= span.end {
@@ -468,22 +500,22 @@ impl BoundActActICMA<'_> {
 
     /// Sum of per-period accruals for an ordered span, clamped to the
     /// schedule's own span.
-    fn ordered_year_fraction(&self, span: Span) -> Fraction {
+    fn ordered_year_fraction(&self, span: &Range<Date>) -> Fraction {
         let (dates, references) = (self.schedule.dates(), self.schedule.reference_dates());
         let (Some(&first), Some(&last)) = (dates.first(), dates.last()) else {
             // Unreachable: bind requires at least two dates.
             return Fraction::ZERO;
         };
-        let Some(covered) = span.intersect(Span::from(first..last)) else {
+        let Some(covered) = span.intersect(&(first..last)) else {
             return Fraction::ZERO;
         };
         let mut total = Fraction::ZERO;
         for (period, reference) in dates.windows(2).zip(references.windows(2)) {
-            let period = Span::from(period[0]..period[1]);
+            let period = period[0]..period[1];
             if period.start >= covered.end {
                 break;
             }
-            let Some(chunk) = covered.intersect(period) else {
+            let Some(chunk) = covered.intersect(&period) else {
                 continue;
             };
             // A regular period is its own reference, so the grid walk
@@ -493,7 +525,7 @@ impl BoundActActICMA<'_> {
             // keep the running sum in range.
             let accrued = self
                 .inner
-                .accrue(chunk, Span::from(reference[0]..reference[1]), self.shape)
+                .accrue(chunk, reference[0]..reference[1], self.shape)
                 .unwrap_or_default();
             total = total.checked_add(accrued).unwrap_or_default();
         }
@@ -511,9 +543,9 @@ impl DayCount for BoundActActICMA<'_> {
             return Fraction::ZERO;
         }
         if start < end {
-            self.ordered_year_fraction(Span::from(start..end))
+            self.ordered_year_fraction(&(start..end))
         } else {
-            self.ordered_year_fraction(Span::from(end..start))
+            self.ordered_year_fraction(&(end..start))
                 .checked_neg()
                 .unwrap_or_default()
         }
@@ -1267,6 +1299,36 @@ mod tests {
         assert_eq!(stub.parts(), (373, 368));
         // Over a full coupon of accrual — impossible from one window.
         assert!(stub > Fraction::new(1, 1).unwrap());
+    }
+
+    /// The accrual math treats a `Range<Date>` as the half-open
+    /// interval its syntax implies.
+    #[test]
+    fn date_ranges_are_half_open() {
+        let range = ymd(2025, Month::Jan, 1)..ymd(2025, Month::Apr, 1);
+        assert_eq!(range.days(), 90);
+        assert!(range.contains(&ymd(2025, Month::Jan, 1))); // start included
+        assert!(!range.contains(&ymd(2025, Month::Apr, 1))); // end excluded
+        // Overlapping ranges intersect to their shared days.
+        assert_eq!(
+            range.intersect(&(ymd(2025, Month::Mar, 1)..ymd(2025, Month::Jun, 1))),
+            Some(ymd(2025, Month::Mar, 1)..ymd(2025, Month::Apr, 1)),
+        );
+        // Disjoint ranges, and ranges that merely touch at a boundary,
+        // share no days.
+        assert_eq!(
+            range.intersect(&(ymd(2025, Month::Jun, 1)..ymd(2025, Month::Jul, 1))),
+            None,
+        );
+        assert_eq!(
+            range.intersect(&(ymd(2025, Month::Apr, 1)..ymd(2025, Month::May, 1))),
+            None,
+        );
+        // Reversed inputs give a negative day count.
+        assert_eq!(
+            (ymd(2025, Month::Apr, 1)..ymd(2025, Month::Jan, 1)).days(),
+            -90
+        );
     }
 
     #[test]

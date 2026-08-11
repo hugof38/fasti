@@ -40,7 +40,9 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::{BusinessDayConvention, Calendar, Date, Frequency, Period, Span, TimeError};
+use core::ops::Range;
+
+use crate::{BusinessDayConvention, Calendar, Date, Frequency, Period, TimeError};
 
 /// How to walk the schedule grid between effective and termination.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -208,10 +210,10 @@ impl Schedule {
         self.generation
     }
 
-    /// Iterate accrual periods — adjacent windows over the coupon
-    /// dates.
-    pub fn periods(&self) -> impl Iterator<Item = Span> + '_ {
-        self.dates.windows(2).map(|w| Span::from(w[0]..w[1]))
+    /// Iterate accrual periods as half-open ranges — adjacent windows
+    /// over the coupon dates.
+    pub fn periods(&self) -> impl Iterator<Item = Range<Date>> + '_ {
+        self.dates.windows(2).map(|w| w[0]..w[1])
     }
 
     /// The largest schedule date strictly less than `ref_date`, if
