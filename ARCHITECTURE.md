@@ -65,9 +65,15 @@ the constraint wins unless the design discussion says otherwise.
   float-rounding the reference-period length, fasti takes the
   `Frequency` explicitly — no floats, no inference.
 - **Each concept is owned once.** A `Schedule` knows its own coupon
-  grid, so it — not the day counter — computes the reference dates and
-  retains the `Generation` parameters (tenor, end-of-month) it was
-  built from. A day counter would otherwise have to re-derive the
+  grid, so it — not the day counter — computes the stub reference
+  boundaries and retains the `Generation` parameters (tenor,
+  end-of-month) it was built from. The two are not redundant and
+  neither derives the other: a `Period` cannot be recovered from a day
+  count (184 days does not say "6 months"), and business-day
+  adjustment destroys the arithmetic test for regularity, which is why
+  QuantLib stores `isRegular_` flags. Only the ends can deviate from
+  the regular grid, so a schedule stores those two boundaries rather
+  than a parallel date list. A day counter would otherwise have to re-derive the
   lattice and re-classify stubs from already-adjusted dates. This
   mirrors QuantLib, whose `Schedule` keeps `tenor_`, `endOfMonth_`,
   and per-period `isRegular_` flags for exactly this purpose, while

@@ -37,9 +37,9 @@ Initial release.
   convention.
 - `Schedule` / `ScheduleBuilder`: forward/backward/zero generation,
   stub anchors, per-termination convention, end-of-month preservation,
-  and parallel reference dates carrying the regular coupon grid
-  (identical to the coupon dates except at stub ends), plus the
-  `Generation` parameters the schedule was built from.
+  `reference_periods` giving the regular coupon grid each period
+  accrues against, plus the `Generation` parameters the schedule was
+  built from.
 - Optional `serde` feature (off by default); `no_std` + `alloc`
   throughout.
 - Optional `chrono` feature (off by default): `From`/`TryFrom`

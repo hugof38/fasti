@@ -9,21 +9,19 @@
 
 use core::ops::Range;
 
-use crate::{Date, Fraction, Frequency, Month, Period, Schedule, TimeError, Year};
+use crate::{Date, Fraction, Frequency, Generation, Month, Period, Schedule, TimeError, Year};
 
 /// Date-range operations the accrual math needs. An extension trait
 /// rather than a newtype so schedules, coupon periods, and notional
 /// windows are all plain `Range<Date>` — the vocabulary type callers
 /// already know, with `contains` and range syntax for free.
-trait DateRange {
+trait DateRange: Sized {
     /// Elapsed days, signed by direction.
     fn days(&self) -> i64;
 
     /// The overlap with `other`, if the two share any days. Ranges
     /// that merely touch at a boundary share none.
-    fn intersect(&self, other: &Self) -> Option<Self>
-    where
-        Self: Sized;
+    fn intersect(&self, other: &Self) -> Option<Self>;
 }
 
 impl DateRange for Range<Date> {
@@ -200,26 +198,6 @@ impl DayCount for ActActISDA {
 
 // ---- ACT/ACT (ICMA) -----------------------------------------------------
 
-/// How to step a [`ReferenceGrid`]: the regular tenor and whether
-/// generation snapped to end-of-month. Taken from a [`Schedule`]'s
-/// [`Generation`](crate::Generation) when one is bound, so the grid
-/// walks the same lattice the schedule was built on, and derived from
-/// the coupon frequency otherwise.
-#[derive(Debug, Clone, Copy)]
-struct GridShape {
-    tenor: Period,
-    end_of_month: bool,
-}
-
-impl GridShape {
-    fn of(frequency: Frequency) -> Self {
-        Self {
-            tenor: Period::from(frequency),
-            end_of_month: true,
-        }
-    }
-}
-
 /// The regular coupon grid a reference period sits on: window 0 is
 /// the reference period itself, negative windows step back from its
 /// start and positive ones forward from its end.
@@ -233,38 +211,17 @@ impl GridShape {
 #[derive(Debug, Clone)]
 struct ReferenceGrid {
     reference: Range<Date>,
-    period: Period,
-    end_of_month: bool,
+    lattice: Generation,
 }
 
 impl ReferenceGrid {
-    /// `anchor + i·period` as a fresh multiple (never chained), with
-    /// the schedule generator's end-of-month snap.
-    fn step(&self, anchor: Date, i: i32) -> Result<Date, TimeError> {
-        let stepped = (anchor
-            + self
-                .period
-                .checked_mul(i)
-                .ok_or(TimeError::DateOutOfRange)?)?;
-        Ok(
-            if self.end_of_month
-                && anchor.is_end_of_month()
-                && matches!(self.period, Period::Months(_) | Period::Years(_))
-            {
-                stepped.end_of_month()
-            } else {
-                stepped
-            },
-        )
-    }
-
     fn window(&self, i: i32) -> Result<Range<Date>, TimeError> {
         let (anchor, k) = match i {
             0 => return Ok(self.reference.clone()),
             i if i < 0 => (self.reference.start, i),
             i => (self.reference.end, i - 1),
         };
-        Ok(self.step(anchor, k)?..self.step(anchor, k + 1)?)
+        Ok(self.lattice.step(anchor, k)?..self.lattice.step(anchor, k + 1)?)
     }
 }
 
@@ -314,6 +271,16 @@ impl ActActICMA {
         self.frequency
     }
 
+    /// The lattice implied by the frequency alone, used when no
+    /// schedule names one. End-of-month snapping is assumed, matching
+    /// how coupon grids are conventionally laid out.
+    fn lattice(self) -> Generation {
+        Generation {
+            tenor: Period::from(self.frequency),
+            end_of_month: true,
+        }
+    }
+
     /// Bind to a coupon [`Schedule`], yielding a [`BoundActActICMA`]
     /// that reads the schedule's parallel reference dates — stub
     /// periods accrue against their notional grid automatically.
@@ -354,22 +321,19 @@ impl ActActICMA {
         // A generated schedule names the lattice it was built on; a
         // convention whose frequency disagrees with that tenor would
         // silently accrue against the wrong grid.
-        let shape = match schedule.generation() {
+        let lattice = match schedule.generation() {
             Some(generation) => {
                 if generation.tenor.normalized() != Period::from(self.frequency).normalized() {
                     return Err(TimeError::FrequencyMismatch);
                 }
-                GridShape {
-                    tenor: generation.tenor,
-                    end_of_month: generation.end_of_month,
-                }
+                generation
             }
-            None => GridShape::of(self.frequency),
+            None => self.lattice(),
         };
         Ok(BoundActActICMA {
             inner: self,
             schedule,
-            shape,
+            lattice,
         })
     }
 
@@ -396,11 +360,11 @@ impl ActActICMA {
             return Ok(Fraction::ZERO);
         }
         let reference = ref_start..ref_end;
-        let shape = GridShape::of(self.frequency);
+        let lattice = self.lattice();
         if start < end {
-            self.accrue(start..end, reference.clone(), shape)
+            self.accrue(start..end, reference.clone(), lattice)
         } else {
-            self.accrue(end..start, reference.clone(), shape)?
+            self.accrue(end..start, reference.clone(), lattice)?
                 .checked_neg()
                 .ok_or(TimeError::FractionOverflow)
         }
@@ -428,13 +392,9 @@ impl ActActICMA {
         self,
         span: Range<Date>,
         reference: Range<Date>,
-        grid_shape: GridShape,
+        lattice: Generation,
     ) -> Result<Fraction, TimeError> {
-        let grid = ReferenceGrid {
-            reference,
-            period: grid_shape.tenor,
-            end_of_month: grid_shape.end_of_month,
-        };
+        let grid = ReferenceGrid { reference, lattice };
         let mut i = 0;
         while grid.window(i)?.start > span.start {
             i -= 1;
@@ -482,7 +442,7 @@ impl DayCount for ActActICMA {
 pub struct BoundActActICMA<'s> {
     inner: ActActICMA,
     schedule: &'s Schedule,
-    shape: GridShape,
+    lattice: Generation,
 }
 
 impl BoundActActICMA<'_> {
@@ -501,8 +461,7 @@ impl BoundActActICMA<'_> {
     /// Sum of per-period accruals for an ordered span, clamped to the
     /// schedule's own span.
     fn ordered_year_fraction(&self, span: &Range<Date>) -> Fraction {
-        let (dates, references) = (self.schedule.dates(), self.schedule.reference_dates());
-        let (Some(&first), Some(&last)) = (dates.first(), dates.last()) else {
+        let (Some(&first), Some(&last)) = (self.schedule.first(), self.schedule.last()) else {
             // Unreachable: bind requires at least two dates.
             return Fraction::ZERO;
         };
@@ -510,8 +469,11 @@ impl BoundActActICMA<'_> {
             return Fraction::ZERO;
         };
         let mut total = Fraction::ZERO;
-        for (period, reference) in dates.windows(2).zip(references.windows(2)) {
-            let period = period[0]..period[1];
+        for (period, reference) in self
+            .schedule
+            .periods()
+            .zip(self.schedule.reference_periods())
+        {
             if period.start >= covered.end {
                 break;
             }
@@ -525,7 +487,7 @@ impl BoundActActICMA<'_> {
             // keep the running sum in range.
             let accrued = self
                 .inner
-                .accrue(chunk, reference[0]..reference[1], self.shape)
+                .accrue(chunk, reference, self.lattice)
                 .unwrap_or_default();
             total = total.checked_add(accrued).unwrap_or_default();
         }
@@ -1279,7 +1241,10 @@ mod tests {
         assert_eq!(schedule.dates()[0], ymd(2002, Month::Jan, 10));
         assert_eq!(schedule.dates()[1], ymd(2003, Month::Jan, 15));
         // The schedule names one reference period per coupon period.
-        assert_eq!(schedule.reference_dates()[0], ymd(2002, Month::Jul, 15));
+        assert_eq!(
+            schedule.reference_periods().next().unwrap(),
+            ymd(2002, Month::Jul, 15)..ymd(2003, Month::Jan, 15),
+        );
 
         let dc = ActActICMA::new(Frequency::Semiannual)
             .bind(&schedule)
