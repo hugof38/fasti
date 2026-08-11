@@ -55,19 +55,25 @@ the constraint wins unless the design discussion says otherwise.
 - **Schedule context lives in the value, not the signature.** The
   trait is exactly `name` / `day_count` / `year_fraction(start, end)`
   for every convention. Schedule-defined conventions (ACT/ACT ICMA
-  today; ACT/365 Canadian later) do not add reference-period
-  parameters to the trait — instead they bind their context at
-  construction: `ActActICMA::bind(&Schedule)` yields a counter that
-  classifies stubs and precomputes (and range-validates) their
-  notional reference grids once, then answers plain two-date
-  `year_fraction` calls like every other impl. This mirrors
-  QuantLib's modern schedule-carrying `ActualActual(ISMA, schedule)`
-  and keeps generic accrual code free of ref-period plumbing. A
-  fallible inherent `year_fraction_with_reference` remains on
-  `ActActICMA` as a manual escape hatch. Where QuantLib infers the
-  coupon frequency by float-rounding the reference-period length,
-  fasti takes the `Frequency` explicitly at construction — no floats,
-  no inference.
+  today; ACT/365 Canadian later) bind their context at construction —
+  `ActActICMA::bind(&Schedule)` — instead of adding reference-period
+  parameters to the trait, mirroring QuantLib's schedule-carrying
+  `ActualActual(ISMA, schedule)` and keeping generic accrual code free
+  of ref-period plumbing. A fallible inherent
+  `year_fraction_with_reference` remains on `ActActICMA` as a manual
+  escape hatch. Where QuantLib infers the coupon frequency by
+  float-rounding the reference-period length, fasti takes the
+  `Frequency` explicitly — no floats, no inference.
+- **Each concept is owned once.** A `Schedule` knows its own coupon
+  grid, so it — not the day counter — computes the reference dates:
+  the generator already walks that grid, so recording each stub's
+  notional boundary costs it a few lines, while a day counter would
+  have to re-derive the grid and re-classify stubs from adjusted
+  dates. `ActActICMA` therefore reads `reference_dates()` and stays
+  ignorant of generation; `Schedule` stays ignorant of accrual. The
+  same rule explains `ReferenceGrid` living in `daycount`: extending
+  a reference period into notional windows is accrual math, not
+  schedule generation.
 - **`year_fraction` returns a `Fraction`** — an `i64 / u64` integer
   rational, signed by direction. Never `f64`, never a decimal type.
   Reversed inputs (`end < start`) produce a negative fraction that
@@ -137,7 +143,8 @@ invariants clippy cannot see. Annotate the invariant at each cast site
 - `adjust` is idempotent for every convention, and
   `ModifiedFollowing` / `ModifiedPreceding` never cross a month
   boundary.
-- `Schedule` dates are strictly monotonically increasing.
+- `Schedule` dates are strictly monotonically increasing, as are its
+  parallel reference dates; the two lists differ only at stub ends.
 - `DayCount::year_fraction(d, d)` is zero; reversal negates.
 - ACT-family day counts are additive across splits —
   `yf(a, b) + yf(b, c) == yf(a, c)`. 30/360 is intentionally NOT

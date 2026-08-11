@@ -209,13 +209,17 @@ pub struct ActActICMA {
     frequency: Frequency,
 }
 
-/// Notional-period grid anchored on a reference date: window `i`
-/// spans `anchor + i·P .. anchor + (i+1)·P`, stepped as fresh
-/// multiples with the schedule generator's end-of-month snap.
-#[derive(Debug, Clone, Copy)]
-struct NotionalGrid {
-    anchor: Date,
-    period: Period,
+/// `anchor + i·period` as a fresh multiple (never chained), with the
+/// schedule generator's end-of-month snap.
+fn grid_step(anchor: Date, period: Period, i: i32) -> Result<Date, TimeError> {
+    let stepped = (anchor + period.checked_mul(i).ok_or(TimeError::DateOutOfRange)?)?;
+    Ok(
+        if anchor.is_end_of_month() && matches!(period, Period::Months(_) | Period::Years(_)) {
+            stepped.end_of_month()
+        } else {
+            stepped
+        },
+    )
 }
 
 /// The reference period extended into one bi-directional grid:
@@ -229,41 +233,15 @@ struct ReferenceGrid {
 
 impl ReferenceGrid {
     fn window(self, i: i32) -> Result<(Date, Date), TimeError> {
-        let (r1, r2) = self.reference;
-        match i {
-            0 => Ok(self.reference),
-            _ if i < 0 => NotionalGrid {
-                anchor: r1,
-                period: self.period,
-            }
-            .window(i),
-            _ => NotionalGrid {
-                anchor: r2,
-                period: self.period,
-            }
-            .window(i - 1),
-        }
-    }
-}
-
-impl NotionalGrid {
-    fn step(self, i: i32) -> Result<Date, TimeError> {
-        let scaled = self
-            .period
-            .checked_mul(i)
-            .ok_or(TimeError::DateOutOfRange)?;
-        let stepped = (self.anchor + scaled)?;
-        if self.anchor.is_end_of_month()
-            && matches!(self.period, Period::Months(_) | Period::Years(_))
-        {
-            Ok(stepped.end_of_month())
-        } else {
-            Ok(stepped)
-        }
-    }
-
-    fn window(self, i: i32) -> Result<(Date, Date), TimeError> {
-        Ok((self.step(i)?, self.step(i + 1)?))
+        let (anchor, k) = match i {
+            0 => return Ok(self.reference),
+            i if i < 0 => (self.reference.0, i),
+            i => (self.reference.1, i - 1),
+        };
+        Ok((
+            grid_step(anchor, self.period, k)?,
+            grid_step(anchor, self.period, k + 1)?,
+        ))
     }
 }
 
@@ -314,53 +292,12 @@ impl ActActICMA {
     /// # Ok::<(), fasti::TimeError>(())
     /// ```
     pub fn bind(self, schedule: &Schedule) -> Result<BoundActActICMA<'_>, TimeError> {
-        let dates = schedule.dates();
-        let (&first, rest) = dates
-            .split_first()
-            .ok_or(TimeError::InvalidReferencePeriod)?;
-        let &second = rest.first().ok_or(TimeError::InvalidReferencePeriod)?;
-        let last = dates[dates.len() - 1];
-        let next_to_last = dates[dates.len() - 2];
-        let period = Period::from(self.frequency);
-
-        // A period is a stub unless one tenor from the adjacent coupon
-        // lands on the anchor. Pre-walk each stub's grid so use-time
-        // errors are impossible.
-        let front = NotionalGrid {
-            anchor: second,
-            period,
-        };
-        let front_ref = (front.step(-1)? != first)
-            .then(|| {
-                let mut i = 1;
-                while front.step(-i)? > first {
-                    i += 1;
-                }
-                Ok::<_, TimeError>((front.step(-1)?, second))
-            })
-            .transpose()?;
-
-        // The back period is distinct from the front one only when the
-        // schedule has at least three dates.
-        let back = NotionalGrid {
-            anchor: next_to_last,
-            period,
-        };
-        let back_ref = (dates.len() >= 3 && back.step(1)? != last)
-            .then(|| {
-                let mut i = 1;
-                while back.step(i)? < last {
-                    i += 1;
-                }
-                Ok::<_, TimeError>((next_to_last, back.step(1)?))
-            })
-            .transpose()?;
-
+        if schedule.len() < 2 {
+            return Err(TimeError::InvalidReferencePeriod);
+        }
         Ok(BoundActActICMA {
             inner: self,
             schedule,
-            front_ref,
-            back_ref,
         })
     }
 
@@ -472,10 +409,6 @@ impl DayCount for ActActICMA {
 pub struct BoundActActICMA<'s> {
     inner: ActActICMA,
     schedule: &'s Schedule,
-    /// Reference period of the first schedule period when it is a
-    /// stub (`None` = regular, self-referenced); likewise `back_ref`.
-    front_ref: Option<(Date, Date)>,
-    back_ref: Option<(Date, Date)>,
 }
 
 impl BoundActActICMA<'_> {
@@ -494,7 +427,7 @@ impl BoundActActICMA<'_> {
     /// Sum of per-period chunks for `d1 < d2`, each accrued against
     /// its own reference period, clamped to the schedule's span.
     fn ordered_year_fraction(&self, d1: Date, d2: Date) -> Fraction {
-        let dates = self.schedule.dates();
+        let (dates, refs) = (self.schedule.dates(), self.schedule.reference_dates());
         let (Some(&first), Some(&last)) = (dates.first(), dates.last()) else {
             // Unreachable: bind requires at least two dates.
             return Fraction::ZERO;
@@ -502,29 +435,22 @@ impl BoundActActICMA<'_> {
         let Some(span) = overlap((d1, d2), (first, last)) else {
             return Fraction::ZERO;
         };
-        let last_period = dates.len() - 2;
         let mut total = Fraction::ZERO;
-        for (i, w) in dates.windows(2).enumerate() {
-            if w[0] >= span.1 {
+        for (period, reference) in dates.windows(2).zip(refs.windows(2)) {
+            if period[0] >= span.1 {
                 break;
             }
-            let Some((lo, hi)) = overlap(span, (w[0], w[1])) else {
+            let Some((lo, hi)) = overlap(span, (period[0], period[1])) else {
                 continue;
             };
-            // A regular period is its own reference; stubs use the
-            // notional grid `bind` validated, so the error arms are
-            // unreachable and ZERO is the documented fallback.
-            // Denominators come from the few distinct period lengths
-            // in one schedule, so the sum stays in range.
-            let (r1, r2) = match i {
-                0 => self.front_ref,
-                _ if i == last_period => self.back_ref,
-                _ => None,
-            }
-            .unwrap_or((w[0], w[1]));
+            // A regular period is its own reference, so the walk is a
+            // single window; a stub extends it. Errors need a window
+            // outside the supported range, where ZERO is the
+            // documented fallback, and the denominators of one
+            // schedule keep the running sum in range.
             let chunk = self
                 .inner
-                .ordered_year_fraction(lo, hi, r1, r2)
+                .ordered_year_fraction(lo, hi, reference[0], reference[1])
                 .unwrap_or_default();
             total = total.checked_add(chunk).unwrap_or_default();
         }

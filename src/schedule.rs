@@ -89,53 +89,94 @@ pub enum DateGenerationRule {
     Zero,
 }
 
-/// A list of business-day-adjusted scheduled dates in chronological
-/// order. Length is `periods + 1`.
+/// Parallel lists of business-day-adjusted dates in chronological
+/// order, each of length `periods + 1`: the coupon dates, and the
+/// reference dates of the regular coupon grid.
+///
+/// The two are identical for a regular schedule. At a short or long
+/// stub, the end reference date is instead the notional quasi-coupon
+/// boundary one tenor from the adjacent coupon, which is what
+/// schedule-defined day counts (ACT/ACT ICMA) accrue against.
 ///
 /// `Schedule` owns its dates; once built, it is independent of the
-/// [`Calendar`] used to construct it.
-///
-/// # Serde
-///
-/// Under the `serde` feature, [`Schedule`] round-trips as a `Vec<Date>`.
-/// Deserialization goes through [`TryFrom<Vec<Date>>`], so the strict
-/// monotonicity invariant is enforced at the boundary — a deserialized
+/// [`Calendar`] used to construct it. Serde round-trips both lists
+/// through [`TryFrom<(Vec<Date>, Vec<Date>)>`], so a deserialized
 /// `Schedule` is always valid.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(try_from = "Vec<Date>", into = "Vec<Date>"))]
+#[cfg_attr(
+    feature = "serde",
+    serde(try_from = "(Vec<Date>, Vec<Date>)", into = "(Vec<Date>, Vec<Date>)")
+)]
 pub struct Schedule {
     dates: Vec<Date>,
+    reference_dates: Vec<Date>,
 }
 
 impl TryFrom<Vec<Date>> for Schedule {
     type Error = TimeError;
 
-    /// Wrap a chronologically ordered date list in a `Schedule`,
-    /// enforcing strict monotonicity. The only path from a raw
-    /// `Vec<Date>` to a `Schedule`.
+    /// Wrap a chronologically ordered date list, treating every
+    /// period as regular (reference dates = coupon dates).
     fn try_from(dates: Vec<Date>) -> Result<Self, Self::Error> {
-        for window in dates.windows(2) {
-            if window[0] >= window[1] {
-                return Err(TimeError::ScheduleNotMonotonic);
-            }
+        Self::try_from((dates.clone(), dates))
+    }
+}
+
+impl TryFrom<(Vec<Date>, Vec<Date>)> for Schedule {
+    type Error = TimeError;
+
+    /// Wrap parallel `(coupon dates, reference dates)` lists. Both
+    /// must be strictly increasing and equally long, and may differ
+    /// only at the ends — interior periods are always regular.
+    fn try_from((dates, reference_dates): (Vec<Date>, Vec<Date>)) -> Result<Self, Self::Error> {
+        /// Everything but the ends, where stubs may diverge.
+        fn interior(v: &[Date]) -> &[Date] {
+            v.get(1..v.len().saturating_sub(1)).unwrap_or_default()
         }
-        Ok(Self { dates })
+        if dates.windows(2).any(|w| w[0] >= w[1]) {
+            return Err(TimeError::ScheduleNotMonotonic);
+        }
+        if reference_dates.len() != dates.len()
+            || reference_dates.windows(2).any(|w| w[0] >= w[1])
+            || interior(&dates) != interior(&reference_dates)
+        {
+            return Err(TimeError::InvalidReferencePeriod);
+        }
+        Ok(Self {
+            dates,
+            reference_dates,
+        })
     }
 }
 
 impl From<Schedule> for Vec<Date> {
-    /// Unwrap the underlying date list. Inverse of [`TryFrom<Vec<Date>>`].
+    /// Unwrap the coupon date list.
     fn from(s: Schedule) -> Self {
         s.dates
     }
 }
 
+impl From<Schedule> for (Vec<Date>, Vec<Date>) {
+    /// Unwrap both parallel lists. Inverse of
+    /// [`TryFrom<(Vec<Date>, Vec<Date>)>`].
+    fn from(s: Schedule) -> Self {
+        (s.dates, s.reference_dates)
+    }
+}
+
 impl Schedule {
-    /// Borrow the adjusted dates as a slice.
+    /// Borrow the adjusted coupon dates as a slice.
     #[must_use]
     pub fn dates(&self) -> &[Date] {
         &self.dates
+    }
+
+    /// Borrow the reference dates, parallel to [`dates`](Self::dates)
+    /// and equal to them except at stub ends.
+    #[must_use]
+    pub fn reference_dates(&self) -> &[Date] {
+        &self.reference_dates
     }
 
     /// Number of dates (i.e., `periods + 1`).
@@ -250,6 +291,7 @@ impl Schedule {
         let idx = self.dates.partition_point(|d| *d < cutoff);
         Self {
             dates: self.dates[idx..].to_vec(),
+            reference_dates: self.reference_dates[idx..].to_vec(),
         }
     }
 
@@ -262,6 +304,7 @@ impl Schedule {
         let idx = self.dates.partition_point(|d| *d <= cutoff);
         Self {
             dates: self.dates[..idx].to_vec(),
+            reference_dates: self.reference_dates[..idx].to_vec(),
         }
     }
 }
@@ -429,15 +472,20 @@ impl<'cal> ScheduleBuilder<'cal> {
     /// day.
     pub fn build(self) -> Result<Schedule, TimeError> {
         self.validate_inputs()?;
-        let unadjusted = match self.rule {
-            DateGenerationRule::Zero => vec![self.effective, self.termination],
+        let (dates, refs) = match self.rule {
+            // A Zero schedule's single period is its own reference.
+            DateGenerationRule::Zero => {
+                let d = vec![self.effective, self.termination];
+                (d.clone(), d)
+            }
             DateGenerationRule::Forward => Generator::forward(&self).generate()?,
             DateGenerationRule::Backward => Generator::backward(&self)?.generate()?,
         };
-        let adjusted =
-            BdcAdjuster::new(self.calendar, self.convention, self.termination_convention)
-                .apply(unadjusted)?;
-        Schedule::try_from(adjusted)
+        // Both lists take the same adjustment, so a regular schedule
+        // keeps them identical.
+        let adjuster =
+            BdcAdjuster::new(self.calendar, self.convention, self.termination_convention);
+        Schedule::try_from((adjuster.apply(dates)?, adjuster.apply(refs)?))
     }
 
     fn validate_inputs(&self) -> Result<(), TimeError> {
@@ -609,7 +657,9 @@ impl Generator {
         })
     }
 
-    fn generate(&self) -> Result<Vec<Date>, TimeError> {
+    /// Emit the unadjusted coupon dates and their parallel reference
+    /// dates, both chronological.
+    fn generate(&self) -> Result<(Vec<Date>, Vec<Date>), TimeError> {
         let seed = self.start_stub.unwrap_or(self.start_anchor);
         let stop = self.end_stub.unwrap_or(self.end_anchor);
         let stepper = Stepper::new(seed, self.step, self.end_of_month);
@@ -619,17 +669,38 @@ impl Generator {
         if let Some(s) = self.start_stub {
             out.push(s);
         }
-        for candidate in Walk::new(&stepper, stop, self.direction) {
+        let mut walk = Walk::new(&stepper, stop, self.direction);
+        for candidate in walk.by_ref() {
             out.push(candidate?);
         }
+        // The grid point the walk halted on: the stop-side
+        // quasi-coupon boundary, equal to the anchor exactly when
+        // that period is regular.
+        let stopping = stepper.step(walk.i)?;
         if let Some(s) = self.end_stub {
             out.push(s);
         }
         out.push(self.end_anchor);
+
+        // Reference dates match the coupon dates except at the ends,
+        // where a stub's anchor is replaced by its notional boundary.
+        // Regular ends replace it with itself, so no branch is needed.
+        let mut refs = out.clone();
+        if let Some(s) = self.start_stub {
+            refs[0] = Stepper::new(s, self.step, self.end_of_month).step(-1)?;
+        }
+        if let Some(back) = refs.last_mut() {
+            *back = match self.end_stub {
+                Some(s) => Stepper::new(s, self.step, self.end_of_month).step(1)?,
+                None => stopping,
+            };
+        }
+
         if matches!(self.direction, Direction::Backward) {
             out.reverse();
+            refs.reverse();
         }
-        Ok(out)
+        Ok((out, refs))
     }
 }
 
@@ -1400,7 +1471,7 @@ mod tests {
             WEEKENDS,
         )
         .with_next_to_last_date(ymd(2025, Month::Apr, 15));
-        let dates = Generator::forward(&b).generate().unwrap();
+        let (dates, _) = Generator::forward(&b).generate().unwrap();
         assert_eq!(
             dates,
             vec![
@@ -1421,7 +1492,7 @@ mod tests {
             Period::Months(1),
             WEEKENDS,
         );
-        let dates = Generator::backward(&b).unwrap().generate().unwrap();
+        let (dates, _) = Generator::backward(&b).unwrap().generate().unwrap();
         assert_eq!(
             dates,
             vec![
@@ -1543,6 +1614,103 @@ mod tests {
         let d = ymd(2025, Month::Jan, 15);
         let r = Schedule::try_from(vec![d, d]);
         assert_eq!(r.unwrap_err(), TimeError::ScheduleNotMonotonic);
+    }
+
+    // ---- reference dates ----------------------------------------------
+
+    fn unadjusted(effective: Date, termination: Date, rule: DateGenerationRule) -> Schedule {
+        ScheduleBuilder::new(effective, termination, Period::Months(6), WEEKENDS)
+            .with_rule(rule)
+            .with_convention(BusinessDayConvention::Unadjusted)
+            .with_termination_convention(BusinessDayConvention::Unadjusted)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn regular_schedule_reference_dates_equal_coupon_dates() {
+        let s = unadjusted(
+            ymd(2025, Month::Jan, 15),
+            ymd(2026, Month::Jan, 15),
+            DateGenerationRule::Backward,
+        );
+        assert_eq!(s.reference_dates(), s.dates());
+    }
+
+    #[test]
+    fn front_stub_reference_date_is_one_tenor_before_the_first_coupon() {
+        let s = unadjusted(
+            ymd(2002, Month::Aug, 15),
+            ymd(2004, Month::Jan, 15),
+            DateGenerationRule::Backward,
+        );
+        assert_eq!(s.reference_dates()[0], ymd(2002, Month::Jul, 15));
+        assert_eq!(&s.reference_dates()[1..], &s.dates()[1..]);
+    }
+
+    #[test]
+    fn back_stub_reference_date_is_one_tenor_after_the_last_coupon() {
+        let s = unadjusted(
+            ymd(2003, Month::Jan, 15),
+            ymd(2004, Month::Jun, 30),
+            DateGenerationRule::Forward,
+        );
+        let n = s.len();
+        assert_eq!(s.reference_dates()[n - 1], ymd(2004, Month::Jul, 15));
+        assert_eq!(&s.reference_dates()[..n - 1], &s.dates()[..n - 1]);
+    }
+
+    #[test]
+    fn slicing_keeps_both_lists_parallel() {
+        let s = unadjusted(
+            ymd(2002, Month::Aug, 15),
+            ymd(2004, Month::Jan, 15),
+            DateGenerationRule::Backward,
+        );
+        let tail = s.after(ymd(2003, Month::Jan, 15));
+        assert_eq!(tail.len(), tail.reference_dates().len());
+        assert_eq!(tail.reference_dates(), tail.dates());
+        let head = s.until(ymd(2003, Month::Jul, 15));
+        assert_eq!(head.len(), head.reference_dates().len());
+        assert_eq!(head.reference_dates()[0], ymd(2002, Month::Jul, 15));
+    }
+
+    #[test]
+    fn try_from_parallel_lists_validates() {
+        let dates = vec![ymd(2025, Month::Jan, 15), ymd(2025, Month::Jul, 15)];
+        // Length mismatch.
+        assert_eq!(
+            Schedule::try_from((dates.clone(), vec![ymd(2025, Month::Jan, 15)])),
+            Err(TimeError::InvalidReferencePeriod),
+        );
+        // Non-monotonic references.
+        assert_eq!(
+            Schedule::try_from((
+                dates.clone(),
+                vec![ymd(2025, Month::Jul, 15), ymd(2025, Month::Jan, 15)],
+            )),
+            Err(TimeError::InvalidReferencePeriod),
+        );
+        // An interior reference date may not diverge from its coupon.
+        let three = vec![
+            ymd(2025, Month::Jan, 15),
+            ymd(2025, Month::Jul, 15),
+            ymd(2026, Month::Jan, 15),
+        ];
+        let mut refs = three.clone();
+        refs[1] = ymd(2025, Month::Jul, 20);
+        assert_eq!(
+            Schedule::try_from((three, refs)),
+            Err(TimeError::InvalidReferencePeriod),
+        );
+        // Diverging ends are exactly what stubs need.
+        let s = Schedule::try_from((
+            dates.clone(),
+            vec![ymd(2025, Month::Jan, 1), ymd(2025, Month::Jul, 15)],
+        ))
+        .unwrap();
+        assert_eq!(s.dates(), &dates[..]);
+        assert_eq!(s.reference_dates()[0], ymd(2025, Month::Jan, 1));
     }
 
     #[test]

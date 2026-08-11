@@ -36,7 +36,9 @@ Initial release.
   through the same two-date `year_fraction` API as every other
   convention.
 - `Schedule` / `ScheduleBuilder`: forward/backward/zero generation,
-  stub anchors, per-termination convention, end-of-month preservation.
+  stub anchors, per-termination convention, end-of-month preservation,
+  and parallel reference dates carrying the regular coupon grid
+  (identical to the coupon dates except at stub ends).
 - Optional `serde` feature (off by default); `no_std` + `alloc`
   throughout.
 - Optional `chrono` feature (off by default): `From`/`TryFrom`
