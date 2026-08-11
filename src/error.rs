@@ -56,6 +56,10 @@ pub enum TimeError {
     /// computation overflowed the `i64`/`u64` representation.
     #[error("year-fraction arithmetic overflowed")]
     FractionOverflow,
+    /// A day count was bound to a [`Schedule`](crate::Schedule) whose
+    /// tenor disagrees with the convention's coupon frequency.
+    #[error("day-count frequency does not match the schedule's tenor")]
+    FrequencyMismatch,
     /// A [`Schedule`](crate::Schedule) builder was given an
     /// effective date at or after the termination date.
     #[error("schedule effective date must be strictly before termination")]

@@ -234,6 +234,26 @@ impl DayCount for ActActISDA {
 
 // ---- ACT/ACT (ICMA) -----------------------------------------------------
 
+/// How to step a [`ReferenceGrid`]: the regular tenor and whether
+/// generation snapped to end-of-month. Taken from a [`Schedule`]'s
+/// [`Generation`](crate::Generation) when one is bound, so the grid
+/// walks the same lattice the schedule was built on, and derived from
+/// the coupon frequency otherwise.
+#[derive(Debug, Clone, Copy)]
+struct GridShape {
+    tenor: Period,
+    end_of_month: bool,
+}
+
+impl GridShape {
+    fn of(frequency: Frequency) -> Self {
+        Self {
+            tenor: Period::from(frequency),
+            end_of_month: true,
+        }
+    }
+}
+
 /// The regular coupon grid a reference period sits on: window 0 is
 /// the reference period itself, negative windows step back from its
 /// start and positive ones forward from its end.
@@ -248,15 +268,23 @@ impl DayCount for ActActISDA {
 struct ReferenceGrid {
     reference: Span,
     period: Period,
+    end_of_month: bool,
 }
 
 impl ReferenceGrid {
     /// `anchor + i·period` as a fresh multiple (never chained), with
     /// the schedule generator's end-of-month snap.
-    fn step(anchor: Date, period: Period, i: i32) -> Result<Date, TimeError> {
-        let stepped = (anchor + period.checked_mul(i).ok_or(TimeError::DateOutOfRange)?)?;
+    fn step(self, anchor: Date, i: i32) -> Result<Date, TimeError> {
+        let stepped = (anchor
+            + self
+                .period
+                .checked_mul(i)
+                .ok_or(TimeError::DateOutOfRange)?)?;
         Ok(
-            if anchor.is_end_of_month() && matches!(period, Period::Months(_) | Period::Years(_)) {
+            if self.end_of_month
+                && anchor.is_end_of_month()
+                && matches!(self.period, Period::Months(_) | Period::Years(_))
+            {
                 stepped.end_of_month()
             } else {
                 stepped
@@ -270,9 +298,7 @@ impl ReferenceGrid {
             i if i < 0 => (self.reference.start, i),
             i => (self.reference.end, i - 1),
         };
-        Ok(Span::from(
-            Self::step(anchor, self.period, k)?..Self::step(anchor, self.period, k + 1)?,
-        ))
+        Ok(Span::from(self.step(anchor, k)?..self.step(anchor, k + 1)?))
     }
 }
 
@@ -359,9 +385,25 @@ impl ActActICMA {
         if schedule.len() < 2 {
             return Err(TimeError::InvalidReferencePeriod);
         }
+        // A generated schedule names the lattice it was built on; a
+        // convention whose frequency disagrees with that tenor would
+        // silently accrue against the wrong grid.
+        let shape = match schedule.generation() {
+            Some(generation) => {
+                if generation.tenor().normalized() != Period::from(self.frequency).normalized() {
+                    return Err(TimeError::FrequencyMismatch);
+                }
+                GridShape {
+                    tenor: generation.tenor(),
+                    end_of_month: generation.end_of_month(),
+                }
+            }
+            None => GridShape::of(self.frequency),
+        };
         Ok(BoundActActICMA {
             inner: self,
             schedule,
+            shape,
         })
     }
 
@@ -388,10 +430,11 @@ impl ActActICMA {
             return Ok(Fraction::ZERO);
         }
         let reference = Span::from(ref_start..ref_end);
+        let shape = GridShape::of(self.frequency);
         if start < end {
-            self.accrue(Span::from(start..end), reference)
+            self.accrue(Span::from(start..end), reference, shape)
         } else {
-            self.accrue(Span::from(end..start), reference)?
+            self.accrue(Span::from(end..start), reference, shape)?
                 .checked_neg()
                 .ok_or(TimeError::FractionOverflow)
         }
@@ -400,11 +443,17 @@ impl ActActICMA {
     /// Accrue an ordered `span` over the grid anchored on
     /// `reference`: descend to the lowest overlapping window, then
     /// sum upward until the span is covered.
-    fn accrue(self, span: Span, reference: Span) -> Result<Fraction, TimeError> {
+    fn accrue(
+        self,
+        span: Span,
+        reference: Span,
+        grid_shape: GridShape,
+    ) -> Result<Fraction, TimeError> {
         let frequency = u64::from(self.frequency.per_year());
         let grid = ReferenceGrid {
             reference,
-            period: Period::from(self.frequency),
+            period: grid_shape.tenor,
+            end_of_month: grid_shape.end_of_month,
         };
         let mut i = 0;
         while grid.window(i)?.start > span.start {
@@ -453,6 +502,7 @@ impl DayCount for ActActICMA {
 pub struct BoundActActICMA<'s> {
     inner: ActActICMA,
     schedule: &'s Schedule,
+    shape: GridShape,
 }
 
 impl BoundActActICMA<'_> {
@@ -495,7 +545,7 @@ impl BoundActActICMA<'_> {
             // keep the running sum in range.
             let accrued = self
                 .inner
-                .accrue(chunk, Span::from(reference[0]..reference[1]))
+                .accrue(chunk, Span::from(reference[0]..reference[1]), self.shape)
                 .unwrap_or_default();
             total = total.checked_add(accrued).unwrap_or_default();
         }
@@ -1294,6 +1344,49 @@ mod tests {
         // Touching at a single point shares no days.
         let touching = Span::from(ymd(2025, Month::Apr, 1)..ymd(2025, Month::May, 1));
         assert_eq!(span.intersect(touching), None);
+    }
+
+    /// Binding a convention whose frequency disagrees with the
+    /// schedule's tenor would accrue against the wrong lattice, so it
+    /// is refused rather than silently mispriced.
+    #[test]
+    fn bound_icma_rejects_a_frequency_the_schedule_does_not_use() {
+        let quarterly = crate::ScheduleBuilder::new(
+            ymd(2025, Month::Jan, 15),
+            ymd(2026, Month::Jan, 15),
+            Period::Months(3),
+            crate::calendars::NULL_CALENDAR,
+        )
+        .backwards()
+        .with_convention(crate::BusinessDayConvention::Unadjusted)
+        .build()
+        .unwrap();
+        assert_eq!(quarterly.generation().unwrap().tenor(), Period::Months(3),);
+        assert_eq!(
+            ActActICMA::new(Frequency::Semiannual)
+                .bind(&quarterly)
+                .unwrap_err(),
+            TimeError::FrequencyMismatch,
+        );
+        // The matching frequency binds, and a regular quarterly period
+        // is exactly a quarter of a year.
+        let dc = ActActICMA::new(Frequency::Quarterly)
+            .bind(&quarterly)
+            .unwrap();
+        assert_eq!(
+            dc.year_fraction(ymd(2025, Month::Jan, 15), ymd(2025, Month::Apr, 15))
+                .parts(),
+            (1, 4),
+        );
+        // A hand-built schedule has no generation history, so any
+        // frequency is accepted on the caller's word.
+        let raw = Schedule::try_from(alloc::vec![
+            ymd(2025, Month::Jan, 15),
+            ymd(2025, Month::Jul, 15),
+        ])
+        .unwrap();
+        assert!(raw.generation().is_none());
+        assert!(ActActICMA::new(Frequency::Semiannual).bind(&raw).is_ok());
     }
 
     #[test]

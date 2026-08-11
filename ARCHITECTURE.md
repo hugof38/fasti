@@ -65,15 +65,18 @@ the constraint wins unless the design discussion says otherwise.
   float-rounding the reference-period length, fasti takes the
   `Frequency` explicitly — no floats, no inference.
 - **Each concept is owned once.** A `Schedule` knows its own coupon
-  grid, so it — not the day counter — computes the reference dates:
-  the generator already walks that grid, so recording each stub's
-  notional boundary costs it a few lines, while a day counter would
-  have to re-derive the grid and re-classify stubs from adjusted
-  dates. `ActActICMA` therefore reads `reference_dates()` and stays
-  ignorant of generation; `Schedule` stays ignorant of accrual. The
-  same rule explains `ReferenceGrid` living in `daycount`: extending
-  a reference period into notional windows is accrual math, not
-  schedule generation.
+  grid, so it — not the day counter — computes the reference dates and
+  retains the `Generation` parameters (tenor, end-of-month) it was
+  built from. A day counter would otherwise have to re-derive the
+  lattice and re-classify stubs from already-adjusted dates. This
+  mirrors QuantLib, whose `Schedule` keeps `tenor_`, `endOfMonth_`,
+  and per-period `isRegular_` flags for exactly this purpose, while
+  the quasi-payment derivation lives in `actualactual.cpp` — the
+  day-count side. `ReferenceGrid` sits there for the same reason:
+  extending a reference period into notional windows is accrual math.
+  Because the schedule names its lattice, `ActActICMA::bind` can
+  refuse a convention whose frequency disagrees with the schedule's
+  tenor instead of silently accruing against the wrong grid.
 - **`year_fraction` returns a `Fraction`** — an `i64 / u64` integer
   rational, signed by direction. Never `f64`, never a decimal type.
   Reversed inputs (`end < start`) produce a negative fraction that

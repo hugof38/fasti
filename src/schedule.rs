@@ -106,11 +106,40 @@ pub enum DateGenerationRule {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
     feature = "serde",
-    serde(try_from = "(Vec<Date>, Vec<Date>)", into = "(Vec<Date>, Vec<Date>)")
+    serde(try_from = "ScheduleData", into = "ScheduleData")
 )]
 pub struct Schedule {
     dates: Vec<Date>,
     reference_dates: Vec<Date>,
+    generation: Option<Generation>,
+}
+
+/// The parameters a [`Schedule`] was generated from, retained so that
+/// schedule-defined day counts can extend its grid — `QuantLib`'s
+/// `Schedule` keeps the same information in its `tenor_` and
+/// `endOfMonth_` members.
+///
+/// Absent on a schedule built from raw date lists, which carry no
+/// generation history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Generation {
+    tenor: Period,
+    end_of_month: bool,
+}
+
+impl Generation {
+    /// The regular period between coupons.
+    #[must_use]
+    pub const fn tenor(self) -> Period {
+        self.tenor
+    }
+
+    /// Whether generation snapped dates to the end of their month.
+    #[must_use]
+    pub const fn end_of_month(self) -> bool {
+        self.end_of_month
+    }
 }
 
 impl TryFrom<Vec<Date>> for Schedule {
@@ -120,6 +149,39 @@ impl TryFrom<Vec<Date>> for Schedule {
     /// period as regular (reference dates = coupon dates).
     fn try_from(dates: Vec<Date>) -> Result<Self, Self::Error> {
         Self::try_from((dates.clone(), dates))
+    }
+}
+
+/// Serde representation of a [`Schedule`]: both parallel lists plus
+/// the generation parameters.
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ScheduleData {
+    dates: Vec<Date>,
+    reference_dates: Vec<Date>,
+    generation: Option<Generation>,
+}
+
+#[cfg(feature = "serde")]
+impl TryFrom<ScheduleData> for Schedule {
+    type Error = TimeError;
+
+    fn try_from(stored: ScheduleData) -> Result<Self, Self::Error> {
+        Self::try_from((stored.dates, stored.reference_dates)).map(|s| Self {
+            generation: stored.generation,
+            ..s
+        })
+    }
+}
+
+#[cfg(feature = "serde")]
+impl From<Schedule> for ScheduleData {
+    fn from(s: Schedule) -> Self {
+        Self {
+            dates: s.dates,
+            reference_dates: s.reference_dates,
+            generation: s.generation,
+        }
     }
 }
 
@@ -149,6 +211,7 @@ impl TryFrom<(Vec<Date>, Vec<Date>)> for Schedule {
         Ok(Self {
             dates,
             reference_dates,
+            generation: None,
         })
     }
 }
@@ -180,6 +243,13 @@ impl Schedule {
     #[must_use]
     pub fn reference_dates(&self) -> &[Date] {
         &self.reference_dates
+    }
+
+    /// The parameters this schedule was generated from, if it came
+    /// from a [`ScheduleBuilder`].
+    #[must_use]
+    pub const fn generation(&self) -> Option<Generation> {
+        self.generation
     }
 
     /// Number of dates (i.e., `periods + 1`).
@@ -295,6 +365,7 @@ impl Schedule {
         Self {
             dates: self.dates[idx..].to_vec(),
             reference_dates: self.reference_dates[idx..].to_vec(),
+            generation: self.generation,
         }
     }
 
@@ -308,6 +379,7 @@ impl Schedule {
         Self {
             dates: self.dates[..idx].to_vec(),
             reference_dates: self.reference_dates[..idx].to_vec(),
+            generation: self.generation,
         }
     }
 }
@@ -488,7 +560,12 @@ impl<'cal> ScheduleBuilder<'cal> {
         // keeps them identical.
         let adjuster =
             BdcAdjuster::new(self.calendar, self.convention, self.termination_convention);
+        let generation = (!matches!(self.rule, DateGenerationRule::Zero)).then_some(Generation {
+            tenor: self.tenor,
+            end_of_month: self.end_of_month,
+        });
         Schedule::try_from((adjuster.apply(dates)?, adjuster.apply(refs)?))
+            .map(|s| Schedule { generation, ..s })
     }
 
     fn validate_inputs(&self) -> Result<(), TimeError> {
