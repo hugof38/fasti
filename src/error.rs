@@ -47,4 +47,25 @@ pub enum TimeError {
     /// zero denominator.
     #[error("year fraction denominator must be non-zero")]
     ZeroDenominator,
+    /// A [`Schedule`](crate::Schedule) builder was given an
+    /// effective date at or after the termination date.
+    #[error("schedule effective date must be strictly before termination")]
+    EffectiveAfterTermination,
+    /// A [`Schedule`](crate::Schedule) builder was given a zero
+    /// tenor on a non-`Zero` generation rule.
+    #[error("schedule tenor must be non-zero for Forward/Backward rules")]
+    ZeroTenor,
+    /// A [`Schedule`](crate::Schedule) builder's `first_date` or
+    /// `next_to_last_date` did not fall strictly between effective
+    /// and termination, or `first_date` was not strictly before
+    /// `next_to_last_date` when both were set.
+    #[error("schedule stub date is out of (effective, termination) range")]
+    StubDateOutOfRange,
+    /// A [`Schedule`](crate::Schedule) build produced dates that are
+    /// not strictly monotonically increasing after business-day
+    /// adjustment — typically because the chosen tenor and
+    /// convention collapse adjacent dates onto the same business
+    /// day.
+    #[error("schedule dates are not strictly monotonic after adjustment")]
+    ScheduleNotMonotonic,
 }

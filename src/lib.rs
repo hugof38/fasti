@@ -26,20 +26,24 @@
 //! [`Weekday`], [`Ordinal`]), holiday rule primitives ([`FixedDate`],
 //! [`NthWeekday`], [`LastWeekday`], [`OneOff`], [`EasterOffset`],
 //! [`WeekendShift`]), Easter-Monday lookup tables ([`easter_monday`],
-//! [`easter_sunday`]), [`Period`] (a sum type over
+//! [`easter_sunday`]), year ranges ([`YearRange`]), calendars
+//! ([`Calendar`], [`CalendarBuilder`]) with built-in `pub const`
+//! values under [`calendars`], [`Period`] (a sum type over
 //! `Days`/`Weeks`/`Months`/`Years`) and [`Frequency`] with
 //! QuantLib-parity arithmetic, EoM-aware month/year arithmetic on
 //! [`Date`] (via `Add<Period>` / `Sub<Period>` and the unit-specific
-//! methods), the [`Weekend`] bitmask, year ranges ([`YearRange`]),
-//! calendars ([`Calendar`], [`CalendarBuilder`]) with built-in
-//! `pub const` values under [`calendars`], [`BusinessDayConvention`]
-//! with [`Calendar::adjust`] and [`Calendar::advance`], the
-//! [`Fraction`] integer-rational type that day-count conventions
-//! return, the [`DayCount`] trait with [`Act360`], [`Act365Fixed`],
-//! [`Thirty360Bond`], and [`ActActISDA`] impls, and the [`TimeError`]
-//! type returned by fallible constructors.
+//! methods), [`BusinessDayConvention`] with [`Calendar::adjust`] and
+//! [`Calendar::advance`], the [`Fraction`] integer-rational type that
+//! day-count conventions return, the [`DayCount`] trait with
+//! [`Act360`], [`Act365Fixed`], [`Thirty360Bond`], and [`ActActISDA`]
+//! impls, [`Schedule`] / [`ScheduleBuilder`] with
+//! [`DateGenerationRule::Forward`], [`DateGenerationRule::Backward`],
+//! and [`DateGenerationRule::Zero`] generation rules, and the
+//! [`TimeError`] type returned by fallible constructors.
 //!
-//! Planned: payment-schedule generation.
+//! Planned:
+//!
+//! - Further built-in calendars (`TARGET`, `UK_BANK`, `WEEKENDS_ONLY`)
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -56,6 +60,7 @@ mod error;
 mod fraction;
 mod period;
 mod rules;
+mod schedule;
 mod weekend;
 mod year_range;
 
@@ -68,5 +73,6 @@ pub use error::TimeError;
 pub use fraction::Fraction;
 pub use period::{Frequency, Period};
 pub use rules::{EasterOffset, FixedDate, LastWeekday, NthWeekday, OneOff, Rule, WeekendShift};
+pub use schedule::{AccrualPeriod, DateGenerationRule, Schedule, ScheduleBuilder};
 pub use weekend::Weekend;
 pub use year_range::YearRange;
