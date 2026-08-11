@@ -38,9 +38,11 @@
 //! [`Date`] (via `Add<Period>` / `Sub<Period>` and the unit-specific
 //! methods), [`BusinessDayConvention`] with [`Calendar::adjust`] and
 //! [`Calendar::advance`], the [`Fraction`] integer-rational type that
-//! day-count conventions return, the [`DayCount`] trait with
-//! [`Act360`], [`Act365Fixed`], [`Thirty360Bond`], and [`ActActISDA`]
-//! impls, [`Schedule`] / [`ScheduleBuilder`] with
+//! day-count conventions return, the [`DayCount`] trait (with
+//! reference-period support for schedule-aware conventions) and its
+//! [`Act360`], [`Act365Fixed`], [`Thirty360Bond`], [`Thirty360US`],
+//! [`Thirty360European`], [`Thirty360ISDA`], [`ActActISDA`], and
+//! [`ActActICMA`] impls, [`Schedule`] / [`ScheduleBuilder`] with
 //! [`DateGenerationRule::Forward`], [`DateGenerationRule::Backward`],
 //! and [`DateGenerationRule::Zero`] generation rules, and the
 //! [`TimeError`] type returned by fallible constructors.
@@ -73,7 +75,10 @@ mod year_range;
 pub use business_day::BusinessDayConvention;
 pub use calendar::{Calendar, CalendarBuilder};
 pub use date::{Date, Month, Ordinal, Weekday, Year};
-pub use daycount::{Act360, Act365Fixed, ActActISDA, DayCount, Thirty360Bond};
+pub use daycount::{
+    Act360, Act365Fixed, ActActICMA, ActActISDA, BoundActActICMA, DayCount, Thirty360Bond,
+    Thirty360European, Thirty360ISDA, Thirty360US,
+};
 pub use easter::{EasterMethod, easter_monday, easter_sunday};
 pub use error::TimeError;
 pub use fraction::Fraction;

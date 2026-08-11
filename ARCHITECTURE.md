@@ -45,11 +45,29 @@ the constraint wins unless the design discussion says otherwise.
 
 ## Day-count conventions
 
-- **Trait-based.** `DayCount` is a trait; concrete impls are zero-sized
-  structs (`Act360`, `Act365Fixed`, `Thirty360Bond`, `ActActISDA`).
-  This is the one place in the crate where traits + generics carry
-  their weight, driven by the goal of covering QuantLib's full
-  day-count surface over time.
+- **Trait-based.** `DayCount` is a trait; concrete impls are mostly
+  zero-sized structs (`Act360`, `Act365Fixed`, `Thirty360Bond`, …),
+  though schedule-aware conventions carry their parameters
+  (`ActActICMA` holds its coupon `Frequency`, `Thirty360ISDA` its
+  termination date). This is the one place in the crate where traits +
+  generics carry their weight, driven by the goal of covering
+  QuantLib's full day-count surface over time.
+- **Schedule context lives in the value, not the signature.** The
+  trait is exactly `name` / `day_count` / `year_fraction(start, end)`
+  for every convention. Schedule-defined conventions (ACT/ACT ICMA
+  today; ACT/365 Canadian later) do not add reference-period
+  parameters to the trait — instead they bind their context at
+  construction: `ActActICMA::bind(&Schedule)` yields a counter that
+  classifies stubs and precomputes (and range-validates) their
+  notional reference grids once, then answers plain two-date
+  `year_fraction` calls like every other impl. This mirrors
+  QuantLib's modern schedule-carrying `ActualActual(ISMA, schedule)`
+  and keeps generic accrual code free of ref-period plumbing. A
+  fallible inherent `year_fraction_with_reference` remains on
+  `ActActICMA` as a manual escape hatch. Where QuantLib infers the
+  coupon frequency by float-rounding the reference-period length,
+  fasti takes the `Frequency` explicitly at construction — no floats,
+  no inference.
 - **`year_fraction` returns a `Fraction`** — an `i64 / u64` integer
   rational, signed by direction. Never `f64`, never a decimal type.
   Reversed inputs (`end < start`) produce a negative fraction that
