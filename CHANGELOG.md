@@ -35,3 +35,6 @@ Initial release.
   stub anchors, per-termination convention, end-of-month preservation.
 - Optional `serde` feature (off by default); `no_std` + `alloc`
   throughout.
+- Optional `chrono` feature (off by default): `From`/`TryFrom`
+  conversions between `Date`/`Weekday`/`Month` and
+  `chrono::NaiveDate`/`chrono::Weekday`/`chrono::Month`.

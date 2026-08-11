@@ -6,8 +6,12 @@
 //! [QuantLib's `ql/time`](https://github.com/lballabio/QuantLib/tree/master/ql/time)
 //! module and aims to cover the same capability surface over time.
 //!
-//! The crate has no runtime dependencies beyond [`thiserror`] and is
-//! `#![no_std]`-compatible with `alloc` for the builder paths.
+//! The crate has no required runtime dependencies beyond [`thiserror`]
+//! and is `#![no_std]`-compatible with `alloc` for the builder paths.
+//! Two opt-in feature flags bridge to the wider ecosystem without
+//! changing that: `serde` derives serialization on the data types, and
+//! `chrono` adds `From`/`TryFrom` conversions between [`Date`] /
+//! [`Weekday`] / [`Month`] and their `chrono` counterparts.
 //!
 //! # Design principles
 //!
@@ -53,6 +57,8 @@ extern crate alloc;
 mod business_day;
 mod calendar;
 pub mod calendars;
+#[cfg(feature = "chrono")]
+mod chrono_interop;
 mod date;
 mod daycount;
 mod easter;

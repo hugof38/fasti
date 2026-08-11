@@ -14,12 +14,20 @@ authors = ["fasti contributors"]
 [features]
 default = []
 serde = ["dep:serde"]
+# Opt-in interop with the chrono ecosystem: From/TryFrom conversions
+# between fasti's Date/Weekday/Month and chrono's. fasti never uses
+# chrono internally — the custom serial-date representation stays.
+chrono = ["dep:chrono"]
 
 [dependencies]
-# Intentionally minimal: no chrono, no time, no I/O. The custom serial-date
-# representation is deliberate; see ARCHITECTURE.md.
+# Intentionally minimal: no required date deps, no I/O. The custom
+# serial-date representation is deliberate; see ARCHITECTURE.md.
 thiserror = { version = "2", default-features = false }
 serde = { version = "1", optional = true, default-features = false, features = ["alloc", "derive"] }
+chrono = { version = "0.4", optional = true, default-features = false }
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dev-dependencies]
 proptest = "1"

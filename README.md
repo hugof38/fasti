@@ -55,9 +55,18 @@ same capability surface with:
 [dependencies]
 fasti = "0.1"
 
-# Optional serde support (off by default):
-fasti = { version = "0.1", features = ["serde"] }
+# Optional features (both off by default):
+#   serde  — Serialize/Deserialize on the data types
+#   chrono — From/TryFrom conversions with chrono::NaiveDate,
+#            chrono::Weekday, and chrono::Month
+fasti = { version = "0.1", features = ["serde", "chrono"] }
 ```
+
+Coming from `chrono`? Enable the `chrono` feature and convert at the
+boundary — `let d: fasti::Date = naive_date.try_into()?;` (fallible
+only because fasti's supported range is 1901..=2199) and
+`chrono::NaiveDate::from(d)` on the way out. fasti never uses chrono
+internally.
 
 ## Quickstart
 

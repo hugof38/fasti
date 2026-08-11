@@ -5,9 +5,12 @@ the constraint wins unless the design discussion says otherwise.
 
 ## Independence
 
-- **No external date libraries.** No `chrono`, no `time`, no `jiff`.
-  The custom serial `Date(u32)` representation is the point: single-word
-  comparisons, trivial arithmetic, const evaluation.
+- **No external date libraries in the core.** No `chrono`, no `time`,
+  no `jiff` as required dependencies or internal representations. The
+  custom serial `Date(u32)` representation is the point: single-word
+  comparisons, trivial arithmetic, const evaluation. The opt-in
+  `chrono` feature adds boundary conversions (`From`/`TryFrom`) and
+  nothing else — enabling it never changes fasti's own arithmetic.
 - **Runtime deps: `thiserror` only.** Adding any other runtime
   dependency is a design-review item, not a convenience choice.
 - **`serde` is always behind a feature flag.** Never required.
