@@ -30,7 +30,11 @@ Initial release.
   ModifiedPreceding, Unadjusted) with `Calendar::adjust` and
   `Calendar::advance`.
 - Day counts returning integer-rational `Fraction`s: ACT/360,
-  ACT/365F, 30/360 Bond Basis, ACT/ACT ISDA.
+  ACT/365F, 30/360 Bond Basis, 30/360 US, 30E/360 (Eurobond Basis),
+  30E/360 ISDA, ACT/ACT ISDA, and ACT/ACT ICMA; ICMA binds to a
+  coupon `Schedule` (`ActActICMA::bind`) so stub handling flows
+  through the same two-date `year_fraction` API as every other
+  convention.
 - `Schedule` / `ScheduleBuilder`: forward/backward/zero generation,
   stub anchors, per-termination convention, end-of-month preservation.
 - Optional `serde` feature (off by default); `no_std` + `alloc`
