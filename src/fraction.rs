@@ -514,7 +514,7 @@ mod tests {
 
     #[test]
     fn display_renders_reduced_form() {
-        assert_eq!(alloc::format!("{}", Fraction::new(2, 4).unwrap()), "1/2",);
+        assert_eq!(alloc::format!("{}", Fraction::new(2, 4).unwrap()), "1/2");
         assert_eq!(alloc::format!("{}", Fraction::ZERO), "0/1");
         assert_eq!(
             alloc::format!("{}", Fraction::new(7, 360).unwrap()),

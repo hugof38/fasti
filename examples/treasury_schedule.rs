@@ -45,7 +45,7 @@ fn main() -> Result<(), TimeError> {
         .with_termination_convention(BusinessDayConvention::Unadjusted)
         .build()?;
 
-    println!("Treasury 4.25% {issue} -> {maturity}, semiannual, US settlement calendar",);
+    println!("Treasury 4.25% {issue} -> {maturity}, semiannual, US settlement calendar");
     println!(
         "{} coupon dates ({} accrual periods)\n",
         schedule.len(),
