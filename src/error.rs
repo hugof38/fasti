@@ -1,9 +1,7 @@
 //! Error type returned by fallible `fasti` constructors.
 //!
-//! The crate is deliberately strict at API boundaries: years outside
-//! 1901–2199, months outside 1–12, and day-of-month values that do not
-//! exist in the given month/year are all refused at construction rather
-//! than silently coerced. Every such refusal surfaces as a [`TimeError`].
+//! Invalid inputs are refused at construction rather than silently
+//! coerced; every refusal surfaces as a [`TimeError`].
 
 /// Errors produced by `fasti` constructors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -34,9 +32,7 @@ pub enum TimeError {
     #[error("date arithmetic result out of range")]
     DateOutOfRange,
     /// A string passed to [`Date`](crate::Date)'s [`FromStr`](core::str::FromStr)
-    /// impl was not in `YYYY-MM-DD` form. (A well-formed string whose
-    /// year, month, or day is invalid surfaces the corresponding
-    /// range error instead.)
+    /// impl was not in `YYYY-MM-DD` form.
     #[error("date string is not in YYYY-MM-DD form")]
     InvalidDateString,
     /// A [`YearRange`](crate::YearRange) was constructed with an upper
@@ -44,9 +40,7 @@ pub enum TimeError {
     #[error("year range upper bound is below lower bound")]
     InvalidYearRange,
     /// A [`Period`](crate::Period) did not correspond to a canonical
-    /// [`Frequency`](crate::Frequency) — e.g. every 5 months, every
-    /// 3 weeks. The period is fine on its own; only the conversion
-    /// fails.
+    /// [`Frequency`](crate::Frequency) — e.g. every 5 months.
     #[error("period does not correspond to a canonical frequency")]
     NonCanonicalPeriod,
     /// A [`Fraction`](crate::Fraction) was constructed with a
@@ -61,17 +55,13 @@ pub enum TimeError {
     /// tenor on a non-`Zero` generation rule.
     #[error("schedule tenor must be non-zero for Forward/Backward rules")]
     ZeroTenor,
-    /// A [`Schedule`](crate::Schedule) builder's `first_date` or
-    /// `next_to_last_date` did not fall strictly between effective
-    /// and termination, or `first_date` was not strictly before
-    /// `next_to_last_date` when both were set.
+    /// A [`Schedule`](crate::Schedule) builder stub date did not fall
+    /// strictly between effective and termination, or the stub dates
+    /// were out of order.
     #[error("schedule stub date is out of (effective, termination) range")]
     StubDateOutOfRange,
-    /// A [`Schedule`](crate::Schedule) build produced dates that are
-    /// not strictly monotonically increasing after business-day
-    /// adjustment — typically because the chosen tenor and
-    /// convention collapse adjacent dates onto the same business
-    /// day.
+    /// A [`Schedule`](crate::Schedule) build produced dates that are not
+    /// strictly monotonically increasing after business-day adjustment.
     #[error("schedule dates are not strictly monotonic after adjustment")]
     ScheduleNotMonotonic,
 }

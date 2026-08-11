@@ -1,63 +1,9 @@
 //! [`Fraction`] — an integer rational `num / den`.
 //!
-//! The crate-wide convention is that rationals are integer fractions —
-//! never `f64`, never `rust_decimal`. The primary client is the
-//! [`DayCount`](crate::DayCount) trait, which returns a `Fraction` from
-//! `year_fraction(start, end)`; downstream crates also use `Fraction`
-//! as the scalar that scales monetary amounts (basis-point rates,
-//! coverage thresholds, etc.). The type is `Fraction` rather than
-//! `YearFraction` because the math is the same regardless of whether
-//! the numerator and denominator carry "year" units or not.
-//!
-//! # Operations
-//!
-//! - [`checked_add`](Fraction::checked_add) for additivity across
-//!   adjacent intervals (the day-count splits proptest).
-//! - [`checked_mul`](Fraction::checked_mul) for composing rates with
-//!   year fractions.
-//! - [`cmp_cross`](Fraction::cmp_cross) and [`Ord`] for ordering and
-//!   equality across alternative representations.
-//! - [`parts`](Fraction::parts) for callers that want to scale an
-//!   [`Amount`] with checked integer ops.
-//!
-//! # Storage and equality
-//!
-//! Fractions are stored in reduced form — every constructor divides
-//! through by `gcd(|num|, den)` — so two `Fraction`s compare
-//! equal via the derived `PartialEq` iff they represent the same
-//! rational. `1/2` and `2/4` are the same value because they reduce
-//! to the same `(num, den)` pair on construction.
-//!
-//! # Sign and width
-//!
-//! The numerator is `i64` and the denominator is `u64`. The
-//! denominator is always positive; sign lives on the numerator.
-//! This mirrors [`DayCount::day_count`](crate::DayCount::day_count),
-//! which is signed: a reversed period produces a negative day count
-//! and therefore a negative year fraction.
-//!
-//! `cmp_cross` and `checked_add` widen to `i128` for intermediates,
-//! which always fits the product of an `i64` and a `u64` — so
-//! cross-multiplication is total and the sum's intermediates never
-//! spuriously overflow on inputs whose reduced result still fits.
-//!
-//! # Why not `num-rational`?
-//!
-//! `num-rational` would be a perfectly fine fit, but pulling it in
-//! breaks the "runtime deps: `thiserror` only" constraint of this
-//! crate. Our needs (addition, multiplication, an ordering
-//! comparison) fit in ~120 lines of `i128`-widened arithmetic. If a
-//! future use case outgrows this — extended-precision rationals,
-//! division of fractions — the migration is a one-line dep swap.
-//!
-//! # No operator overloads
-//!
-//! Addition and multiplication can fail at the `i64`/`u64` boundary,
-//! so they are exposed only as [`checked_add`](Self::checked_add) and
-//! [`checked_mul`](Self::checked_mul). Callers compose with `?` or
-//! handle the `None` arm explicitly.
-//!
-//! [`Amount`]: u128
+//! Returned by [`DayCount`](crate::DayCount) and used as the crate-wide
+//! rational scalar. Stored in reduced form; numerator is `i64` (sign lives
+//! there), denominator is `u64` and always positive. Fallible arithmetic is
+//! exposed only as `checked_*` — no operator overloads.
 
 use core::{cmp::Ordering, fmt};
 
@@ -118,22 +64,14 @@ impl Fraction {
         if den == 0 {
             return Err(TimeError::ZeroDenominator);
         }
-        // Reduce by gcd(|num|, den). Both factors fit `u64`, so the
-        // gcd helper widens to `u128` and the result fits `u64` by
-        // the bound `g ≤ min(|num|, den) ≤ u64::MAX`.
         let common_u128 = gcd(u128::from(num.unsigned_abs()), u128::from(den));
-        // `common ≤ u64::MAX` (proved above), so the narrowing is
-        // exact.
+        // gcd ≤ min(|num|, den) ≤ u64::MAX, so the narrowing is exact.
         #[allow(clippy::cast_possible_truncation)]
         let common = common_u128 as u64;
         let reduced_den = den / common;
-        // `common` divides |num| exactly; do the signed division in
-        // `i128` to handle the `num == i64::MIN` edge case
-        // (unsigned_abs returns 2^63, which doesn't fit `i64`, but
-        // `i128` covers both signs cleanly).
+        // Signed division in i128 handles the num == i64::MIN edge case.
         let reduced_num_i128 = i128::from(num) / i128::from(common);
-        // After reduction, |reduced_num| ≤ |num| ≤ |i64::MIN|, so the
-        // result always fits `i64`.
+        // |reduced_num| ≤ |num| ≤ |i64::MIN|, so the result fits i64.
         #[allow(clippy::cast_possible_truncation)]
         let reduced_num = reduced_num_i128 as i64;
         Ok(Self {
@@ -154,13 +92,8 @@ impl Fraction {
         self.den
     }
 
-    /// `(numerator, denominator)` of the reduced fraction.
-    ///
-    /// Callers that need to scale an amount by this fraction should
-    /// use these values with checked integer arithmetic, ordering
-    /// the multiplication before the division to retain precision:
-    /// `amount.checked_mul(num)?.checked_div(den)?` (with sign
-    /// handling on `num`).
+    /// `(numerator, denominator)` of the reduced fraction, for use
+    /// with checked integer arithmetic (multiply before divide).
     #[must_use]
     pub const fn parts(self) -> (i64, u64) {
         (self.num, self.den)
@@ -204,11 +137,6 @@ impl Fraction {
     /// Add two fractions, returning [`None`] if any intermediate or
     /// the reduced result does not fit in `(i64, u64)`.
     ///
-    /// `a/b + c/d = (a·d + c·b) / (b·d)`. Intermediates are computed
-    /// in `i128` to avoid spurious overflow on inputs whose reduced
-    /// sum still fits; the final result is returned as `Some` only
-    /// if both numerator and denominator fit.
-    ///
     /// ```
     /// use fasti::Fraction;
     /// let a = Fraction::new(1, 2)?;
@@ -226,18 +154,14 @@ impl Fraction {
     pub fn checked_add(self, other: Self) -> Option<Self> {
         let lhs_num = i128::from(self.num);
         let rhs_num = i128::from(other.num);
-        // `u64` denominators always fit `i128` non-negative.
         let lhs_den = i128::from(self.den);
         let rhs_den = i128::from(other.den);
         let num = lhs_num
             .checked_mul(rhs_den)?
             .checked_add(rhs_num.checked_mul(lhs_den)?)?;
         let den = lhs_den.checked_mul(rhs_den)?;
-        // `den` is positive (both factors positive); the gcd helper
-        // takes `u128`, so widen via `unsigned_abs`.
         let common_unsigned = gcd(num.unsigned_abs(), den.unsigned_abs());
-        // `common ≤ den ≤ i128::MAX`, so the signed conversion
-        // succeeds.
+        // common ≤ den ≤ i128::MAX, so the signed conversion succeeds.
         let common = i128::try_from(common_unsigned).ok()?;
         let reduced_num = num / common;
         let reduced_den = den / common;
@@ -247,13 +171,8 @@ impl Fraction {
         })
     }
 
-    /// Multiply two fractions: `(a/b) × (c/d) = (a·c) / (b·d)`. Returns
-    /// [`None`] if any intermediate or the reduced result does not fit
-    /// in `(i64, u64)`.
-    ///
-    /// Sign of the result is the product of the input signs;
-    /// denominator stays positive. Result is reduced by
-    /// `gcd(|num|, den)`.
+    /// Multiply two fractions. Returns [`None`] if any intermediate or
+    /// the reduced result does not fit in `(i64, u64)`.
     ///
     /// ```
     /// use fasti::Fraction;
@@ -272,13 +191,8 @@ impl Fraction {
     /// ```
     #[must_use]
     pub fn checked_mul(self, other: Self) -> Option<Self> {
-        // Widen to i128 for both factors. The product of an i64 and a
-        // u64 fits i128 with room to spare; the product of two such
-        // products may not fit i64/u64, so we reduce before narrowing.
         let num = i128::from(self.num).checked_mul(i128::from(other.num))?;
         let den = i128::from(self.den).checked_mul(i128::from(other.den))?;
-        // `den > 0` because both factors are u64 (so non-negative)
-        // and at least one was non-zero (constructor invariant).
         let common_unsigned = gcd(num.unsigned_abs(), den.unsigned_abs());
         let common = i128::try_from(common_unsigned).ok()?;
         let reduced_num = num / common;
@@ -289,13 +203,8 @@ impl Fraction {
         })
     }
 
-    /// Compare two fractions by cross-multiplication.
-    ///
-    /// `a/b ?= c/d` becomes `a·d ?= c·b`. Both products are widened
-    /// to `i128`, which always fits the product of an `i64` and a
-    /// `u64` operand, so the comparison is total and never overflows.
-    /// The denominator is positive on both sides, so cross-multiplication
-    /// preserves the sign of the comparison.
+    /// Compare two fractions by cross-multiplication, widened to `i128`
+    /// so the comparison is total and never overflows.
     ///
     /// ```
     /// use core::cmp::Ordering;
@@ -317,10 +226,7 @@ impl Fraction {
 }
 
 impl Default for Fraction {
-    /// `Default` is [`Self::ZERO`], which lets day-count code use
-    /// `Fraction::new(...).unwrap_or_default()` to fall back on
-    /// the zero fraction when the constructor's only failure
-    /// (`ZeroDenominator`) is unreachable in context.
+    /// `Default` is [`Self::ZERO`].
     fn default() -> Self {
         Self::ZERO
     }
@@ -339,8 +245,7 @@ impl Ord for Fraction {
 }
 
 impl fmt::Display for Fraction {
-    /// Formats as `numerator/denominator` in reduced form. A
-    /// negative numerator displays with a leading `-`.
+    /// Formats as `numerator/denominator` in reduced form.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}/{}", self.num, self.den)
     }
@@ -354,13 +259,7 @@ impl From<Fraction> for (i64, u64) {
 
 // ---- helpers ------------------------------------------------------------
 
-/// Greatest common divisor via Euclid's algorithm. `gcd(0, x) = x`
-/// and `gcd(x, 0) = x`, which makes [`Fraction::new`]`(0, _)`
-/// reduce to `(0, 1)` as expected.
-///
-/// Defined once over `u128` and reused for every call site by
-/// widening — keeping a single implementation avoids drift between
-/// per-width copies.
+/// Greatest common divisor via Euclid's algorithm; `gcd(0, x) = x`.
 const fn gcd(mut a: u128, mut b: u128) -> u128 {
     while b != 0 {
         let t = b;
@@ -428,10 +327,7 @@ mod tests {
     #[test]
     fn default_is_zero() {
         assert_eq!(Fraction::default(), Fraction::ZERO);
-        // Critical for the `Result::unwrap_or_default` pattern in
-        // `DayCount` impls — `Default` must agree with `ZERO`, not
-        // the derived `(0, 0)` field default which would have a
-        // zero denominator.
+        // Default must be (0, 1), not a derived (0, 0) with zero denominator.
         let parts = Fraction::default().parts();
         assert_eq!(parts, (0, 1));
         assert_ne!(parts.1, 0);
@@ -641,9 +537,7 @@ mod tests {
         }
 
         /// Addition is associative whenever every intermediate
-        /// addition succeeds. Smaller bounds keep the triple-product
-        /// intermediates within the i128 scratch space when none of
-        /// the partial sums alone would overflow.
+        /// addition succeeds.
         #[test]
         fn add_is_associative(
             n1 in -200i64..=200, d1 in 1u64..=200,

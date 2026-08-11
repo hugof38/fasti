@@ -3,13 +3,9 @@
 
 use crate::{Calendar, EasterOffset, FixedDate, Month, Rule, Weekend, WeekendShift};
 
-/// The France exchange calendar (Euronext Paris).
-///
-/// A reduced set versus Settlement — the stock exchange does not
-/// observe civil-only French holidays (Bastille Day, V-E Day, All
-/// Saints', Armistice, Assumption) but does observe Good Friday and
-/// the December exchange closures (Christmas Eve, Dec 26, New
-/// Year's Eve).
+/// The France exchange calendar (Euronext Paris). A reduced set versus
+/// Settlement: no civil-only holidays, but Good Friday and the December
+/// exchange closures are observed.
 ///
 /// | Holiday | Rule |
 /// |---|---|
@@ -22,11 +18,7 @@ use crate::{Calendar, EasterOffset, FixedDate, Month, Rule, Weekend, WeekendShif
 /// | Lendemain de Noël / Second day of Christmas | Dec 26 |
 /// | Saint-Sylvestre / New Year's Eve | Dec 31 |
 ///
-/// Note: Dec 26 is not a French civil holiday outside Alsace-Moselle,
-/// but Euronext closes its markets pan-European on that date — this
-/// entry is an exchange convention, not a civil observance. Some
-/// sources (including `QuantLib`'s port) label it "Boxing Day"; the
-/// native French label is `Lendemain de Noël`.
+/// Dec 26 is an Euronext exchange convention, not a French civil holiday.
 pub const EXCHANGE: Calendar<'static> = Calendar {
     name: "France exchange",
     weekend: Weekend::SAT_SUN,

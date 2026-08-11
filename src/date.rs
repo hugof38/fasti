@@ -1,35 +1,8 @@
 //! Dates and their building blocks: [`Date`], [`Year`], [`Month`],
 //! [`Weekday`], and [`Ordinal`].
 //!
-//! # Representation
-//!
 //! [`Date`] is a newtype over [`u32`] counting days from 1901-01-01 (serial
-//! zero). The supported range is 1901-01-01 through 2199-12-31 inclusive —
-//! 299 years, chosen to match the range of the crate's Easter-Monday
-//! lookup tables. All fallible constructors refuse values outside that
-//! range with a [`TimeError`].
-//!
-//! # Design choices
-//!
-//! - **Serial days, not (y, m, d) tuples.** Serial representation makes
-//!   date arithmetic (days between, add-days, weekday) trivial and keeps
-//!   comparisons to a single integer compare. Decomposing back to (year,
-//!   month, day) uses a precomputed cumulative-days table and a small
-//!   month-offset table; every decomposition is a const bounded scan.
-//! - **Const everywhere.** Every primitive constructor and every accessor
-//!   is `const fn`. The cumulative-days table itself is built at
-//!   compile time from [`is_leap`].
-//! - **No panics in library code.** Out-of-range inputs return
-//!   [`TimeError`]. There are no `unwrap`/`expect`/`panic`/`unreachable`
-//!   calls in this module.
-//!
-//! # Integer representation
-//!
-//! Serial days are [`u32`] (values `0..=MAX_SERIAL`, comfortably inside
-//! the 32-bit range for 299 years). Years are [`u16`] because 1901..=2199
-//! has no use for signed or 32-bit width. Cast sites are rare and
-//! narrowly annotated; there is deliberately no module-level
-//! `clippy::cast_*` allow.
+//! zero); supported range 1901-01-01..=2199-12-31, else [`TimeError`].
 
 use crate::{Period, TimeError};
 use core::fmt;
@@ -45,10 +18,8 @@ const fn is_leap(year: u16) -> bool {
     (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }
 
-/// `CUMULATIVE[i]` = days from 1901-01-01 to (1901 + i)-01-01.
-///
-/// The entry at index `NUM_YEARS` (300) is one past the last valid day —
-/// the hypothetical 2200-01-01. [`MAX_SERIAL`] is that value minus one.
+/// `CUMULATIVE[i]` = days from 1901-01-01 to (1901 + i)-01-01; the entry
+/// at index `NUM_YEARS` is one past the last valid day.
 const CUMULATIVE: [u32; NUM_YEARS as usize + 1] = {
     let mut out = [0u32; NUM_YEARS as usize + 1];
     let mut i: u16 = 0;
@@ -63,9 +34,8 @@ const CUMULATIVE: [u32; NUM_YEARS as usize + 1] = {
 
 const MAX_SERIAL: u32 = CUMULATIVE[NUM_YEARS as usize] - 1;
 
-/// Day-of-year offset at the start of each month, for a non-leap year.
-/// Index `i` gives the 0-based day-of-year at the start of month `i + 1`.
-/// Entry 12 is the length of the year, used as a sentinel.
+/// 0-based day-of-year at the start of month `i + 1`, non-leap year;
+/// entry 12 is a sentinel.
 const MONTH_OFFSETS_NONLEAP: [u32; 13] =
     [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365];
 
@@ -75,9 +45,6 @@ const MONTH_OFFSETS_LEAP: [u32; 13] = [0, 31, 60, 91, 121, 152, 182, 213, 244, 2
 // ---- Year ---------------------------------------------------------------
 
 /// A year in the range 1901..=2199.
-///
-/// Construction is fallible — [`Year::new`] refuses out-of-range input —
-/// but all accessors are infallible once a [`Year`] exists.
 ///
 /// ```
 /// use fasti::Year;
@@ -108,12 +75,8 @@ impl Year {
         }
     }
 
-    /// Construct a [`Year`] from a compile-time literal.
-    ///
-    /// Validation happens at const-eval time: an out-of-range value is
-    /// a compile error, not a runtime panic. Prefer this over
-    /// `Year::new(...).unwrap()` inside `const` blocks and calendar
-    /// declarations.
+    /// Construct a [`Year`] from a compile-time literal; an out-of-range
+    /// value is a compile error, not a runtime panic.
     ///
     /// ```
     /// use fasti::Year;
@@ -131,9 +94,7 @@ impl Year {
     pub const fn literal(year: u16) -> Self {
         match Self::new(year) {
             Ok(y) => y,
-            // Reached only at const-eval time with an out-of-range
-            // literal — surfaces as a compile error, not a runtime
-            // panic.
+            // Reached only at const-eval time — a compile error, not a runtime panic.
             Err(_) => panic!("Year::literal: argument must be in 1901..=2199"),
         }
     }
@@ -150,8 +111,7 @@ impl Year {
         self.0
     }
 
-    /// `true` iff this is a Gregorian leap year (divisible by 4, with the
-    /// century rule: divisible by 100 but not 400 ⇒ not leap).
+    /// `true` iff this is a Gregorian leap year.
     ///
     /// ```
     /// use fasti::Year;
@@ -308,9 +268,6 @@ impl fmt::Display for Month {
 // ---- Weekday ------------------------------------------------------------
 
 /// Day of the week. Discriminants follow ISO 8601: Monday = 1 .. Sunday = 7.
-///
-/// The same numbering is used by `QuantLib` and by `chrono::Weekday::number_from_monday`,
-/// which keeps this crate predictable for readers familiar with either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
@@ -455,9 +412,7 @@ impl fmt::Display for Ordinal {
 
 /// A calendar date in the supported range 1901-01-01..=2199-12-31.
 ///
-/// Internally a [`u32`] count of days since 1901-01-01 (inclusive). All
-/// comparisons are single-word integer compares and all accessors are
-/// `const`.
+/// Internally a [`u32`] count of days since 1901-01-01 (inclusive).
 ///
 /// ```
 /// use fasti::{Date, Month, Weekday};
@@ -504,12 +459,7 @@ impl Date {
     }
 
     /// Construct a [`Date`] from compile-time year, month, and day
-    /// literals.
-    ///
-    /// Validated at const-eval time — an out-of-range year, month, or
-    /// day-of-month is a compile error, not a runtime panic. Prefer
-    /// this over `Date::from_ymd(...).unwrap()` inside `const` blocks
-    /// and calendar declarations.
+    /// literals; an invalid date is a compile error, not a runtime panic.
     ///
     /// ```
     /// use fasti::{Date, Month};
@@ -527,8 +477,7 @@ impl Date {
     pub const fn literal(year: u16, month: Month, day: u8) -> Self {
         match Self::from_ymd(year, month, day) {
             Ok(d) => d,
-            // Unreachable at runtime by construction — bad literals
-            // produce a const-eval compile error.
+            // Reached only at const-eval time — a compile error, not a runtime panic.
             Err(_) => panic!("Date::literal: invalid year/month/day"),
         }
     }
@@ -556,16 +505,9 @@ impl Date {
     }
 
     /// The [`Year`] component.
-    ///
-    /// Resolved via binary search over the cumulative-days table —
-    /// logarithmic in the 299-year range.
     #[must_use]
     pub const fn year(self) -> Year {
-        // Find the largest `idx` in `0..NUM_YEARS` such that
-        // `CUMULATIVE[idx] <= self.0`. `CUMULATIVE[0] == 0` so `lo`
-        // starts at a valid answer and only grows. `lo` and `hi` live in
-        // `u16` so that `Year(EPOCH_YEAR + lo)` is a pure `u16` add with
-        // no cast.
+        // Largest `idx` with `CUMULATIVE[idx] <= serial`; `lo`/`hi` are `u16` so the final add needs no cast.
         let serial = self.0;
         let mut lo: u16 = 0;
         let mut hi: u16 = NUM_YEARS;
@@ -581,10 +523,6 @@ impl Date {
     }
 
     /// Decompose into `(year, month, day-of-month)`.
-    ///
-    /// Prefer this over calling [`Date::year`], [`Date::month`], and
-    /// [`Date::day`] separately when you need all three — the shared
-    /// implementation avoids recomputing the year index.
     ///
     /// ```
     /// use fasti::{Date, Month};
@@ -621,16 +559,13 @@ impl Date {
             10 => Month::Nov,
             _ => Month::Dec,
         };
-        // `doy - offsets[m]` is bounded 0..=30 (month-length minus one);
-        // adding 1 yields 1..=31 which is the day-of-month. The `as u8`
-        // narrowing is safe by that bound.
+        // `doy - offsets[m] + 1` is bounded 1..=31, so the `as u8` narrowing is safe.
         #[allow(clippy::cast_possible_truncation)]
         let day_of_month = (doy - offsets[m] + 1) as u8;
         (y, month, day_of_month)
     }
 
-    /// The [`Month`] component. If you also need the year and day, prefer
-    /// [`Date::to_ymd`] to avoid recomputing the year index.
+    /// The [`Month`] component.
     ///
     /// ```
     /// use fasti::{Date, Month};
@@ -643,8 +578,7 @@ impl Date {
         m
     }
 
-    /// The day-of-month component, `1..=31`. If you also need the year
-    /// and month, prefer [`Date::to_ymd`].
+    /// The day-of-month component, `1..=31`.
     ///
     /// ```
     /// use fasti::{Date, Month};
@@ -670,15 +604,13 @@ impl Date {
     pub const fn day_of_year(self) -> u16 {
         let y = self.year();
         let year_idx = (y.0 - EPOCH_YEAR) as usize;
-        // Result is 1..=366, which fits in `u16`; the `u32 -> u16`
-        // narrowing is safe by that bound.
+        // Result is 1..=366, so the `u32 -> u16` narrowing is safe.
         #[allow(clippy::cast_possible_truncation)]
         let doy = (self.0 - CUMULATIVE[year_idx] + 1) as u16;
         doy
     }
 
-    /// The day of the week. 1901-01-01 was a Tuesday; all other weekdays
-    /// follow from serial arithmetic modulo 7.
+    /// The day of the week.
     ///
     /// ```
     /// use fasti::{Date, Month, Weekday};
@@ -690,9 +622,7 @@ impl Date {
     /// ```
     #[must_use]
     pub const fn weekday(self) -> Weekday {
-        // Serial 0 (1901-01-01) is Tuesday. `(serial + 1) % 7` gives
-        // 0..=6 keyed as Mon, Tue, ..., Sun — the match below maps those
-        // indices onto the ISO-numbered variants.
+        // Serial 0 (1901-01-01) is Tuesday, so `(serial + 1) % 7` gives 0..=6 keyed Mon..Sun.
         match (self.0 + 1) % 7 {
             0 => Weekday::Mon,
             1 => Weekday::Tue,
@@ -715,15 +645,12 @@ impl Date {
     /// # Ok::<(), fasti::TimeError>(())
     /// ```
     pub const fn add_days(self, n: i32) -> Result<Self, TimeError> {
-        // Widen to `i64` — the sum of any `u32` serial and any `i32`
-        // offset fits comfortably, and this lets us bounds-check against
-        // `MAX_SERIAL` before narrowing.
+        // Widen to `i64` so any `u32 + i32` sum fits and can be bounds-checked before narrowing.
         let target = self.0 as i64 + n as i64;
         if target < 0 || target > MAX_SERIAL as i64 {
             return Err(TimeError::DateOutOfRange);
         }
-        // `target` is in `0..=MAX_SERIAL` (a `u32` range); the `i64 -> u32`
-        // narrowing is safe by that bound.
+        // `target` is in `0..=MAX_SERIAL`, so the `i64 -> u32` narrowing is safe.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let serial = target as u32;
         Ok(Self(serial))
@@ -742,9 +669,7 @@ impl Date {
     /// ```
     #[must_use]
     pub const fn days_since(self, other: Self) -> i32 {
-        // Both serials are in `0..=MAX_SERIAL` (≈ 109,207), so the
-        // signed difference fits in `i32` with room to spare. Widen to
-        // `i64` first to avoid `u32 - u32` underflow.
+        // Widen to `i64` to avoid `u32 - u32` underflow.
         let diff = self.0 as i64 - other.0 as i64;
         // Bounded by `|diff| <= MAX_SERIAL`; `i64 -> i32` is safe.
         #[allow(clippy::cast_possible_truncation)]
@@ -753,17 +678,8 @@ impl Date {
     }
 
     /// Add `n` calendar months, clamping the day-of-month to the new
-    /// month's length when the natural day would not exist.
-    ///
-    /// Semantics match `QuantLib`'s
-    /// [`Date::advance`](https://github.com/lballabio/QuantLib/blob/master/ql/time/date.cpp):
-    /// `Jan 31 + 1M → Feb 28/29`. This is a *clamp*, not an
-    /// "end-of-month-preserving" operation — to preserve `EoM` (e.g.
-    /// for a schedule whose start date is `EoM`), apply the
-    /// preservation at the schedule level, not here.
-    ///
-    /// Returns [`TimeError::DateOutOfRange`] if the resulting year
-    /// would fall outside the supported `1901..=2199` range.
+    /// month's length. Matches `QuantLib`'s `Date::advance` semantics.
+    /// Returns [`TimeError::DateOutOfRange`] if the result is out of range.
     ///
     /// ```
     /// use fasti::{Date, Month};
@@ -777,18 +693,12 @@ impl Date {
     /// ```
     pub const fn add_months(self, n: i32) -> Result<Self, TimeError> {
         let (year, month, day) = self.to_ymd();
-        // Compute the target month index zero-based (0..=11 per year).
-        // Use `i32` for the year + month combination — `(year, month)`
-        // pairs fit comfortably in an `i32` for the supported 1901..=2199
-        // range (~3600 months total).
+        // Zero-based month index in `i32` — all in-range (year, month) pairs fit.
         let total_months = year.get() as i32 * 12 + (month.get() as i32 - 1);
         let Some(new_total) = total_months.checked_add(n) else {
             return Err(TimeError::DateOutOfRange);
         };
-        // `new_total.div_euclid(12)` / `.rem_euclid(12)` give the new
-        // year / month even when `new_total` is negative (which it is
-        // not here in practice, since we bounds-check against `Year`
-        // below — but using euclidean ops is cheap insurance).
+        // Euclidean div/rem stay correct if `new_total` is negative.
         let target_year_i32 = new_total.div_euclid(12);
         let new_month_idx = new_total.rem_euclid(12);
         if target_year_i32 < Year::MIN.get() as i32 || target_year_i32 > Year::MAX.get() as i32 {
@@ -807,7 +717,6 @@ impl Date {
             Ok(found) => found,
             Err(err) => return Err(err),
         };
-        // Clamp the day to the target month's length.
         let clamped_day = {
             let len = new_month.length(target_year);
             if day > len { len } else { day }
@@ -817,9 +726,6 @@ impl Date {
 
     /// Add `n` calendar years, clamping Feb 29 to Feb 28 when the
     /// target year is not a leap year.
-    ///
-    /// Implemented as `add_months(n * 12)`; documented separately
-    /// because that is the operation callers reach for.
     ///
     /// ```
     /// use fasti::{Date, Month};
@@ -837,8 +743,7 @@ impl Date {
         self.add_months(months)
     }
 
-    /// The last day of `self`'s month — e.g. `Jan 15 → Jan 31`,
-    /// `Feb 10 2024 → Feb 29 2024` (leap), `Feb 10 2025 → Feb 28 2025`.
+    /// The last day of `self`'s month.
     ///
     /// ```
     /// use fasti::{Date, Month};
@@ -850,11 +755,7 @@ impl Date {
     pub const fn end_of_month(self) -> Self {
         let (year, month, _) = self.to_ymd();
         let last = month.length(year);
-        // The (year, month, last) triple is by construction valid, so
-        // `from_ymd` cannot fail — but we can't `unwrap` in const,
-        // and can't panic per crate policy. Instead we round-trip
-        // through serial arithmetic: start of the month plus
-        // (length - 1) days always lands in the same month.
+        // Serial arithmetic — month start plus (length - 1) — avoids an unreachable `from_ymd` error path.
         let month_start = self.0 - (self.day() as u32 - 1);
         Self(month_start + last as u32 - 1)
     }
@@ -877,8 +778,7 @@ impl Date {
 
 impl fmt::Display for Date {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Decompose once — calling year/month/day separately would run the
-        // year binary search three times.
+        // Decompose once instead of three separate year lookups.
         let (y, m, d) = self.to_ymd();
         write!(f, "{:04}-{:02}-{:02}", y.get(), m.get(), d)
     }
@@ -887,17 +787,9 @@ impl fmt::Display for Date {
 impl core::str::FromStr for Date {
     type Err = TimeError;
 
-    /// Parse an ISO-8601 calendar date in strict `YYYY-MM-DD` form —
-    /// the exact format [`Display`](fmt::Display) produces, so
-    /// `to_string` / `parse` round-trip.
-    ///
-    /// Exactly ten ASCII characters, zero-padded, hyphen-separated.
-    /// No whitespace, signs, time-of-day, or timezone designators —
-    /// this crate has no time-of-day type, so there is nothing for a
-    /// trailing `T…` to mean. Malformed strings return
-    /// [`TimeError::InvalidDateString`]; well-formed strings with an
-    /// out-of-range year or a nonexistent month/day return the same
-    /// range errors as [`Date::from_ymd`].
+    /// Parse a strict ISO-8601 `YYYY-MM-DD` date — the exact format
+    /// [`Display`](fmt::Display) produces. Malformed strings return
+    /// [`TimeError::InvalidDateString`]; range errors match [`Date::from_ymd`].
     ///
     /// ```
     /// use fasti::{Date, Month, TimeError};
@@ -938,18 +830,8 @@ impl core::str::FromStr for Date {
 }
 
 /// Step a [`Date`] forward by a [`Period`]. Returns
-/// [`TimeError::DateOutOfRange`] if the result falls outside the
-/// supported `1901-01-01..=2199-12-31` range, and clamps the
-/// day-of-month for `Months`/`Years` units (see
-/// [`Date::add_months`]).
-///
-/// The output is a [`Result`] because date arithmetic is fallible at
-/// the supported-range boundary; this trades a little operator
-/// ergonomics (`(d + p)?`) for a strict no-panic contract. Callers
-/// who hold a [`Period`] value (typically [`Schedule`](#) generation
-/// code) write `(date + period)?`; callers who hold a known unit
-/// reach for [`Date::add_days`], [`Date::add_months`], or
-/// [`Date::add_years`] directly.
+/// [`TimeError::DateOutOfRange`] for out-of-range results; `Months`/`Years`
+/// clamp the day-of-month (see [`Date::add_months`]).
 ///
 /// ```
 /// use fasti::{Date, Month, Period};
@@ -977,11 +859,8 @@ impl Add<Period> for Date {
     }
 }
 
-/// Step a [`Date`] backward by a [`Period`]. `(date - period)` is
-/// equivalent to `(date + (-period))` except at the `i32::MIN`
-/// boundary, where `-period` would wrap; this impl uses
-/// [`Period::checked_neg`] and surfaces overflow as
-/// [`TimeError::DateOutOfRange`].
+/// Step a [`Date`] backward by a [`Period`]. Uses [`Period::checked_neg`],
+/// surfacing `i32::MIN` overflow as [`TimeError::DateOutOfRange`].
 ///
 /// ```
 /// use fasti::{Date, Month, Period};
@@ -993,10 +872,7 @@ impl Sub<Period> for Date {
     type Output = Result<Self, TimeError>;
 
     fn sub(self, period: Period) -> Self::Output {
-        // Delegate to `Add` after negating — clippy flags `+` inside
-        // a `Sub` impl as suspicious, but here it's the deliberate
-        // factoring (one direction of arithmetic, two operator entry
-        // points).
+        // `+` inside `Sub` is the deliberate factoring: delegate to `Add` after negating.
         #[allow(clippy::suspicious_arithmetic_impl)]
         match period.checked_neg() {
             Some(neg) => self + neg,
@@ -1349,9 +1225,7 @@ mod tests {
             prop_assert_eq!(parsed, d);
         }
 
-        /// `add_months(n)` then `add_months(-n)` returns the original
-        /// date on the "EoM axis" — any input whose day is ≤ 28 is
-        /// never clamped, so the round-trip is exact.
+        /// `add_months(n)` then `add_months(-n)` round-trips exactly for day ≤ 28 (never clamped).
         #[test]
         fn add_months_round_trip_on_safe_days(
             year in 1910u16..=2190,
@@ -1368,14 +1242,8 @@ mod tests {
             }
         }
 
-        /// `add_months(n)` is equivalent to `add_years(n/12) then
-        /// add_months(n%12)` (with the same clamp semantics) on any
-        /// date whose day ≤ 28.
-        ///
-        /// The year range is tightened so that `add_years(whole_years)`
-        /// always produces an in-range intermediate; otherwise the
-        /// stepped form could fail mid-way even when the final
-        /// destination is reachable directly.
+        /// `add_months(n)` equals `add_years(n/12)` then `add_months(n%12)` for day ≤ 28;
+        /// the year range keeps intermediates in range.
         #[test]
         fn add_months_decomposes_into_years_plus_months(
             year in 1921u16..=2179,
@@ -1393,8 +1261,7 @@ mod tests {
             prop_assert_eq!(direct, stepped);
         }
 
-        /// Clamp invariant: result of `add_months` on any date never
-        /// has a day greater than the target month's length.
+        /// `add_months` never yields a day past the target month's length.
         #[test]
         fn add_months_never_exceeds_target_month_length(
             serial in 0u32..=MAX_SERIAL,
@@ -1499,13 +1366,8 @@ mod tests {
         );
     }
 
-    /// `QuantLib`-parity gotcha: clamp-on-add-months is NOT composable
-    /// across end-of-month dates. Stepping `Jan 31 → Feb 28 → Mar 28`
-    /// differs from `Jan 31 → Mar 31` because the first hop loses the
-    /// `EoM` information. To preserve `EoM` across multiple hops,
-    /// callers must either re-anchor on the `EoM` after each step
-    /// (the `EoM` flag that `Schedule` will expose) or step in a
-    /// single `add_months(n)` call.
+    /// Clamp-on-add-months is not composable across end-of-month dates:
+    /// `Jan 31 → Feb 28 → Mar 28` differs from `Jan 31 → Mar 31`.
     #[test]
     fn add_months_clamp_is_not_composable_across_eom() {
         let jan31 = Date::from_ymd(2026, Month::Jan, 31).unwrap();

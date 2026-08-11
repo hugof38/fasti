@@ -25,8 +25,7 @@ pub struct LastWeekday {
 }
 
 impl LastWeekday {
-    /// Construct a last-weekday-of-month rule, covering all supported
-    /// years.
+    /// Construct a last-weekday-of-month rule covering all supported years.
     #[must_use]
     pub const fn new(weekday: Weekday, month: Month) -> Self {
         Self {
@@ -81,9 +80,7 @@ impl LastWeekday {
         if date.weekday() as u8 != self.weekday as u8 {
             return false;
         }
-        // "Last occurrence" iff stepping forward 7 days leaves the
-        // month (either via calendar rollover or via year-end overflow
-        // past `Date::MAX`).
+        // Last occurrence iff stepping forward 7 days leaves the month.
         match date.add_days(7) {
             Ok(next) => next.month() as u8 != self.month as u8,
             Err(_) => true,

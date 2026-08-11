@@ -7,25 +7,8 @@ use crate::{
 };
 
 /// The New York Stock Exchange calendar — a port of `QuantLib`'s
-/// `UnitedStates::NYSE` market variant.
-///
-/// The NYSE follows its own schedule, distinct from both the US
-/// federal Settlement calendar and the Federal Reserve's wire
-/// holidays:
-///
-/// - No Columbus Day or Veterans Day.
-/// - Good Friday (via `EasterOffset`).
-/// - MLK Day effective from 1998 (NYSE adopted it later than the
-///   federal government).
-/// - New Year's Day observes Sunday-forward only (no Saturday roll
-///   back to the previous December 31).
-/// - Independence Day and Christmas keep the full SatBack/SunForward
-///   shift.
-/// - Pre-1981 presidential election days (first Tuesday of November
-///   for every year ≤ 1968, and the 1972/1976/1980 election years).
-/// - Roughly twenty one-off historic closings (presidential funerals,
-///   9/11, Hurricanes Sandy and Gloria, the 1968 Paperwork Crisis
-///   Wednesdays).
+/// `UnitedStates::NYSE` market variant. No Columbus/Veterans Day; adds
+/// Good Friday, pre-1981 election days, and ~20 historic closings.
 ///
 /// | Holiday | Rule |
 /// |---|---|
@@ -134,8 +117,7 @@ pub const NYSE: Calendar<'static> = Calendar {
                 .shift(WeekendShift::None)
                 .years(YearRange::literal_between(2001, 2001)),
         ),
-        // Single-day historic closings (presidential funerals,
-        // hurricanes, national events). In chronological order.
+        // Single-day historic closings, chronological.
         Rule::OneOff(OneOff::new(Date::literal(1954, Month::Dec, 24))), // Christmas Eve
         Rule::OneOff(OneOff::new(Date::literal(1956, Month::Dec, 24))), // Christmas Eve
         Rule::OneOff(OneOff::new(Date::literal(1958, Month::Dec, 26))), // Day after Christmas
@@ -161,20 +143,9 @@ pub const NYSE: Calendar<'static> = Calendar {
     ],
 };
 
-/// NYSE presidential-election-day closures.
-///
-/// Observed every year through 1968, then only in presidential
-/// election years (1972, 1976, 1980). Dropped entirely from 1981
-/// onward.
-///
-/// Matches `QuantLib`'s simplified rule: "first Tuesday of November,
-/// day-of-month ≤ 7". This coincides with the true "Tuesday after the
-/// first Monday of November" in every year except those where
-/// November 1 falls on a Tuesday (e.g. 1910, 1960, 2011, 2022). For
-/// pre-1981 election years where that edge case matters
-/// (historically 1910 and 1960 pre-1969), `QuantLib`'s approximation
-/// would observe Nov 1 rather than Nov 8; the deviation is documented
-/// here as intentional compatibility with the upstream library.
+/// NYSE election-day closures: every year through 1968, then 1972/1976/1980.
+/// Matches `QuantLib`'s simplified "first Tuesday of November, day ≤ 7" rule,
+/// intentionally keeping its Nov-1-Tuesday edge-case behavior.
 fn election_day(d: Date) -> bool {
     if !matches!(d.month(), Month::Nov) {
         return false;
@@ -189,14 +160,9 @@ fn election_day(d: Date) -> bool {
     y <= 1968 || (y <= 1980 && y.is_multiple_of(4))
 }
 
-/// 1968 "Paperwork Crisis" Wednesday closures — every Wednesday from
-/// Jun 12 through Dec 31 1968, a weekly pattern that isn't
-/// expressible with the built-in rule types.
-///
-/// `QuantLib`'s lower bound is `dd >= 163`; the first matching
-/// Wednesday is actually Jun 12 (doy 164 in leap year 1968). The
-/// slightly permissive bound is harmless because of the
-/// `Weekday::Wed` filter.
+/// 1968 "Paperwork Crisis": every Wednesday from Jun 12 through Dec 31 1968.
+/// Keeps `QuantLib`'s `dd >= 163` bound; the Wednesday filter makes the
+/// slightly permissive bound harmless.
 fn paperwork_crisis_1968(d: Date) -> bool {
     d.year().get() == 1968 && d.day_of_year() >= 163 && matches!(d.weekday(), Weekday::Wed)
 }
@@ -210,8 +176,7 @@ mod tests {
         Date::from_ymd(y, m, d).unwrap()
     }
 
-    /// 2024 NYSE holidays — 10 in total, all falling on weekdays. No
-    /// Columbus Day or Veterans Day.
+    /// 2024 NYSE holidays — 10 in total, all on weekdays.
     #[test]
     fn nyse_holidays_2024() {
         assert!(NYSE.is_holiday(ymd(2024, Month::Jan, 1)));
@@ -236,15 +201,13 @@ mod tests {
     /// MLK Day effective for NYSE only from 1998.
     #[test]
     fn nyse_mlk_effective_from_1998() {
-        // 1997 third Monday of January — Jan 20. Federal holiday but
-        // NOT observed by NYSE.
+        // 1997 Jan 20: federal MLK but not yet NYSE.
         assert!(!NYSE.is_holiday(ymd(1997, Month::Jan, 20)));
-        // 1998 third Monday of January — Jan 19. First NYSE MLK Day.
+        // 1998 Jan 19: first NYSE MLK Day.
         assert!(NYSE.is_holiday(ymd(1998, Month::Jan, 19)));
     }
 
-    /// Good Friday is an NYSE-specific closure (Settlement does not
-    /// observe it; `SETTLEMENT` does not include `EasterOffset`).
+    /// Good Friday is an NYSE closure (Settlement does not observe it).
     #[test]
     fn nyse_observes_good_friday() {
         assert!(NYSE.is_holiday(ymd(2024, Month::Mar, 29)));
@@ -257,8 +220,7 @@ mod tests {
     fn nyse_new_year_sun_forward_only() {
         // 2012-01-01 was a Sunday → observed Mon Jan 2.
         assert!(NYSE.is_holiday(ymd(2012, Month::Jan, 2)));
-        // 2022-01-01 was Saturday. NYSE does NOT observe the Friday
-        // before (Settlement does).
+        // 2022-01-01 Sat: NYSE does not observe Fri Dec 31 (Settlement does).
         assert!(!NYSE.is_holiday(ymd(2021, Month::Dec, 31)));
     }
 
@@ -299,7 +261,7 @@ mod tests {
     fn nyse_paperwork_crisis_1968() {
         // Jun 12 1968 was a Wednesday — observed.
         assert!(NYSE.is_holiday(ymd(1968, Month::Jun, 12)));
-        // Jun 11 was a Tuesday — NOT observed (also not a regular holiday).
+        // Jun 11 was a Tuesday — NOT observed.
         assert!(!NYSE.is_holiday(ymd(1968, Month::Jun, 11)));
         // Jun 19 was a Wednesday — observed.
         assert!(NYSE.is_holiday(ymd(1968, Month::Jun, 19)));

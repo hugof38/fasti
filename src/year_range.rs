@@ -1,25 +1,11 @@
 //! [`YearRange`]: the subset of years during which a holiday rule applies.
 //!
-//! Many holidays are defined only for certain years — US Juneteenth has
-//! been observed federally only since 2021, MLK Day since 1986. A
-//! [`YearRange`] captures that "active between year X and year Y"
-//! constraint in a single `Copy` type with `const` constructors.
-//!
-//! Both bounds are concrete [`Year`]s (no `Option`). The crate already
-//! fixes a hard upper and lower bound at [`Year::MIN`] and [`Year::MAX`],
-//! so "unbounded above" collapses to `to = Year::MAX`, and "unbounded
-//! below" collapses to `from = Year::MIN`. Using concrete bounds in both
-//! directions is symmetric, keeps the struct to two `u16`s, and avoids
-//! a phantom distinction between `Some(Year::MAX)` and `None`.
+//! Both bounds are concrete [`Year`]s (no `Option`); "unbounded" collapses
+//! to [`Year::MIN`] / [`Year::MAX`].
 
 use crate::{TimeError, Year};
 
 /// An inclusive range of [`Year`]s.
-///
-/// [`YearRange::ALWAYS`] covers every supported year;
-/// [`YearRange::from_year`] covers `from..=Year::MAX`;
-/// [`YearRange::through`] covers `Year::MIN..=to`;
-/// [`YearRange::try_between`] covers an explicit `from..=to`.
 ///
 /// ```
 /// use fasti::{Year, YearRange};
@@ -97,11 +83,8 @@ impl YearRange {
         }
     }
 
-    /// `Year::MIN..=to` from a compile-time literal. Companion to
-    /// [`through`](Self::through) for use in `const` contexts.
-    ///
-    /// Validated at const-eval: an out-of-range `to` becomes a compile
-    /// error via [`Year::literal`]. Do not call with a runtime value.
+    /// `Year::MIN..=to` from a compile-time literal; an out-of-range `to`
+    /// is a compile error via [`Year::literal`]. Do not call at runtime.
     ///
     /// ```
     /// use fasti::YearRange;
@@ -115,15 +98,8 @@ impl YearRange {
         }
     }
 
-    /// Inclusive `from..=to` range from compile-time literals.
-    /// Companion to [`try_between`](Self::try_between) for use in
-    /// `const` contexts. Compile error if `to < from` or if either
-    /// bound is outside the supported 1901..=2199 range.
-    ///
-    /// Like [`Year::literal`] this is intended for compile-time use
-    /// only; calling with runtime values that violate the invariants
-    /// would `assert!`-panic. All call sites in the crate pass
-    /// compile-time constants.
+    /// Inclusive `from..=to` from compile-time literals; compile error if
+    /// `to < from` or either bound is out of range. Runtime misuse panics.
     ///
     /// ```
     /// use fasti::YearRange;
@@ -140,9 +116,7 @@ impl YearRange {
     pub const fn literal_between(from: u16, to: u16) -> Self {
         let from = Year::literal(from);
         let to = Year::literal(to);
-        // `assert!` panic surfaces as a compile error at const-eval
-        // for bad literal inputs. Runtime callers violate the intended
-        // use — see the method doc.
+        // assert! panic surfaces as a compile error at const-eval.
         assert!(
             to.get() >= from.get(),
             "YearRange::literal_between: to < from",

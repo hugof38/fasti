@@ -1,26 +1,8 @@
 //! [`Period`] and [`Frequency`] — the building blocks of scheduled
 //! date arithmetic.
 //!
-//! Modeled on `QuantLib`'s
-//! [`ql/time/period.hpp`](https://github.com/lballabio/QuantLib/blob/master/ql/time/period.hpp)
-//! and [`ql/time/frequency.hpp`](https://github.com/lballabio/QuantLib/blob/master/ql/time/frequency.hpp),
-//! with a Rust-idiomatic twist: where `QuantLib` uses a `(length,
-//! TimeUnit)` struct, this crate uses a sum type whose variants
-//! ([`Period::Days`], [`Period::Weeks`], [`Period::Months`],
-//! [`Period::Years`]) carry the length directly. The unit is the
-//! variant — there is no separate `TimeUnit` enum.
-//!
-//! Semantics track `QuantLib`: `12 Months` and `1 Year` are equal
-//! under [`Period::normalized`]; `7 Days` and `1 Week` likewise.
-//!
-//! What is intentionally *not* offered: cross-unit `<`/`+`/`-`
-//! arithmetic on periods. `QuantLib`'s `Period` panics ("undecidable")
-//! when those cross months and days; this crate forbids panics in
-//! library code, so callers compose periods through scalar
-//! multiplication and the [`Date`](crate::Date) operators.
-//!
-//! The length is [`i32`] — negative periods are first-class (used as
-//! subtraction offsets on [`Date`](crate::Date)).
+//! Matches `QuantLib`'s period/frequency semantics; the unit is the enum
+//! variant and lengths are signed [`i32`], so negative periods are first-class.
 
 use core::{
     fmt,
@@ -31,23 +13,8 @@ use crate::TimeError;
 
 // ---- Frequency ----------------------------------------------------------
 
-/// How often cashflows recur per calendar year.
-///
-/// The variants are exactly the canonical recurrences modeled by
-/// `QuantLib`'s [`ql/time/frequency.hpp`](https://github.com/lballabio/QuantLib/blob/master/ql/time/frequency.hpp).
-/// `QuantLib`'s `NoFrequency` / `OtherFrequency` sentinels and `Once`
-/// marker are deliberately *not* present here:
-///
-/// - "no frequency" is [`Option::None`] — the absence of a value
-///   belongs in the option type, not as a member of the algebra.
-/// - "some non-canonical frequency" is the [`Err`] arm of
-///   [`Frequency::try_from`] over a [`Period`].
-/// - "fires once" is a property of a payment schedule, not of a
-///   recurrence — it will surface at the `Schedule` level when that
-///   lands, not as a `Frequency` variant.
-///
-/// As a result, [`Frequency::per_year`] is always a positive integer
-/// and `From<Frequency> for Period` is total.
+/// How often cashflows recur per calendar year. Matches `QuantLib`'s
+/// canonical frequencies; [`Frequency::per_year`] is always positive.
 ///
 /// ```
 /// use fasti::{Frequency, Period};
@@ -119,15 +86,7 @@ impl fmt::Display for Frequency {
 
 /// A signed duration tagged by its calendar unit.
 ///
-/// Each variant carries an [`i32`] length. The unit is the variant —
-/// there is no parallel `TimeUnit` type to keep in sync. Periods are
-/// `Copy`, `Eq`, and `const`-constructible. Arithmetic is
-/// deliberately limited: scalar multiplication and negation are
-/// infallible (modulo `i32` boundary; see
-/// [`checked_mul`](Self::checked_mul) and
-/// [`checked_neg`](Self::checked_neg) for explicit overflow
-/// detection); cross-unit addition is not offered because it can
-/// fail across incompatible units.
+/// Each variant carries an [`i32`] length; the unit is the variant.
 ///
 /// ```
 /// use fasti::Period;
@@ -156,12 +115,10 @@ pub enum Period {
 }
 
 impl Period {
-    /// The zero period — `0 Days`. The canonical representation of
-    /// "no duration".
+    /// The zero period — `0 Days`.
     pub const ZERO: Self = Self::Days(0);
 
-    /// The signed length component. Pattern-match on the variant if
-    /// you also need the unit.
+    /// The signed length component.
     ///
     /// ```
     /// use fasti::Period;
@@ -177,10 +134,6 @@ impl Period {
 
     /// `true` iff the period has zero length, regardless of unit.
     ///
-    /// `0 Days`, `0 Weeks`, `0 Months`, and `0 Years` all report
-    /// zero — they all represent "no duration" and normalize to
-    /// [`Self::ZERO`].
-    ///
     /// ```
     /// use fasti::Period;
     /// assert!(Period::ZERO.is_zero());
@@ -192,8 +145,7 @@ impl Period {
         self.length() == 0
     }
 
-    /// Replace the length while preserving the unit. Used internally
-    /// by the scalar operators.
+    /// Replace the length while preserving the unit.
     const fn with_length(self, length: i32) -> Self {
         match self {
             Self::Days(_) => Self::Days(length),
@@ -203,11 +155,8 @@ impl Period {
         }
     }
 
-    /// Canonicalize the period — `12 Months` → `1 Year`, `7 Days` →
-    /// `1 Week`. Periods whose length is not evenly divisible by the
-    /// larger-unit ratio are returned unchanged.
-    ///
-    /// Zero-length periods normalize to `0 Days`, matching `QuantLib`.
+    /// Canonicalize the period — `12 Months` → `1 Year`, `7 Days` → `1 Week`;
+    /// non-multiples are unchanged and zero normalizes to `0 Days`.
     ///
     /// ```
     /// use fasti::Period;
@@ -263,11 +212,8 @@ impl Period {
 // ---- Period ↔ Frequency -------------------------------------------------
 
 impl From<Frequency> for Period {
-    /// Map a [`Frequency`] to its canonical [`Period`]. Total —
-    /// every frequency variant has exactly one canonical period.
-    ///
-    /// `Annual` maps to `12 Months` rather than `1 Year`; call
-    /// [`Period::normalized`] to canonicalize to the larger unit.
+    /// Map a [`Frequency`] to its canonical [`Period`]. `Annual` maps to
+    /// `12 Months`; call [`Period::normalized`] to get `1 Year`.
     fn from(frequency: Frequency) -> Self {
         match frequency {
             Frequency::Annual => Self::Months(12),
@@ -287,18 +233,9 @@ impl From<Frequency> for Period {
 impl TryFrom<Period> for Frequency {
     type Error = TimeError;
 
-    /// Map a [`Period`] to the canonical [`Frequency`], if one exists.
-    ///
-    /// The period is normalized first, so `12M` and `1Y` both map to
-    /// [`Frequency::Annual`]. Periods that do not correspond to a
-    /// canonical recurrence — e.g. every 5 months, every 3 weeks —
-    /// return [`TimeError::NonCanonicalPeriod`]. Negative periods and
-    /// the zero period are also rejected: a recurrence rate is by
-    /// definition positive.
-    ///
-    /// Note: "times per year" determines the variant. Don't confuse
-    /// `Bimonthly` (every 2 months ⇒ 6/year) with `Semiannual`
-    /// (every 6 months ⇒ 2/year).
+    /// Map a [`Period`] to the canonical [`Frequency`], normalizing first.
+    /// Non-canonical, zero, and negative periods return
+    /// [`TimeError::NonCanonicalPeriod`].
     fn try_from(period: Period) -> Result<Self, Self::Error> {
         match period.normalized() {
             Period::Years(1) => Ok(Self::Annual),
@@ -321,9 +258,8 @@ impl TryFrom<Period> for Frequency {
 impl Neg for Period {
     type Output = Self;
 
-    /// Negate the length. **Wraps** on `i32::MIN` (the only overflow
-    /// case) — `-Period::Days(i32::MIN) == Period::Days(i32::MIN)`.
-    /// Use [`Period::checked_neg`] to detect overflow.
+    /// Negate the length. **Wraps** on `i32::MIN`; use
+    /// [`Period::checked_neg`] to detect overflow.
     fn neg(self) -> Self::Output {
         self.with_length(self.length().wrapping_neg())
     }
@@ -332,12 +268,8 @@ impl Neg for Period {
 impl Mul<i32> for Period {
     type Output = Self;
 
-    /// Scale the length by `n`. **Wraps** on overflow per stdlib
-    /// integer-multiplication semantics; use [`Period::checked_mul`]
-    /// to detect overflow. Unit is unchanged; call
-    /// [`normalized`](Self::normalized) afterwards to collapse
-    /// (e.g. `Period::Months(3) * 4 = Period::Months(12)`, which
-    /// normalizes to `Period::Years(1)`).
+    /// Scale the length by `n`, preserving the unit. **Wraps** on overflow;
+    /// use [`Period::checked_mul`] to detect it.
     fn mul(self, n: i32) -> Self::Output {
         self.with_length(self.length().wrapping_mul(n))
     }
@@ -346,8 +278,7 @@ impl Mul<i32> for Period {
 impl Mul<Period> for i32 {
     type Output = Period;
 
-    /// Scalar multiplication with the scalar on the left. See
-    /// [`Mul<i32> for Period`](Period#impl-Mul%3Ci32%3E-for-Period).
+    /// Scalar multiplication with the scalar on the left.
     fn mul(self, period: Period) -> Self::Output {
         period * self
     }
@@ -423,9 +354,7 @@ mod tests {
 
     #[test]
     fn neg_wraps_at_i32_min_documented_behavior() {
-        // `i32::MIN` has no positive counterpart; the operator wraps
-        // (matches stdlib int behavior under release builds), the
-        // checked variant returns None.
+        // `i32::MIN` has no positive counterpart: the operator wraps, the checked variant returns None.
         let edge = Period::Days(i32::MIN);
         assert_eq!((-edge).length(), i32::MIN);
         assert_eq!(edge.checked_neg(), None);
@@ -451,9 +380,7 @@ mod tests {
     fn scalar_multiplication_scales_length() {
         assert_eq!(Period::Months(3) * 4, Period::Months(12));
         assert_eq!(4 * Period::Months(3), Period::Months(12));
-        // Multiplying by zero collapses to a zero-length period of the
-        // same unit; `#[allow]` because clippy's `erasing_op` flags
-        // `* 0` even when zeroing is the intended semantics under test.
+        // `erasing_op` allow: `* 0` is the semantics under test.
         #[allow(clippy::erasing_op)]
         let zeroed = Period::Days(7) * 0;
         assert_eq!(zeroed, Period::Days(0));
@@ -592,8 +519,7 @@ mod tests {
 
     // ---- property tests ------------------------------------------------
 
-    /// Strategy: any `Period` with length in a moderate range,
-    /// uniformly across the four units.
+    /// Strategy: any `Period` in the given length range, uniform across units.
     fn any_period(length_range: core::ops::RangeInclusive<i32>) -> impl Strategy<Value = Period> {
         (length_range, 0u8..=3).prop_map(|(length, kind)| match kind {
             0 => Period::Days(length),
@@ -623,8 +549,7 @@ mod tests {
             prop_assert_eq!(-(-p), p);
         }
 
-        /// `length` and `with_length` round-trip — replacing the
-        /// length with the same length yields the same period.
+        /// `length` and `with_length` round-trip.
         #[test]
         fn with_length_round_trips(p in any_period(i32::MIN..=i32::MAX)) {
             prop_assert_eq!(p.with_length(p.length()), p);

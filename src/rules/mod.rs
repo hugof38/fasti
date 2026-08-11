@@ -1,19 +1,6 @@
 //! Holiday rule primitives and the [`Rule`] enum that dispatches across
-//! them.
-//!
-//! Each concrete rule struct answers `is_holiday(date) -> bool` for a
-//! specific holiday pattern:
-//!
-//! - [`FixedDate`] — fixed calendar day, optionally weekend-shifted
-//! - [`NthWeekday`] — Nth occurrence of a weekday in a month
-//! - [`LastWeekday`] — last occurrence of a weekday in a month
-//! - [`EasterOffset`] — a fixed offset from Easter Monday
-//! - [`OneOff`] — a single specific date
-//!
-//! The [`Rule`] enum wraps all five built-in variants plus a
-//! [`Rule::Custom`] escape hatch carrying a plain `fn(Date) -> bool`
-//! pointer. Calendars hold `&[Rule]` slices and delegate
-//! `is_holiday` to the enum.
+//! them: [`FixedDate`], [`NthWeekday`], [`LastWeekday`], [`EasterOffset`],
+//! [`OneOff`], plus [`Rule::Custom`] for arbitrary predicates.
 
 mod easter_offset;
 mod fixed;
@@ -29,22 +16,9 @@ pub use one_off::OneOff;
 
 use crate::Date;
 
-/// A holiday rule. Calendars are sequences of [`Rule`]s; a date is a
-/// holiday iff at least one rule marks it as such.
-///
-/// The [`Rule::Custom`] variant carries a plain function pointer — not a
-/// trait object — which keeps the whole enum `const`-constructible and
-/// lets built-in calendars live in `pub const` values. The tradeoff is
-/// that `Custom` rules cannot carry per-instance state; if you need
-/// state, add a concrete variant to this enum or encode the state in
-/// the function's body.
-///
-/// `Rule` does not implement `Serialize` / `Deserialize` (`fn` pointers
-/// are not serializable) nor `PartialEq` / `Eq` (function-pointer
-/// equality is not reliable across codegen units). Scenarios that need
-/// to round-trip rules through YAML/JSON should do so at the
-/// concrete-struct level (`FixedDate`, `NthWeekday`, …) and reconstruct
-/// `Rule` at load time.
+/// A holiday rule; a date is a holiday iff at least one rule matches.
+/// [`Rule::Custom`] holds a plain `fn` pointer to stay `const`-constructible,
+/// which is why `Rule` implements neither serde traits nor `PartialEq`.
 #[derive(Debug, Clone, Copy)]
 pub enum Rule {
     /// A [`FixedDate`] rule — specific month/day, optional shift.
@@ -57,8 +31,7 @@ pub enum Rule {
     Easter(EasterOffset),
     /// A [`OneOff`] rule — a single specific date.
     OneOff(OneOff),
-    /// A user-supplied predicate. Cannot carry state — encode it in the
-    /// function's body if needed.
+    /// A user-supplied predicate; cannot carry per-instance state.
     Custom(fn(Date) -> bool),
 }
 
@@ -115,10 +88,7 @@ mod tests {
         assert!(!rule.is_holiday(ymd(2026, Month::Feb, 14)));
     }
 
-    // The whole point of fn-pointer Custom + const constructors is
-    // that a calendar's rule slice lives in a `const`. These items
-    // exist at module scope (not inside the test fn) because
-    // clippy::items_after_statements disallows the latter.
+    // Const-constructibility check; module scope for clippy::items_after_statements.
     const JULY_FOURTH: Rule = Rule::Fixed(FixedDate::new(Month::Jul, 4));
     const MLK: Rule = Rule::NthWeekday(NthWeekday::new(Ordinal::Third, Weekday::Mon, Month::Jan));
     const GOOD_FRIDAY: Rule = Rule::Easter(EasterOffset::good_friday());

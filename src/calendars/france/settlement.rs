@@ -20,9 +20,7 @@ use crate::{Calendar, EasterOffset, FixedDate, Month, Rule, Weekend, WeekendShif
 /// | Armistice 1918 / Armistice Day | Nov 11 |
 /// | Noël / Christmas | Dec 25 |
 ///
-/// No weekend-shift convention — holidays falling on a Saturday or
-/// Sunday are observed only on that date and produce no compensatory
-/// weekday observance.
+/// No weekend shift — weekend holidays are simply lost.
 pub const SETTLEMENT: Calendar<'static> = Calendar {
     name: "France settlement",
     weekend: Weekend::SAT_SUN,
@@ -62,9 +60,7 @@ mod tests {
         Date::from_ymd(y, m, d).unwrap()
     }
 
-    /// All 11 French Settlement holidays for 2024. Easter Sunday 2024
-    /// = March 31, so Easter Monday = April 1, Ascension = May 9,
-    /// Whit Monday = May 20.
+    /// All 11 French Settlement holidays for 2024 (Easter Sunday = Mar 31).
     #[test]
     fn france_settlement_holidays_2024() {
         assert!(SETTLEMENT.is_holiday(ymd(2024, Month::Jan, 1))); // New Year's
@@ -91,14 +87,12 @@ mod tests {
         assert!(SETTLEMENT.is_holiday(ymd(2025, Month::Jun, 9)));
     }
 
-    /// Civil holidays falling on weekends are simply lost — no
-    /// weekday observance.
+    /// Weekend holidays are lost — no weekday observance.
     #[test]
     fn france_no_weekend_shift() {
         // Jul 14 2024 was a Sunday. No Monday observance.
         assert!(!SETTLEMENT.is_holiday(ymd(2024, Month::Jul, 15)));
-        // But it is still a holiday on the natural date (which is
-        // also a weekend, so not a business day either way).
+        // Still a holiday on the natural (weekend) date.
         assert!(SETTLEMENT.is_holiday(ymd(2024, Month::Jul, 14)));
         assert!(!SETTLEMENT.is_business_day(ymd(2024, Month::Jul, 14)));
         // May 1 2022 was a Sunday. No Monday observance.

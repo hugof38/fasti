@@ -1,7 +1,4 @@
 //! [`OneOff`]: a holiday observed on a single specific date.
-//!
-//! Useful for bespoke custom calendars, market-closure days, and
-//! special-case one-time observances that do not recur.
 
 use crate::Date;
 
