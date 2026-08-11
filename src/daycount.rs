@@ -23,9 +23,9 @@ pub trait DayCount {
     fn name(&self) -> &'static str;
 
     /// Days between `start` and `end`, signed by direction. Defaults
-    /// to calendar days; 30/360-style conventions override.
+    /// to calendar days; the 30/360 family overrides.
     fn day_count(&self, start: Date, end: Date) -> i64 {
-        i64::from(end.days_since(start))
+        Span::new(start, end).days()
     }
 
     /// The year fraction between `start` and `end`: signed by
@@ -37,30 +37,65 @@ pub trait DayCount {
     fn year_fraction(&self, start: Date, end: Date) -> Fraction;
 }
 
-// ---- shared helpers -----------------------------------------------------
+// ---- Span ---------------------------------------------------------------
 
-/// `count / den` reduced. Infallible for the constant non-zero
-/// denominators used below; the `ZERO` fallback honours the no-panic
-/// contract on the unreachable arm.
-fn fraction_of(count: i64, den: u64) -> Fraction {
-    Fraction::new(count, den).unwrap_or_default()
+/// A date interval, used for both accruals and the coupon windows
+/// they are measured against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Span {
+    start: Date,
+    end: Date,
 }
 
-/// Evaluate `count` on the ordered pair, negating for reversed
-/// inputs — makes an asymmetric formula satisfy `f(a, b) == -f(b, a)`.
-fn signed_by_order(start: Date, end: Date, count: impl FnOnce(Date, Date) -> i64) -> i64 {
-    if start <= end {
-        count(start, end)
-    } else {
-        -count(end, start)
+impl Span {
+    const fn new(start: Date, end: Date) -> Self {
+        Self { start, end }
+    }
+
+    /// Elapsed days, signed by direction.
+    fn days(self) -> i64 {
+        i64::from(self.end.days_since(self.start))
+    }
+
+    /// The overlap with `other`, if the two share any days.
+    fn intersect(self, other: Self) -> Option<Self> {
+        let both = Self::new(self.start.max(other.start), self.end.min(other.end));
+        (both.start < both.end).then_some(both)
+    }
+
+    /// The share of one coupon this span represents inside `window`:
+    /// `days / (frequency × window days)`.
+    fn coupon_share(self, window: Self, frequency: u64) -> Result<Fraction, TimeError> {
+        let window_days =
+            u64::try_from(window.days()).map_err(|_| TimeError::InvalidReferencePeriod)?;
+        let denominator = frequency
+            .checked_mul(window_days)
+            .ok_or(TimeError::FractionOverflow)?;
+        Fraction::new(self.days(), denominator)
     }
 }
 
-/// The intersection of two half-open date intervals, if non-empty.
-fn overlap(a: (Date, Date), b: (Date, Date)) -> Option<(Date, Date)> {
-    let lo = a.0.max(b.0);
-    let hi = a.1.min(b.1);
-    (lo < hi).then_some((lo, hi))
+// ---- Basis --------------------------------------------------------------
+
+/// The denominator a day count divides by — a fixed 360/365 basis, or
+/// a year length for the ACT/ACT family.
+#[derive(Debug, Clone, Copy)]
+struct Basis(u64);
+
+impl Basis {
+    const DAYS_360: Self = Self(360);
+    const DAYS_365: Self = Self(365);
+
+    const fn of(days: u64) -> Self {
+        Self(days)
+    }
+
+    /// `days / self`, reduced. Every basis is non-zero, so the
+    /// zero-denominator arm is unreachable and yields
+    /// [`Fraction::ZERO`] to honour the no-panic contract.
+    fn fraction(self, days: i64) -> Fraction {
+        Fraction::new(days, self.0).unwrap_or_default()
+    }
 }
 
 // ---- ACT family ---------------------------------------------------------
@@ -84,7 +119,7 @@ impl DayCount for Act360 {
     }
 
     fn year_fraction(&self, start: Date, end: Date) -> Fraction {
-        fraction_of(self.day_count(start, end), 360)
+        Basis::DAYS_360.fraction(self.day_count(start, end))
     }
 }
 
@@ -107,7 +142,7 @@ impl DayCount for Act365Fixed {
     }
 
     fn year_fraction(&self, start: Date, end: Date) -> Fraction {
-        fraction_of(self.day_count(start, end), 365)
+        Basis::DAYS_365.fraction(self.day_count(start, end))
     }
 }
 
@@ -127,33 +162,32 @@ impl DayCount for Act365Fixed {
 pub struct ActActISDA;
 
 impl ActActISDA {
-    /// `(N·dib1·dib2 + a·dib2 + b·dib1) / (dib1·dib2)` for `d1 <= d2`:
-    /// `N` full middle years, `a`/`b` partial days in the end years,
-    /// `dib*` those years' lengths.
-    fn ordered_year_fraction(d1: Date, d2: Date) -> Fraction {
-        if d1 == d2 {
+    /// `(N·dib1·dib2 + a·dib2 + b·dib1) / (dib1·dib2)` for an ordered
+    /// span: `N` full middle years, `a`/`b` partial days in the end
+    /// years, `dib*` those years' lengths.
+    fn ordered_year_fraction(span: Span) -> Fraction {
+        if span.start == span.end {
             return Fraction::ZERO;
         }
-        let (y1, y2) = (d1.year(), d2.year());
+        let (y1, y2) = (span.start.year(), span.end.year());
         if y1 == y2 {
-            return fraction_of(i64::from(d2.days_since(d1)), u64::from(y1.length()));
+            return Basis::of(u64::from(y1.length())).fraction(span.days());
         }
         let n = i64::from(y2.get()) - i64::from(y1.get()) - 1;
         let dib1 = i64::from(y1.length());
         let dib2 = i64::from(y2.length());
         // y1 < y2 <= Year::MAX, so both constructions are in range.
-        let Ok(next_year_start) = Date::from_ymd(y1.get() + 1, Month::Jan, 1) else {
+        let (Ok(next_year_start), Ok(this_year_start)) = (
+            Date::from_ymd(y1.get() + 1, Month::Jan, 1),
+            Date::from_ymd(y2.get(), Month::Jan, 1),
+        ) else {
             return Fraction::ZERO;
         };
-        let Ok(this_year_start) = Date::from_ymd(y2.get(), Month::Jan, 1) else {
-            return Fraction::ZERO;
-        };
-        let a = i64::from(next_year_start.days_since(d1));
-        let b = i64::from(d2.days_since(this_year_start));
-        let num = n * dib1 * dib2 + a * dib2 + b * dib1;
+        let a = Span::new(span.start, next_year_start).days();
+        let b = Span::new(this_year_start, span.end).days();
         // dib1·dib2 <= 366², positive.
         #[allow(clippy::cast_sign_loss)]
-        fraction_of(num, (dib1 * dib2) as u64)
+        Basis::of((dib1 * dib2) as u64).fraction(n * dib1 * dib2 + a * dib2 + b * dib1)
     }
 }
 
@@ -164,10 +198,10 @@ impl DayCount for ActActISDA {
 
     fn year_fraction(&self, start: Date, end: Date) -> Fraction {
         if start <= end {
-            Self::ordered_year_fraction(start, end)
+            Self::ordered_year_fraction(Span::new(start, end))
         } else {
             // Numerators stay far below |i64::MIN|; negation cannot fail.
-            Self::ordered_year_fraction(end, start)
+            Self::ordered_year_fraction(Span::new(end, start))
                 .checked_neg()
                 .unwrap_or_default()
         }
@@ -176,10 +210,53 @@ impl DayCount for ActActISDA {
 
 // ---- ACT/ACT (ICMA) -----------------------------------------------------
 
+/// The regular coupon grid a reference period sits on: window 0 is
+/// the reference period itself, negative windows step back from its
+/// start and positive ones forward from its end.
+///
+/// A [`Schedule`] names one reference period per coupon period, which
+/// covers regular and short-stub accruals. A *long* stub is longer
+/// than one coupon period, so its accrual reaches past the named
+/// reference period into adjacent notional ones — this grid supplies
+/// those, which is why extending the grid is accrual math rather than
+/// something a schedule can tabulate.
+#[derive(Debug, Clone, Copy)]
+struct ReferenceGrid {
+    reference: Span,
+    period: Period,
+}
+
+impl ReferenceGrid {
+    /// `anchor + i·period` as a fresh multiple (never chained), with
+    /// the schedule generator's end-of-month snap.
+    fn step(anchor: Date, period: Period, i: i32) -> Result<Date, TimeError> {
+        let stepped = (anchor + period.checked_mul(i).ok_or(TimeError::DateOutOfRange)?)?;
+        Ok(
+            if anchor.is_end_of_month() && matches!(period, Period::Months(_) | Period::Years(_)) {
+                stepped.end_of_month()
+            } else {
+                stepped
+            },
+        )
+    }
+
+    fn window(self, i: i32) -> Result<Span, TimeError> {
+        let (anchor, k) = match i {
+            0 => return Ok(self.reference),
+            i if i < 0 => (self.reference.start, i),
+            i => (self.reference.end, i - 1),
+        };
+        Ok(Span::new(
+            Self::step(anchor, self.period, k)?,
+            Self::step(anchor, self.period, k + 1)?,
+        ))
+    }
+}
+
 /// Actual/Actual (ICMA), ICMA Rule 251 — the standard for fixed-rate
 /// bond accruals: a regular coupon period accrues exactly
 /// `1 / frequency`, days accrue proportionally against their period's
-/// actual length, and stubs decompose over a notional-period grid.
+/// actual length, and stubs accrue against a notional coupon grid.
 ///
 /// ICMA needs schedule context: [`bind`](Self::bind) a [`Schedule`]
 /// (whose parallel reference dates carry the regular grid) to get a
@@ -207,42 +284,6 @@ impl DayCount for ActActISDA {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ActActICMA {
     frequency: Frequency,
-}
-
-/// `anchor + i·period` as a fresh multiple (never chained), with the
-/// schedule generator's end-of-month snap.
-fn grid_step(anchor: Date, period: Period, i: i32) -> Result<Date, TimeError> {
-    let stepped = (anchor + period.checked_mul(i).ok_or(TimeError::DateOutOfRange)?)?;
-    Ok(
-        if anchor.is_end_of_month() && matches!(period, Period::Months(_) | Period::Years(_)) {
-            stepped.end_of_month()
-        } else {
-            stepped
-        },
-    )
-}
-
-/// The reference period extended into one bi-directional grid:
-/// window 0 is the reference period itself; negative windows step
-/// back from its start, positive windows forward from its end.
-#[derive(Debug, Clone, Copy)]
-struct ReferenceGrid {
-    reference: (Date, Date),
-    period: Period,
-}
-
-impl ReferenceGrid {
-    fn window(self, i: i32) -> Result<(Date, Date), TimeError> {
-        let (anchor, k) = match i {
-            0 => return Ok(self.reference),
-            i if i < 0 => (self.reference.0, i),
-            i => (self.reference.1, i - 1),
-        };
-        Ok((
-            grid_step(anchor, self.period, k)?,
-            grid_step(anchor, self.period, k + 1)?,
-        ))
-    }
 }
 
 impl ActActICMA {
@@ -283,7 +324,7 @@ impl ActActICMA {
     /// .build()?;
     ///
     /// let dc = ActActICMA::new(Frequency::Semiannual).bind(&schedule)?;
-    /// // The long front stub decomposes against the notional grid:
+    /// // The front stub accrues against its notional grid:
     /// let stub = dc.year_fraction(
     ///     Date::from_ymd(2002, Month::Aug, 15)?,
     ///     Date::from_ymd(2003, Month::Jan, 15)?,
@@ -323,61 +364,42 @@ impl ActActICMA {
         if start == end {
             return Ok(Fraction::ZERO);
         }
+        let reference = Span::new(ref_start, ref_end);
         if start < end {
-            self.ordered_year_fraction(start, end, ref_start, ref_end)
+            self.accrue(Span::new(start, end), reference)
         } else {
-            self.ordered_year_fraction(end, start, ref_start, ref_end)?
+            self.accrue(Span::new(end, start), reference)?
                 .checked_neg()
                 .ok_or(TimeError::FractionOverflow)
         }
     }
 
-    /// `days(lo, hi) / (freq × days(w))` for an accrual chunk inside
-    /// one notional window.
-    fn chunk_ratio(lo: Date, hi: Date, w: (Date, Date), freq: u64) -> Result<Fraction, TimeError> {
-        let window_days =
-            u64::try_from(w.1.days_since(w.0)).map_err(|_| TimeError::InvalidReferencePeriod)?;
-        let denom = freq
-            .checked_mul(window_days)
-            .ok_or(TimeError::FractionOverflow)?;
-        Fraction::new(i64::from(hi.days_since(lo)), denom)
-    }
-
-    /// The ICMA year fraction for `d1 < d2` against `r1 < r2`: one
-    /// ascending walk over the extended reference grid, accruing each
-    /// window's overlap with the accrual.
-    fn ordered_year_fraction(
-        self,
-        d1: Date,
-        d2: Date,
-        r1: Date,
-        r2: Date,
-    ) -> Result<Fraction, TimeError> {
-        let freq = u64::from(self.frequency.per_year());
+    /// Accrue an ordered `span` over the grid anchored on
+    /// `reference`: descend to the lowest overlapping window, then
+    /// sum upward until the span is covered.
+    fn accrue(self, span: Span, reference: Span) -> Result<Fraction, TimeError> {
+        let frequency = u64::from(self.frequency.per_year());
         let grid = ReferenceGrid {
-            reference: (r1, r2),
+            reference,
             period: Period::from(self.frequency),
         };
-        // Descend to the lowest window overlapping the accrual, then
-        // accrue upward until the accrual is covered.
         let mut i = 0;
-        while grid.window(i)?.0 > d1 {
+        while grid.window(i)?.start > span.start {
             i -= 1;
         }
         let mut total = Fraction::ZERO;
         loop {
-            let w = grid.window(i)?;
-            if let Some((lo, hi)) = overlap((d1, d2), w) {
+            let window = grid.window(i)?;
+            if let Some(chunk) = span.intersect(window) {
                 total = total
-                    .checked_add(Self::chunk_ratio(lo, hi, w, freq)?)
+                    .checked_add(chunk.coupon_share(window, frequency)?)
                     .ok_or(TimeError::FractionOverflow)?;
             }
-            if w.1 >= d2 {
-                break;
+            if window.end >= span.end {
+                return Ok(total);
             }
             i += 1;
         }
-        Ok(total)
     }
 }
 
@@ -392,8 +414,7 @@ impl DayCount for ActActICMA {
         if start == end {
             return Fraction::ZERO;
         }
-        let num = if start < end { 1 } else { -1 };
-        fraction_of(num, u64::from(self.frequency.per_year()))
+        Basis::of(u64::from(self.frequency.per_year())).fraction(if start < end { 1 } else { -1 })
     }
 }
 
@@ -424,35 +445,36 @@ impl BoundActActICMA<'_> {
         self.schedule
     }
 
-    /// Sum of per-period chunks for `d1 < d2`, each accrued against
-    /// its own reference period, clamped to the schedule's span.
-    fn ordered_year_fraction(&self, d1: Date, d2: Date) -> Fraction {
-        let (dates, refs) = (self.schedule.dates(), self.schedule.reference_dates());
+    /// Sum of per-period accruals for an ordered span, clamped to the
+    /// schedule's own span.
+    fn ordered_year_fraction(&self, span: Span) -> Fraction {
+        let (dates, references) = (self.schedule.dates(), self.schedule.reference_dates());
         let (Some(&first), Some(&last)) = (dates.first(), dates.last()) else {
             // Unreachable: bind requires at least two dates.
             return Fraction::ZERO;
         };
-        let Some(span) = overlap((d1, d2), (first, last)) else {
+        let Some(covered) = span.intersect(Span::new(first, last)) else {
             return Fraction::ZERO;
         };
         let mut total = Fraction::ZERO;
-        for (period, reference) in dates.windows(2).zip(refs.windows(2)) {
-            if period[0] >= span.1 {
+        for (period, reference) in dates.windows(2).zip(references.windows(2)) {
+            let period = Span::new(period[0], period[1]);
+            if period.start >= covered.end {
                 break;
             }
-            let Some((lo, hi)) = overlap(span, (period[0], period[1])) else {
+            let Some(chunk) = covered.intersect(period) else {
                 continue;
             };
-            // A regular period is its own reference, so the walk is a
-            // single window; a stub extends it. Errors need a window
-            // outside the supported range, where ZERO is the
-            // documented fallback, and the denominators of one
-            // schedule keep the running sum in range.
-            let chunk = self
+            // A regular period is its own reference, so the grid walk
+            // is a single window; a stub extends it. Errors need a
+            // window outside the supported range, where ZERO is the
+            // documented fallback, and one schedule's denominators
+            // keep the running sum in range.
+            let accrued = self
                 .inner
-                .ordered_year_fraction(lo, hi, reference[0], reference[1])
+                .accrue(chunk, Span::new(reference[0], reference[1]))
                 .unwrap_or_default();
-            total = total.checked_add(chunk).unwrap_or_default();
+            total = total.checked_add(accrued).unwrap_or_default();
         }
         total
     }
@@ -468,9 +490,9 @@ impl DayCount for BoundActActICMA<'_> {
             return Fraction::ZERO;
         }
         if start < end {
-            self.ordered_year_fraction(start, end)
+            self.ordered_year_fraction(Span::new(start, end))
         } else {
-            self.ordered_year_fraction(end, start)
+            self.ordered_year_fraction(Span::new(end, start))
                 .checked_neg()
                 .unwrap_or_default()
         }
@@ -479,36 +501,58 @@ impl DayCount for BoundActActICMA<'_> {
 
 // ---- 30/360 family ------------------------------------------------------
 
-/// One date split into the fields the 30/360 adjustments read.
+/// A date decomposed into the fields 30/360 conventions adjust,
+/// keeping the original [`Date`] for identity comparisons.
 #[derive(Debug, Clone, Copy)]
-struct Split {
+struct Thirty360Date {
+    date: Date,
     year: Year,
     month: Month,
     day: u8,
 }
 
-impl Split {
-    fn of(d: Date) -> Self {
-        let (year, month, day) = d.to_ymd();
-        Self { year, month, day }
+impl Thirty360Date {
+    fn of(date: Date) -> Self {
+        let (year, month, day) = date.to_ymd();
+        Self {
+            date,
+            year,
+            month,
+            day,
+        }
+    }
+
+    /// Apply a variant's `rule` to the ordered pair, negating for
+    /// reversed inputs so `dc(a, b) == -dc(b, a)` holds for the
+    /// family's asymmetric formulas.
+    fn signed(start: Date, end: Date, rule: impl FnOnce(Self, Self) -> i64) -> i64 {
+        if start <= end {
+            rule(Self::of(start), Self::of(end))
+        } else {
+            -rule(Self::of(end), Self::of(start))
+        }
     }
 
     fn is_last_of_february(self) -> bool {
         matches!(self.month, Month::Feb) && self.day == Month::Feb.length(self.year)
     }
-}
 
-/// The shared 30/360 formula, `360·Δy + 30·Δm + Δd`, over the
-/// variant's adjusted day-of-month pair.
-fn thirty360(s: Split, e: Split, dd1: u8, dd2: u8) -> i64 {
-    360 * (i64::from(e.year.get()) - i64::from(s.year.get()))
-        + 30 * (i64::from(e.month.get()) - i64::from(s.month.get()))
-        + (i64::from(dd2) - i64::from(dd1))
-}
+    /// The 31st counted as the 30th.
+    fn capped(self) -> Self {
+        self.with_day(if self.day == 31 { 30 } else { self.day })
+    }
 
-/// Cap a day-of-month at 30.
-const fn cap30(day: u8) -> u8 {
-    if day == 31 { 30 } else { day }
+    fn with_day(self, day: u8) -> Self {
+        Self { day, ..self }
+    }
+
+    /// The family's shared formula, `360·Δy + 30·Δm + Δd`, over the
+    /// variant's already-adjusted day-of-month pair.
+    fn days_to(self, end: Self) -> i64 {
+        360 * (i64::from(end.year.get()) - i64::from(self.year.get()))
+            + 30 * (i64::from(end.month.get()) - i64::from(self.month.get()))
+            + (i64::from(end.day) - i64::from(self.day))
+    }
 }
 
 /// 30/360 Bond Basis (ISDA 2006). Matches `QuantLib`'s
@@ -530,16 +574,19 @@ impl DayCount for Thirty360Bond {
     }
 
     fn day_count(&self, start: Date, end: Date) -> i64 {
-        signed_by_order(start, end, |a, b| {
-            let (s, e) = (Split::of(a), Split::of(b));
-            let dd1 = cap30(s.day);
-            let dd2 = if e.day == 31 && dd1 == 30 { 30 } else { e.day };
-            thirty360(s, e, dd1, dd2)
+        Thirty360Date::signed(start, end, |start, end| {
+            let start = start.capped();
+            let end = if end.day == 31 && start.day == 30 {
+                end.with_day(30)
+            } else {
+                end
+            };
+            start.days_to(end)
         })
     }
 
     fn year_fraction(&self, start: Date, end: Date) -> Fraction {
-        fraction_of(self.day_count(start, end), 360)
+        Basis::DAYS_360.fraction(self.day_count(start, end))
     }
 }
 
@@ -564,25 +611,28 @@ impl DayCount for Thirty360US {
     }
 
     fn day_count(&self, start: Date, end: Date) -> i64 {
-        signed_by_order(start, end, |a, b| {
-            let (s, e) = (Split::of(a), Split::of(b));
-            let (mut dd1, mut dd2) = (s.day, e.day);
-            if s.is_last_of_february() {
-                if e.is_last_of_february() {
-                    dd2 = 30;
-                }
-                dd1 = 30;
-            }
-            if dd2 == 31 && dd1 >= 30 {
-                dd2 = 30;
-            }
-            dd1 = cap30(dd1);
-            thirty360(s, e, dd1, dd2)
+        Thirty360Date::signed(start, end, |start, end| {
+            let (start, end) = if start.is_last_of_february() {
+                let end = if end.is_last_of_february() {
+                    end.with_day(30)
+                } else {
+                    end
+                };
+                (start.with_day(30), end)
+            } else {
+                (start, end)
+            };
+            let end = if end.day == 31 && start.day >= 30 {
+                end.with_day(30)
+            } else {
+                end
+            };
+            start.capped().days_to(end)
         })
     }
 
     fn year_fraction(&self, start: Date, end: Date) -> Fraction {
-        fraction_of(self.day_count(start, end), 360)
+        Basis::DAYS_360.fraction(self.day_count(start, end))
     }
 }
 
@@ -605,14 +655,13 @@ impl DayCount for Thirty360European {
     }
 
     fn day_count(&self, start: Date, end: Date) -> i64 {
-        signed_by_order(start, end, |a, b| {
-            let (s, e) = (Split::of(a), Split::of(b));
-            thirty360(s, e, cap30(s.day), cap30(e.day))
+        Thirty360Date::signed(start, end, |start, end| {
+            start.capped().days_to(end.capped())
         })
     }
 
     fn year_fraction(&self, start: Date, end: Date) -> Fraction {
-        fraction_of(self.day_count(start, end), 360)
+        Basis::DAYS_360.fraction(self.day_count(start, end))
     }
 }
 
@@ -655,22 +704,23 @@ impl DayCount for Thirty360ISDA {
     }
 
     fn day_count(&self, start: Date, end: Date) -> i64 {
-        signed_by_order(start, end, |a, b| {
-            let (s, e) = (Split::of(a), Split::of(b));
-            let mut dd1 = cap30(s.day);
-            let mut dd2 = cap30(e.day);
-            if s.is_last_of_february() {
-                dd1 = 30;
-            }
-            if b != self.termination && e.is_last_of_february() {
-                dd2 = 30;
-            }
-            thirty360(s, e, dd1, dd2)
+        Thirty360Date::signed(start, end, |start, end| {
+            let start = if start.is_last_of_february() {
+                start.with_day(30)
+            } else {
+                start.capped()
+            };
+            let end = if end.date != self.termination && end.is_last_of_february() {
+                end.with_day(30)
+            } else {
+                end.capped()
+            };
+            start.days_to(end)
         })
     }
 
     fn year_fraction(&self, start: Date, end: Date) -> Fraction {
-        fraction_of(self.day_count(start, end), 360)
+        Basis::DAYS_360.fraction(self.day_count(start, end))
     }
 }
 
@@ -1153,6 +1203,51 @@ mod tests {
 
     /// Dates outside the schedule's span accrue nothing — deliberate
     /// clamping semantics.
+    /// A *long* stub is longer than one coupon period, so its accrual
+    /// reaches past the schedule's named reference period into
+    /// adjacent notional ones — the case [`ReferenceGrid`] exists for,
+    /// and one a single-window implementation could not produce.
+    #[test]
+    fn bound_icma_long_stub_spans_several_notional_periods() {
+        // Issued 2002-01-10 with the first coupon at 2003-01-15: a
+        // 12-month front stub on a semiannual bond.
+        let schedule = crate::ScheduleBuilder::new(
+            ymd(2002, Month::Jan, 10),
+            ymd(2004, Month::Jan, 15),
+            Period::Months(6),
+            crate::calendars::NULL_CALENDAR,
+        )
+        .backwards()
+        .with_first_date(ymd(2003, Month::Jan, 15))
+        .with_convention(crate::BusinessDayConvention::Unadjusted)
+        .with_termination_convention(crate::BusinessDayConvention::Unadjusted)
+        .build()
+        .unwrap();
+        assert_eq!(schedule.dates()[0], ymd(2002, Month::Jan, 10));
+        assert_eq!(schedule.dates()[1], ymd(2003, Month::Jan, 15));
+        // The schedule names one reference period per coupon period.
+        assert_eq!(schedule.reference_dates()[0], ymd(2002, Month::Jul, 15));
+
+        let dc = ActActICMA::new(Frequency::Semiannual)
+            .bind(&schedule)
+            .unwrap();
+        let stub = dc.year_fraction(ymd(2002, Month::Jan, 10), ymd(2003, Month::Jan, 15));
+        // Three windows: the named reference period 2002-07-15..
+        // 2003-01-15 (184 days, full), the notional 2002-01-15..
+        // 2002-07-15 (181 days, full), and 5 days of the notional
+        // 2001-07-15..2002-01-15 (184 days).
+        let expected = Fraction::new(1, 2)
+            .unwrap()
+            .checked_add(Fraction::new(1, 2).unwrap())
+            .unwrap()
+            .checked_add(Fraction::new(5, 2 * 184).unwrap())
+            .unwrap();
+        assert_eq!(stub, expected);
+        assert_eq!(stub.parts(), (373, 368));
+        // Over a full coupon of accrual — impossible from one window.
+        assert!(stub > Fraction::new(1, 1).unwrap());
+    }
+
     #[test]
     fn bound_icma_clamps_outside_schedule_span() {
         let schedule = unadjusted_schedule(

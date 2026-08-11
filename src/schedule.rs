@@ -130,16 +130,19 @@ impl TryFrom<(Vec<Date>, Vec<Date>)> for Schedule {
     /// must be strictly increasing and equally long, and may differ
     /// only at the ends — interior periods are always regular.
     fn try_from((dates, reference_dates): (Vec<Date>, Vec<Date>)) -> Result<Self, Self::Error> {
-        /// Everything but the ends, where stubs may diverge.
-        fn interior(v: &[Date]) -> &[Date] {
-            v.get(1..v.len().saturating_sub(1)).unwrap_or_default()
-        }
         if dates.windows(2).any(|w| w[0] >= w[1]) {
             return Err(TimeError::ScheduleNotMonotonic);
         }
+        // Only the ends may diverge, so every interior pair must match.
+        let interior_diverges = dates
+            .iter()
+            .zip(&reference_dates)
+            .skip(1)
+            .take(dates.len().saturating_sub(2))
+            .any(|(date, reference)| date != reference);
         if reference_dates.len() != dates.len()
             || reference_dates.windows(2).any(|w| w[0] >= w[1])
-            || interior(&dates) != interior(&reference_dates)
+            || interior_diverges
         {
             return Err(TimeError::InvalidReferencePeriod);
         }
