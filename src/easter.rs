@@ -1,28 +1,13 @@
-//! Easter-Monday lookup tables.
-//!
-//! Western and Orthodox Easter Monday dates are expensive to compute from
-//! scratch and not of intrinsic interest here — what matters is that the
-//! result is correct for every year in the supported range. This module
-//! ships two 299-entry `[u8; 299]` lookup tables (one per variant), each
-//! indexed by `year - 1901`, each storing the day-of-year of Easter
-//! Monday.
+//! Easter-Monday lookup tables: two 299-entry `[u8; 299]` arrays (Western
+//! and Orthodox), indexed by `year - 1901`, storing the day-of-year of
+//! Easter Monday.
 //!
 //! The tables are ported from
-//! [QuantLib's `ql/time/calendar.cpp`](https://github.com/lballabio/QuantLib/blob/master/ql/time/calendar.cpp)
-//! (`Calendar::WesternImpl::easterMonday` and
-//! `Calendar::OrthodoxImpl::easterMonday`) and cross-checked against
-//! independent `#[cfg(test)]` implementations of the Meeus/Anonymous
-//! algorithm (Gregorian computus) and the classical Meeus Julian
-//! algorithm (Orthodox computus) — every entry is validated against
-//! both computus algorithms, so the tables are reproducible from first
-//! principles without reference to the `QuantLib` source. `QuantLib` is
-//! distributed under a permissive modified-BSD license compatible with
-//! this crate's `Apache-2.0 OR MIT` licensing; its copyright notice and
-//! license text are reproduced in the repository's
-//! `THIRD-PARTY-NOTICES` file.
-//!
-//! Every entry fits in `u8` because Easter Monday day-of-year never
-//! exceeds ~130. Total payload: 598 bytes of rodata.
+//! [QuantLib's `ql/time/calendar.cpp`](https://github.com/lballabio/QuantLib/blob/master/ql/time/calendar.cpp).
+//! `QuantLib` is distributed under a permissive modified-BSD license; its
+//! copyright notice and license text are reproduced in the repository's
+//! `THIRD-PARTY-NOTICES` file. Every entry is validated against the
+//! in-crate `#[cfg(test)]` computus implementations.
 
 use crate::Year;
 
@@ -70,10 +55,8 @@ pub const fn easter_sunday(year: Year, method: EasterMethod) -> u16 {
 
 // ---- Lookup tables ------------------------------------------------------
 //
-// Ported verbatim from QuantLib ql/time/calendar.cpp. The row layout
-// below matches the upstream layout: the first row is 9 entries
-// (1901-1909), every subsequent row is 10 entries. The index into each
-// array is `year - 1901`.
+// Ported verbatim from QuantLib ql/time/calendar.cpp; row layout matches
+// upstream (first row 9 entries, then 10 per row). Index = year - 1901.
 
 #[rustfmt::skip]
 static WESTERN_EASTER_MONDAY: [u8; 299] = [
@@ -151,14 +134,8 @@ mod tests {
     use super::*;
     use crate::{Date, Month, Weekday};
 
-    /// Published Western Easter Monday dates used as the test oracle.
-    ///
-    /// Each `(year, month, day)` tuple is independently verifiable
-    /// against Wikipedia's "List of dates for Easter" or any printed
-    /// liturgical calendar. The comment on each row gives the preceding
-    /// Easter Sunday so the anchor is easy to eye-check. Far-future
-    /// entries that no printed calendar covers are flagged as such —
-    /// those rely on the Gregorian computus being deterministic.
+    /// Published Western Easter Monday dates used as the test oracle;
+    /// each row's comment gives the preceding Easter Sunday.
     const WESTERN_ANCHORS: &[(u16, Month, u8)] = &[
         (1901, Month::Apr, 8),  // Sunday 1901-04-07
         (1913, Month::Mar, 24), // Sunday 1913-03-23 — early Easter
@@ -175,8 +152,7 @@ mod tests {
         (2199, Month::Apr, 15), // Sunday 2199-04-14 — far future (per computus)
     ];
 
-    /// Published Orthodox Easter Monday dates (Gregorian calendar),
-    /// verifiable against Orthodox church calendars.
+    /// Published Orthodox Easter Monday dates (Gregorian calendar).
     const ORTHODOX_ANCHORS: &[(u16, Month, u8)] = &[
         (1901, Month::Apr, 15), // Orthodox Sunday 1901-04-14
         (2000, Month::May, 1),  // Orthodox Sunday 2000-04-30 — leap
@@ -209,10 +185,8 @@ mod tests {
         check_anchors(EasterMethod::Orthodox, ORTHODOX_ANCHORS);
     }
 
-    /// Every entry in the Western table must decode to a Monday in its
-    /// year. This is a structural invariant — Easter Monday is, by
-    /// definition, a Monday — and catches any transcription typo whose
-    /// magnitude is not a multiple of seven.
+    /// Every Western entry must decode to a Monday — catches any
+    /// transcription typo whose magnitude is not a multiple of seven.
     #[test]
     fn every_western_entry_lands_on_a_monday() {
         for year in 1901u16..=2199 {
@@ -230,9 +204,7 @@ mod tests {
         }
     }
 
-    /// Same structural invariant for Orthodox — after the Julian →
-    /// Gregorian shift (+13 days in 1900–2099, +14 in 2100–2199), the
-    /// resulting Gregorian date is still a Monday.
+    /// Same structural invariant for Orthodox.
     #[test]
     fn every_orthodox_entry_lands_on_a_monday() {
         for year in 1901u16..=2199 {
@@ -251,10 +223,7 @@ mod tests {
     }
 
     /// Every Western entry must decode to a date in March or April —
-    /// the only months Gregorian Easter can fall in. Paired with the
-    /// Monday test, this catches most transcription typos: a
-    /// within-range-but-wrong-by-7-days typo either crosses March 22
-    /// / April 26 or changes the weekday.
+    /// the only months Gregorian Easter can fall in.
     #[test]
     fn every_western_entry_falls_in_mar_or_apr() {
         for year in 1901u16..=2199 {
@@ -288,14 +257,11 @@ mod tests {
         }
     }
 
-    /// Independent implementation of the Anonymous/Meeus Gregorian
-    /// computus. Returns Easter *Sunday* as `(month, day)` for the
-    /// given year. Pure integer arithmetic; see Meeus, *Astronomical
-    /// Algorithms*, chapter 8 ("Date of Easter").
+    /// Independent Anonymous/Meeus Gregorian computus; returns Easter
+    /// *Sunday* as `(month, day)`.
     ///
-    /// The single-letter variables are the algorithm's canonical
-    /// notation — renaming them would make the code harder to check
-    /// against the published sources, hence the lint allow.
+    /// Single-letter variables are the algorithm's canonical notation,
+    /// hence the lint allow.
     #[allow(clippy::many_single_char_names)]
     fn gregorian_computus_easter_sunday(year: u16) -> (u8, u8) {
         let y = i32::from(year);
@@ -316,13 +282,9 @@ mod tests {
         (u8::try_from(month).unwrap(), u8::try_from(day).unwrap())
     }
 
-    /// Independent implementation of the Meeus Julian computus for
-    /// Orthodox Easter. Returns Easter *Sunday* as a `(month, day)`
-    /// date in the **Julian** calendar; the caller converts to
-    /// Gregorian by adding the Julian–Gregorian offset (13 days for
-    /// 1901..=2099, 14 days for 2100..=2199 — Easter falls after the
-    /// March 1 offset step in century years, so the whole year uses
-    /// the stepped offset).
+    /// Independent Meeus Julian computus for Orthodox Easter; returns
+    /// Easter *Sunday* as a **Julian** `(month, day)`. Caller adds the
+    /// Julian–Gregorian offset (13 days 1901..=2099, 14 days 2100..=2199).
     #[allow(clippy::many_single_char_names)]
     fn julian_computus_easter_sunday(year: u16) -> (u8, u8) {
         let y = i32::from(year);
@@ -337,9 +299,7 @@ mod tests {
     }
 
     /// Every Western table entry must equal the Gregorian computus,
-    /// computed from first principles. Together with the Orthodox
-    /// variant below, this makes the tables reproducible without
-    /// reference to the source they were ported from.
+    /// computed from first principles.
     #[test]
     fn western_table_matches_gregorian_computus() {
         for year in 1901u16..=2199 {
@@ -361,9 +321,8 @@ mod tests {
         for year in 1901u16..=2199 {
             let (month, day) = julian_computus_easter_sunday(year);
             let offset = if year >= 2100 { 14 } else { 13 };
-            // Julian March/April dates share month lengths with the
-            // Gregorian calendar, so the Julian (y, m, d) can be built
-            // as a Gregorian `Date` and shifted by the offset.
+            // Julian Mar/Apr share month lengths with Gregorian, so the
+            // Julian (y, m, d) builds as a Gregorian `Date` plus offset.
             let julian_as_serial =
                 Date::from_ymd(year, Month::try_from_u8(month).unwrap(), day).unwrap();
             let sunday = julian_as_serial.add_days(offset).unwrap();

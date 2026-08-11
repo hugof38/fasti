@@ -9,12 +9,9 @@ use crate::{
 /// The Federal Reserve Bankwire System calendar — a port of
 /// `QuantLib`'s `UnitedStates::FederalReserve` market variant.
 ///
-/// Same holiday set as [`SETTLEMENT`](super::SETTLEMENT), but weekend
-/// shifts on modern holidays are Sunday-forward only: the Federal
-/// Reserve does not move Saturday observances back to Friday. The
-/// legacy pre-1971 Washington's Birthday and Memorial Day variants
-/// still use the full SatBack/SunForward shift (matching
-/// `QuantLib`'s `isWashingtonBirthday` and `isMemorialDay` helpers).
+/// Same holiday set as [`SETTLEMENT`](super::SETTLEMENT), but modern
+/// weekend shifts are Sunday-forward only; the legacy pre-1971 variants
+/// keep the full SatBack/SunForward shift, matching `QuantLib`.
 ///
 /// | Holiday | Rule |
 /// |---|---|
@@ -114,8 +111,7 @@ mod tests {
         Date::from_ymd(y, m, d).unwrap()
     }
 
-    /// All 11 Federal Reserve holidays for 2024 (same set as
-    /// Settlement, same observed dates since no weekend-shifted ones).
+    /// All 11 Federal Reserve holidays for 2024 (same set as Settlement).
     #[test]
     fn federal_reserve_holidays_2024() {
         assert!(FEDERAL_RESERVE.is_holiday(ymd(2024, Month::Jan, 1)));
@@ -131,15 +127,12 @@ mod tests {
         assert!(FEDERAL_RESERVE.is_holiday(ymd(2024, Month::Dec, 25)));
     }
 
-    /// Key diff vs Settlement: Federal Reserve does NOT observe a
-    /// Saturday holiday on the prior Friday for modern holidays.
+    /// Key diff vs Settlement: no Friday observance for Saturday holidays.
     #[test]
     fn federal_reserve_no_saturday_back_shift() {
-        // Jul 4 2026 is Saturday. Settlement observes Fri Jul 3; Fed
-        // Reserve does not.
+        // Jul 4 2026 (Sat): Settlement observes Fri Jul 3; Fed does not.
         assert!(!FEDERAL_RESERVE.is_holiday(ymd(2026, Month::Jul, 3)));
-        // Jan 1 2022 is Saturday. Settlement observes Fri Dec 31 2021;
-        // Fed Reserve does not.
+        // Jan 1 2022 (Sat): Settlement observes Fri Dec 31 2021; Fed does not.
         assert!(!FEDERAL_RESERVE.is_holiday(ymd(2021, Month::Dec, 31)));
     }
 
@@ -152,22 +145,16 @@ mod tests {
         assert!(FEDERAL_RESERVE.is_holiday(ymd(2021, Month::Jul, 5)));
     }
 
-    /// Legacy Washington's Birthday 1970 Feb 22 was Sunday — observed
-    /// Monday Feb 23. The pre-1971 rule keeps the SatBack/SunForward
-    /// shift even under Fed Reserve (matching `QuantLib`'s
-    /// `isWashingtonBirthday` helper).
+    /// Pre-1971 Washington's Birthday keeps the full SatBack/SunForward shift.
     #[test]
     fn federal_reserve_legacy_washington_uses_sat_back() {
         assert!(FEDERAL_RESERVE.is_holiday(ymd(1970, Month::Feb, 23))); // observed
         assert!(!FEDERAL_RESERVE.is_holiday(ymd(1970, Month::Feb, 22))); // natural Sun
-        // 1969 Feb 22 was a Saturday — the pre-1971 helper moves it
-        // back to Friday Feb 21, regardless of Fed Reserve's usual
-        // SunForward-only rule for modern holidays.
+        // 1969 Feb 22 (Sat) → observed Friday Feb 21 under the legacy rule.
         assert!(FEDERAL_RESERVE.is_holiday(ymd(1969, Month::Feb, 21)));
     }
 
-    /// Veterans Day 1971-1977 Uniform Monday Holiday Act variant
-    /// applies identically to Fed Reserve.
+    /// Veterans Day 1971-1977 Uniform Monday variant applies identically.
     #[test]
     fn federal_reserve_veterans_day_uniform_monday() {
         assert!(FEDERAL_RESERVE.is_holiday(ymd(1971, Month::Oct, 25)));

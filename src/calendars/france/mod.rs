@@ -1,17 +1,8 @@
-//! France market calendars — settlement and Paris Bourse exchange.
-//!
-//! Ports of `QuantLib`'s
+//! France market calendars — ports of `QuantLib`'s
 //! [`France`](https://github.com/lballabio/QuantLib/blob/master/ql/time/calendars/france.cpp)
-//! calendar variants. French statutory holidays are observed on their
-//! natural date — there is no weekend-shift convention — so any
-//! holiday falling on a Saturday or Sunday is simply lost.
+//! calendar variants. No weekend shift: weekend holidays are simply lost.
 //!
-//! **Note on `QuantLib` compatibility:** `QuantLib`'s France Settlement
-//! encodes Ascension and Whit Monday as fixed May-10 and May-21
-//! calendar dates, which is a bug (those are Easter-relative dates
-//! that vary by year). This port uses correct Easter offsets from
-//! [`EasterOffset`](crate::EasterOffset). The rest of the holiday set
-//! matches `QuantLib` exactly.
+//! Deviation: Ascension and Whit Monday use true Easter offsets, not `QuantLib`'s fixed-date bug.
 
 mod exchange;
 mod settlement;

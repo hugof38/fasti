@@ -9,19 +9,9 @@ use crate::{
 /// The US government bond market calendar — port of `QuantLib`'s
 /// `UnitedStates::GovernmentBond` market variant.
 ///
-/// Same holiday set as [`SETTLEMENT`](super::SETTLEMENT) but with:
-///
-/// - New Year's Day shifts Sunday-forward only (no Saturday rollback
-///   to the previous Dec 31).
-/// - Good Friday observed, with a post-1996 exception: skipped when
-///   it coincides with the first-Friday NFP release (day-of-month
-///   ≤ 7, which per `QuantLib`'s note referencing sifma.org can only
-///   happen in April since Good Friday is bounded to Mar 20 – Apr 23).
-/// - Veterans Day shifts Sunday-forward only, matching `QuantLib`'s
-///   `isVeteransDayNoSaturday` helper. The 1971-1977 Uniform Monday
-///   Holiday Act variant still applies.
-/// - Three special historic closings (2018 Bush funeral, 2012
-///   Hurricane Sandy day 2, 2004 Reagan funeral).
+/// Same holiday set as [`SETTLEMENT`](super::SETTLEMENT) but New Year's
+/// and Veterans Day shift Sunday-forward only, Good Friday is observed
+/// (with a post-1996 NFP exception), and there are 3 historic closings.
 ///
 /// | Holiday | Rule |
 /// |---|---|
@@ -122,11 +112,9 @@ pub const GOVERNMENT_BOND: Calendar<'static> = Calendar {
     ],
 };
 
-/// Good Friday observed under Government Bond rules for years from
-/// 1996, *except* when day-of-month ≤ 7 — which collides with the
-/// first-Friday Non-Farm Payrolls release. Per `QuantLib`'s note
-/// citing sifma.org, this early-April collision makes Good Friday an
-/// early-close rather than a full-day closure.
+/// Good Friday from 1996 onward, except when day-of-month ≤ 7 — the
+/// first-Friday NFP release makes it an early close, not a holiday
+/// (per `QuantLib`'s note citing sifma.org).
 fn good_friday_post_1996(d: Date) -> bool {
     let y = d.year().get();
     if y < 1996 || d.day() <= 7 {
@@ -146,9 +134,7 @@ mod tests {
         Date::from_ymd(y, m, d).unwrap()
     }
 
-    /// 2024 Government Bond holidays — 12 in total (Settlement's 11
-    /// plus Good Friday, since Mar 29 2024 has day-of-month 29 and is
-    /// NOT NFP-colliding).
+    /// 2024 Government Bond holidays — Settlement's 11 plus Good Friday.
     #[test]
     fn govbond_holidays_2024() {
         assert!(GOVERNMENT_BOND.is_holiday(ymd(2024, Month::Jan, 1)));
@@ -165,42 +151,34 @@ mod tests {
         assert!(GOVERNMENT_BOND.is_holiday(ymd(2024, Month::Dec, 25)));
     }
 
-    /// Good Friday NFP exception: since 1996, skipped when
-    /// day-of-month ≤ 7. 2026 Good Friday is April 3 (day ≤ 7) — the
-    /// exception applies and it is NOT a government-bond holiday.
+    /// Good Friday NFP exception: since 1996, skipped when day ≤ 7.
     #[test]
     fn good_friday_nfp_exception_since_1996() {
-        // 1995 Apr 14 Good Friday (day 14 > 7; also pre-1996 → always observed).
+        // 1995 Apr 14 Good Friday (day 14 > 7; also pre-1996) — observed.
         assert!(GOVERNMENT_BOND.is_holiday(ymd(1995, Month::Apr, 14)));
         // 2024 Mar 29 Good Friday (day 29 > 7) — observed.
         assert!(GOVERNMENT_BOND.is_holiday(ymd(2024, Month::Mar, 29)));
         // 2026 Good Friday = April 3 (day ≤ 7, post-1996) — NOT observed.
         assert!(!GOVERNMENT_BOND.is_holiday(ymd(2026, Month::Apr, 3)));
-        // Cross-check a pre-1996 early April Good Friday. 1988 Apr 1
-        // was Good Friday (Easter Sunday Apr 3 1988). Pre-1996 so the
-        // NFP exception does NOT apply — observed.
+        // 1988 Apr 1 Good Friday — pre-1996, exception does not apply.
         assert!(GOVERNMENT_BOND.is_holiday(ymd(1988, Month::Apr, 1)));
     }
 
-    /// Veterans Day is `SunForward` only under govbond (no Saturday
-    /// rollback to the previous Friday).
+    /// Veterans Day is `SunForward` only under govbond.
     #[test]
     fn govbond_veterans_day_no_saturday_back() {
         // 1994 Nov 11 was Friday — observed natural.
         assert!(GOVERNMENT_BOND.is_holiday(ymd(1994, Month::Nov, 11)));
-        // 1995 Nov 11 was Saturday — Settlement observes Friday Nov 10
-        // but Government Bond does NOT.
+        // 1995 Nov 11 (Sat): Settlement observes Fri Nov 10; govbond does not.
         assert!(!GOVERNMENT_BOND.is_holiday(ymd(1995, Month::Nov, 10)));
         // 1990 Nov 11 was Sunday — observed Monday Nov 12.
         assert!(GOVERNMENT_BOND.is_holiday(ymd(1990, Month::Nov, 12)));
     }
 
-    /// Government bond market does NOT roll back Jan 1 to Dec 31 when
-    /// the first of the year is a Saturday.
+    /// New Year's Day is `SunForward` only — no Dec 31 rollback.
     #[test]
     fn govbond_new_year_sun_forward_only() {
-        // Jan 1 2022 was Saturday. Settlement observes Fri Dec 31
-        // 2021; Government Bond does not.
+        // Jan 1 2022 (Sat): Settlement observes Fri Dec 31 2021; govbond does not.
         assert!(!GOVERNMENT_BOND.is_holiday(ymd(2021, Month::Dec, 31)));
         // Jan 1 2023 was Sunday — observed Mon Jan 2.
         assert!(GOVERNMENT_BOND.is_holiday(ymd(2023, Month::Jan, 2)));

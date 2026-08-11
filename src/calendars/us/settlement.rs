@@ -8,9 +8,6 @@ use crate::{
 /// The US generic settlement calendar — a port of `QuantLib`'s
 /// `UnitedStates::Settlement` market variant.
 ///
-/// Observes the following holidays (each with the `QuantLib` effective-
-/// year boundary in brackets):
-///
 /// | Holiday | Rule |
 /// |---|---|
 /// | New Year's Day | Jan 1 + SatBack/SunForward |
@@ -31,16 +28,8 @@ use crate::{
 ///
 /// Notes on `QuantLib` compatibility:
 ///
-/// - MLK is effective from 1983 per `QuantLib`, matching the signing of
-///   the law; note the first federal *observance* was in 1986.
-/// - Juneteenth is effective from 2022 per `QuantLib`, matching when
-///   exchanges began observing it; the federal holiday actually took
-///   effect in 2021.
-/// - Pre-1971 Washington's Birthday and Memorial Day use the legacy
-///   fixed-date-with-shift pattern (Feb 22 / May 30).
-/// - Veterans Day during 1971–1977 is expressed under the Uniform
-///   Monday Holiday Act as the 4th Monday of October, reverting to
-///   Nov 11 from 1978 onwards.
+/// - MLK effective 1983 and Juneteenth effective 2022 per `QuantLib` (not the federal 1986/2021).
+/// - Veterans Day 1971–1977 follows the Uniform Monday Holiday Act (4th Monday of October).
 pub const SETTLEMENT: Calendar<'static> = Calendar {
     name: "US settlement",
     weekend: Weekend::SAT_SUN,
@@ -94,8 +83,7 @@ pub const SETTLEMENT: Calendar<'static> = Calendar {
                 .shift(WeekendShift::SatBackSunForward)
                 .years(YearRange::literal_through(1970)),
         ),
-        // Veterans Day (1971–1977): 4th Monday of October (Uniform
-        // Monday Holiday Act).
+        // Veterans Day (1971–1977): 4th Monday of October (Uniform Monday Act).
         Rule::NthWeekday(
             NthWeekday::new(Ordinal::Fourth, Weekday::Mon, Month::Oct)
                 .years(YearRange::literal_between(1971, 1977)),
@@ -123,9 +111,7 @@ mod tests {
         Date::from_ymd(y, m, d).unwrap()
     }
 
-    /// 2024 US federal/settlement holidays, verified against the Office
-    /// of Personnel Management's published list. All 11 fall on
-    /// weekdays this year.
+    /// 2024 US settlement holidays, verified against OPM's list.
     #[test]
     fn settlement_holidays_2024() {
         assert!(SETTLEMENT.is_holiday(ymd(2024, Month::Jan, 1))); // New Year's — Mon
@@ -141,8 +127,7 @@ mod tests {
         assert!(SETTLEMENT.is_holiday(ymd(2024, Month::Dec, 25))); // Christmas — Wed
     }
 
-    /// 2024 has no weekend-shifted holidays, so the non-weekend
-    /// holiday count equals 11.
+    /// 2024 has no weekend-shifted holidays: count = 11.
     #[test]
     fn settlement_2024_count_is_eleven() {
         let mut count = 0;
@@ -157,8 +142,7 @@ mod tests {
         assert_eq!(count, 11);
     }
 
-    /// MLK effective from 1983 (`QuantLib` choice). First observed
-    /// federally in 1986, but the calendar follows `QuantLib`.
+    /// MLK effective from 1983 (`QuantLib` choice, not federal 1986).
     #[test]
     fn mlk_effective_from_1983() {
         // 1982 third Monday of January is Jan 18 — NOT a holiday.
@@ -169,8 +153,7 @@ mod tests {
         assert!(SETTLEMENT.is_holiday(ymd(1985, Month::Jan, 21)));
     }
 
-    /// Juneteenth effective from 2022 (`QuantLib`'s choice for markets);
-    /// the federal holiday actually started 2021.
+    /// Juneteenth effective from 2022 (`QuantLib` choice, not federal 2021).
     #[test]
     fn juneteenth_effective_from_2022() {
         assert!(!SETTLEMENT.is_holiday(ymd(2020, Month::Jun, 19)));
@@ -192,8 +175,7 @@ mod tests {
         assert!(SETTLEMENT.is_holiday(ymd(1969, Month::Feb, 21)));
         // 1971: moves to 3rd Monday (= Feb 15).
         assert!(SETTLEMENT.is_holiday(ymd(1971, Month::Feb, 15)));
-        // 1971: Feb 22 is NO LONGER a holiday under the modern rule
-        // (Feb 22 1971 was a Monday — NOT the 3rd Monday, which is Feb 15).
+        // 1971 Feb 22 (a Monday, but not the 3rd) — no longer a holiday.
         assert!(!SETTLEMENT.is_holiday(ymd(1971, Month::Feb, 22)));
     }
 
@@ -208,8 +190,7 @@ mod tests {
         assert!(SETTLEMENT.is_holiday(ymd(1971, Month::May, 31)));
     }
 
-    /// Veterans Day 1971–1977 under the Uniform Monday Holiday Act:
-    /// 4th Monday of October. Reverts to Nov 11 from 1978.
+    /// Veterans Day 1971–1977: 4th Monday of October; Nov 11 from 1978.
     #[test]
     fn veterans_day_uniform_monday_act() {
         // 1971: 4th Monday of October is Oct 25.

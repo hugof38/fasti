@@ -9,10 +9,8 @@ use crate::{
 /// `UnitedStates::SOFR` market variant.
 ///
 /// Same holiday set as [`GOVERNMENT_BOND`](super::GOVERNMENT_BOND)
-/// *except* Good Friday is always observed — `QuantLib`'s note states
-/// that SOFR has never fixed on Good Friday, so the post-1996 NFP
-/// exception does not apply here. The three historic special-closing
-/// dates are the same as Government Bond.
+/// *except* Good Friday is always observed (no post-1996 NFP exception —
+/// SOFR has never fixed on Good Friday).
 ///
 /// | Holiday | Rule |
 /// |---|---|
@@ -119,9 +117,7 @@ mod tests {
         Date::from_ymd(y, m, d).unwrap()
     }
 
-    /// 2024 SOFR holidays — 12 total, same as Government Bond (Good
-    /// Friday March 29 has day > 7 so the NFP exception would not
-    /// have fired there anyway).
+    /// 2024 SOFR holidays — 12 total, same as Government Bond.
     #[test]
     fn sofr_holidays_2024() {
         assert!(SOFR.is_holiday(ymd(2024, Month::Jan, 1)));
@@ -138,10 +134,8 @@ mod tests {
         assert!(SOFR.is_holiday(ymd(2024, Month::Dec, 25)));
     }
 
-    /// The distinguishing property: SOFR observes Good Friday even
-    /// when it falls in the NFP-colliding first week of April. 2026
-    /// Good Friday = April 3 — Government Bond skips this, SOFR does
-    /// not.
+    /// SOFR observes Good Friday even in the NFP-colliding first week
+    /// of April, unlike Government Bond.
     #[test]
     fn sofr_good_friday_always_observed() {
         // 2026 Good Friday = April 3 (day ≤ 7, post-1996). SOFR observes.
@@ -152,8 +146,7 @@ mod tests {
         assert!(SOFR.is_holiday(ymd(2015, Month::Apr, 3)));
     }
 
-    /// SOFR shares Government Bond's special closings and Veterans
-    /// Day behavior.
+    /// SOFR shares Government Bond's special closings and shift behavior.
     #[test]
     fn sofr_matches_govbond_on_non_good_friday_behavior() {
         // Special closings.

@@ -1,10 +1,8 @@
 //! [`Calendar`]: a weekend definition + a sequence of holiday [`Rule`]s.
 //!
-//! `Calendar<'a>` is a borrowed view — the name is `&'a str`, the rules
-//! live in `&'a [Rule]`. The lifetime lets built-in calendars live in
-//! `pub const` values (with `'a = 'static`), and also lets a
-//! [`CalendarBuilder`] produce calendars borrowing from its own
-//! owned storage.
+//! `Calendar<'a>` is a borrowed view; built-in calendars are `pub const`
+//! (`'a = 'static`), and [`CalendarBuilder`] produces calendars borrowing
+//! from its own owned storage.
 
 use alloc::borrow::ToOwned;
 use alloc::string::String;
@@ -14,11 +12,6 @@ use crate::{BusinessDayConvention, Date, Period, Rule, TimeError, Weekend};
 
 /// A holiday calendar: a [`Weekend`] configuration plus a sequence of
 /// [`Rule`]s. A date is a holiday iff at least one rule says so.
-///
-/// Calendars are borrowed views, `Copy`, and have no runtime cost
-/// beyond three pointer-sized fields. Built-in calendars are declared
-/// as `pub const Calendar<'static>`. User-built calendars come from
-/// [`CalendarBuilder`].
 ///
 /// ```no_run
 /// use fasti::{Calendar, Date, Month, Weekend};
@@ -39,8 +32,7 @@ pub struct Calendar<'a> {
     pub name: &'a str,
     /// The weekly weekend.
     pub weekend: Weekend,
-    /// Holiday rules — evaluated in sequence; short-circuits on the
-    /// first match.
+    /// Holiday rules; a date is a holiday iff any rule matches.
     pub rules: &'a [Rule],
 }
 
@@ -52,8 +44,7 @@ impl Calendar<'_> {
     }
 
     /// `true` iff any rule in this calendar marks `date` as a holiday.
-    /// Does not consider weekends — a Saturday can be a non-holiday
-    /// non-business day.
+    /// Does not consider weekends.
     #[must_use]
     pub fn is_holiday(&self, date: Date) -> bool {
         self.rules.iter().any(|r| r.is_holiday(date))
@@ -67,9 +58,7 @@ impl Calendar<'_> {
 
     /// The next business day strictly after `date`.
     ///
-    /// Returns [`None`] only if the search would run past [`Date::MAX`]
-    /// — in practice this never happens for a calendar with any
-    /// business days in the crate's supported range.
+    /// Returns [`None`] if the search would run past [`Date::MAX`].
     #[must_use]
     pub fn next_business_day(&self, date: Date) -> Option<Date> {
         let mut d = date.add_days(1).ok()?;
@@ -89,14 +78,9 @@ impl Calendar<'_> {
         Some(d)
     }
 
-    /// Roll `date` onto a business day according to `convention`.
-    ///
-    /// If `date` is already a business day the input is returned
-    /// unchanged for every convention. The returned error is
-    /// [`TimeError::DateOutOfRange`], surfaced when the convention's
-    /// search would run past [`Date::MIN`] or [`Date::MAX`] without
-    /// finding a business day — in practice this only happens at the
-    /// extreme boundary of the supported range.
+    /// Roll `date` onto a business day according to `convention`; a
+    /// business day is returned unchanged. Returns
+    /// [`TimeError::DateOutOfRange`] if the search leaves the supported range.
     ///
     /// ```
     /// use fasti::{BusinessDayConvention, Date, Month, calendars};
@@ -152,25 +136,10 @@ impl Calendar<'_> {
     }
 
     /// Step `date` forward (or backward) by `period`, then roll onto a
-    /// business day under `convention`.
+    /// business day under `convention`. Returns
+    /// [`TimeError::DateOutOfRange`] if the arithmetic or search leaves the supported range.
     ///
-    /// When `end_of_month` is `true` *and* `date` is the last day of
-    /// its calendar month *and* `period` is in `Months` or `Years`
-    /// units, the unadjusted result is snapped to the last day of its
-    /// own month *before* the business-day adjustment runs. This is
-    /// the `QuantLib` semantics — see
-    /// [`ql/time/calendar.cpp`](https://github.com/lballabio/QuantLib/blob/master/ql/time/calendar.cpp).
-    /// The flag is ignored for `Days` and `Weeks` periods, where the
-    /// concept does not apply.
-    ///
-    /// Returns [`TimeError::DateOutOfRange`] if either the period
-    /// arithmetic or the business-day search would step outside the
-    /// supported range.
-    ///
-    /// Apr 30 2025 (a Wednesday, and the `EoM` of April) plus one month
-    /// with `end_of_month = true` snaps to May 31 2025, which is a
-    /// Saturday. `ModifiedFollowing` rolls back to Friday May 30 to
-    /// stay within May:
+    /// If `end_of_month` is set, a `Months`/`Years` step from a month-end snaps to the target month's end before adjusting. Matches `QuantLib`'s semantics.
     ///
     /// ```
     /// use fasti::{BusinessDayConvention, Date, Month, Period, calendars};
@@ -206,9 +175,8 @@ impl Calendar<'_> {
     }
 }
 
-/// Owned counterpart to [`Calendar`] — allocates heap storage for the
-/// name and rule list, and exposes a [`view`](Self::view) method that
-/// produces a borrowed [`Calendar`] referencing those allocations.
+/// Owned counterpart to [`Calendar`]; [`view`](Self::view) produces a
+/// borrowed [`Calendar`] backed by this builder's storage.
 ///
 /// ```
 /// use fasti::{CalendarBuilder, Date, FixedDate, Month, OneOff, Rule, Weekend};
@@ -239,9 +207,8 @@ impl CalendarBuilder {
         }
     }
 
-    /// Seed a builder from a [`Calendar`] — commonly a built-in like
-    /// [`us::SETTLEMENT`](crate::calendars::us::SETTLEMENT) that the
-    /// caller wants to extend with bespoke blackout days.
+    /// Seed a builder from a [`Calendar`], e.g. a built-in to extend
+    /// with bespoke blackout days.
     #[must_use]
     pub fn from_calendar(cal: Calendar<'_>) -> Self {
         Self {
@@ -273,9 +240,7 @@ impl CalendarBuilder {
     }
 
     /// Produce a borrowed [`Calendar`] backed by this builder's storage.
-    ///
-    /// The returned view lives as long as `&self`; use it immediately
-    /// or clone fields if a longer lifetime is needed.
+    /// The view lives as long as `&self`.
     #[must_use]
     pub fn view(&self) -> Calendar<'_> {
         Calendar {
@@ -424,8 +389,7 @@ mod tests {
 
     #[test]
     fn adjust_modified_following_falls_back_when_crossing_month() {
-        // Sun Aug 31 2025 → Following: Mon Sep 1 (different month) → ModFol
-        // falls back to Fri Aug 29.
+        // Sun Aug 31 2025 → Following: Mon Sep 1; ModFol → Fri Aug 29.
         let sun = ymd(2025, Month::Aug, 31);
         assert_eq!(
             WEEKENDS_ONLY
@@ -443,8 +407,7 @@ mod tests {
 
     #[test]
     fn adjust_modified_preceding_falls_back_when_crossing_month() {
-        // Sat Mar 1 2025 → Preceding: Fri Feb 28 (different month) → ModPre
-        // falls back to Mon Mar 3.
+        // Sat Mar 1 2025 → Preceding: Fri Feb 28; ModPre → Mon Mar 3.
         let sat = ymd(2025, Month::Mar, 1);
         assert_eq!(
             WEEKENDS_ONLY
@@ -462,8 +425,7 @@ mod tests {
 
     #[test]
     fn adjust_modified_following_does_not_fall_back_within_month() {
-        // Sat Jul 6 2024 → Following: Mon Jul 8 (same month) → ModFol
-        // returns the same date.
+        // Sat Jul 6 2024 → Mon Jul 8 (same month, no fallback).
         let sat = ymd(2024, Month::Jul, 6);
         assert_eq!(
             WEEKENDS_ONLY
@@ -486,8 +448,7 @@ mod tests {
             CAL.adjust(thu, BusinessDayConvention::Following).unwrap(),
             ymd(2024, Month::Jul, 5),
         );
-        // Sat Jul 6 with the same holiday: Preceding skips Fri Jul 5? No,
-        // Fri Jul 5 is a business day — only Jul 4 itself is a holiday.
+        // Sat Jul 6 → Preceding → Fri Jul 5 (only Jul 4 is a holiday).
         let sat = ymd(2024, Month::Jul, 6);
         assert_eq!(
             CAL.adjust(sat, BusinessDayConvention::Preceding).unwrap(),
@@ -544,8 +505,7 @@ mod tests {
 
     #[test]
     fn advance_days_period_ignores_eom_flag() {
-        // Apr 30 2025 (EoM, Wed) + 7 days = May 7 (Wed). EoM flag has
-        // no effect for Days.
+        // Apr 30 2025 + 7 days = May 7; EoM flag inert for Days.
         let apr_eom = ymd(2025, Month::Apr, 30);
         let with_flag = WEEKENDS_ONLY
             .advance(
@@ -586,8 +546,7 @@ mod tests {
 
     #[test]
     fn advance_months_with_eom_snaps_to_target_eom() {
-        // Apr 30 2025 (EoM) + 1M with EoM = May 31 2025; Unadjusted
-        // returns May 31 even though it's a Saturday.
+        // Apr 30 2025 (EoM) + 1M with EoM = Sat May 31 2025 (Unadjusted).
         let apr_eom = ymd(2025, Month::Apr, 30);
         assert_eq!(
             WEEKENDS_ONLY
@@ -621,9 +580,7 @@ mod tests {
 
     #[test]
     fn advance_applies_bdc_after_eom_snap() {
-        // Apr 30 2025 (EoM, Wed) + 1M with EoM = unadjusted May 31 2025
-        // (Sat) → ModFol falls back to May 30 (Fri) without crossing
-        // the month boundary.
+        // Apr 30 2025 + 1M with EoM = Sat May 31 → ModFol → Fri May 30.
         let apr_eom = ymd(2025, Month::Apr, 30);
         assert_eq!(
             WEEKENDS_ONLY

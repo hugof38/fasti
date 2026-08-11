@@ -1,21 +1,13 @@
-//! [`EasterOffset`]: holidays that fall a fixed number of days from
-//! Easter Sunday — Good Friday (−2), Easter Monday (+1), Ascension
-//! Thursday (+39), Whit Monday (+50), Corpus Christi (+60), etc.
-//!
-//! The offset is from Easter *Sunday*. This matches the liturgical
-//! and colloquial convention — "Ascension is 40 days after Easter"
-//! (Easter Sunday + 39 inclusive) — rather than anchoring on Easter
-//! Monday. `QuantLib` historically indexes on Easter Monday (its
-//! `em + N` notation); the constructors here translate.
+//! [`EasterOffset`]: holidays a fixed number of days from Easter Sunday —
+//! Good Friday (−2), Easter Monday (+1), Ascension (+39), Whit Monday (+50).
+//! Offsets anchor on Easter *Sunday*; `QuantLib` indexes on Easter Monday
+//! and the constructors here translate.
 
 use crate::{Date, EasterMethod, Month, Year, YearRange, easter_monday};
 
 /// A holiday rule fired `days` away from Easter Sunday under a given
-/// [`EasterMethod`].
-///
-/// Most constructors default to Western (Gregorian) Easter since that
-/// is the overwhelmingly common case. Orthodox (Julian) Easter is
-/// available explicitly via [`new_orthodox`](Self::new_orthodox).
+/// [`EasterMethod`]. Constructors default to Western (Gregorian) Easter;
+/// use [`new_orthodox`](Self::new_orthodox) for Julian.
 ///
 /// ```
 /// use fasti::{Date, EasterOffset, Month};
@@ -28,27 +20,16 @@ use crate::{Date, EasterMethod, Month, Year, YearRange, easter_monday};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EasterOffset {
-    /// Offset in days from Easter Sunday. Canonical values:
-    ///
-    /// - Good Friday = −2
-    /// - Holy Saturday = −1
-    /// - Easter Sunday = 0
-    /// - Easter Monday = +1
-    /// - Ascension Thursday = +39
-    /// - Whit Sunday (Pentecost) = +49
-    /// - Whit Monday = +50
-    /// - Corpus Christi = +60
+    /// Offset in days from Easter Sunday (Good Friday = −2, Easter
+    /// Monday = +1, Ascension = +39, Whit Monday = +50).
     days: i16,
     method: EasterMethod,
     years: YearRange,
 }
 
 impl EasterOffset {
-    /// Construct a Western (Gregorian) Easter-offset rule.
-    /// `days` is measured from Easter Sunday.
-    ///
-    /// Use [`new_orthodox`](Self::new_orthodox) for the Julian
-    /// (Orthodox) variant.
+    /// Construct a Western (Gregorian) Easter-offset rule; `days` is
+    /// measured from Easter Sunday.
     ///
     /// ```
     /// use fasti::EasterOffset;
@@ -64,9 +45,8 @@ impl EasterOffset {
         }
     }
 
-    /// Construct an Orthodox (Julian) Easter-offset rule.
-    /// `days` is measured from Orthodox Easter Sunday (expressed in
-    /// the Gregorian calendar).
+    /// Construct an Orthodox (Julian) Easter-offset rule; `days` is
+    /// measured from Orthodox Easter Sunday (Gregorian-expressed).
     ///
     /// ```
     /// use fasti::{Date, EasterOffset, Month};
@@ -103,8 +83,7 @@ impl EasterOffset {
         Self::new(1)
     }
 
-    /// Ascension Thursday — Easter Sunday + 39. The 40th day of
-    /// Easter under inclusive Christian counting.
+    /// Ascension Thursday — Easter Sunday + 39.
     #[must_use]
     pub const fn ascension() -> Self {
         Self::new(39)
@@ -116,8 +95,7 @@ impl EasterOffset {
         Self::new(50)
     }
 
-    /// Corpus Christi — Easter Sunday + 60 (Thursday after Trinity
-    /// Sunday).
+    /// Corpus Christi — Easter Sunday + 60.
     #[must_use]
     pub const fn corpus_christi() -> Self {
         Self::new(60)
@@ -156,27 +134,20 @@ impl EasterOffset {
     }
 
     /// `true` iff `date` is observed as this Easter-relative holiday.
-    ///
-    /// Easter Sunday always falls in March–May (Western) or April–May
-    /// (Orthodox); with any reasonable offset the observed date stays
-    /// inside the same calendar year, so only `date.year()` is
-    /// checked. A user-supplied offset extreme enough to cross a year
-    /// boundary is outside what this rule covers — use
-    /// [`Rule::Custom`](super::Rule::Custom) instead.
+    /// Only `date.year()` is checked; offsets extreme enough to cross a
+    /// year boundary need [`Rule::Custom`](super::Rule::Custom).
     #[must_use]
     pub fn is_holiday(&self, date: Date) -> bool {
         let year = date.year();
         if !self.years.contains(year) {
             return false;
         }
-        // The lookup returns Easter Monday; Easter Sunday is one day
-        // earlier. All offsets here are Sunday-relative.
+        // Lookup returns Easter Monday; offsets are Sunday-relative.
         let em_doy = easter_monday(year, self.method);
         let Ok(jan1) = Date::from_ymd(year.get(), Month::Jan, 1) else {
             return false;
         };
-        // `em_doy - 1` is the day-of-year of Easter Sunday; subtract
-        // one more to convert to a zero-based `add_days` offset.
+        // em_doy − 2 = zero-based offset of Easter Sunday from Jan 1.
         let Ok(easter_sun) = jan1.add_days(i32::from(em_doy) - 2) else {
             return false;
         };
@@ -219,10 +190,7 @@ mod tests {
 
     #[test]
     fn ascension_whit_corpus_christi() {
-        // 2024 Easter Sunday = March 31.
-        //   Ascension = May 9 (Easter Sunday + 39).
-        //   Whit Monday = May 20 (Easter Sunday + 50).
-        //   Corpus Christi = May 30 (Easter Sunday + 60).
+        // 2024: Ascension May 9, Whit Monday May 20, Corpus Christi May 30.
         assert!(EasterOffset::ascension().is_holiday(ymd(2024, Month::May, 9)));
         assert!(EasterOffset::whit_monday().is_holiday(ymd(2024, Month::May, 20)));
         assert!(EasterOffset::corpus_christi().is_holiday(ymd(2024, Month::May, 30)));
@@ -230,8 +198,7 @@ mod tests {
 
     #[test]
     fn orthodox_method() {
-        // 2024 Orthodox Easter Sunday = May 5 (Gregorian).
-        // Orthodox Easter Monday = May 6.
+        // 2024 Orthodox Easter Sunday = May 5 (Gregorian), Monday = May 6.
         let ortho_sunday = EasterOffset::new_orthodox(0);
         let ortho_monday = EasterOffset::new_orthodox(1);
         assert!(ortho_sunday.is_holiday(ymd(2024, Month::May, 5)));

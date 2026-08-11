@@ -1,22 +1,14 @@
 //! [`BusinessDayConvention`] — how to roll a date that is not a business
 //! day onto one that is.
 //!
-//! Modeled on `QuantLib`'s
-//! [`ql/time/businessdayconvention.hpp`](https://github.com/lballabio/QuantLib/blob/master/ql/time/businessdayconvention.hpp).
-//!
-//! The five conventions exposed here cover common ISDA and bond-market
-//! usage. `QuantLib`'s `HalfMonthModifiedFollowing` and `Nearest`
-//! variants are intentionally not modeled — they are rarely used, and
-//! adding them is cheap if a use case appears.
+//! Matches `QuantLib`'s semantics.
 
 use core::fmt;
 
 /// How to roll a non-business date onto a business date.
 ///
-/// Apply via [`Calendar::adjust`](crate::Calendar::adjust). All
-/// variants are total: `adjust` only fails when the search would
-/// run past [`Date::MIN`](crate::Date::MIN) or
-/// [`Date::MAX`](crate::Date::MAX).
+/// Apply via [`Calendar::adjust`](crate::Calendar::adjust); `adjust`
+/// only fails when the search would leave the supported date range.
 ///
 /// ```
 /// use fasti::{BusinessDayConvention, Date, Month, calendars};

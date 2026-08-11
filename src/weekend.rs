@@ -1,9 +1,7 @@
 //! [`Weekend`]: a bitmask over the seven weekdays.
 //!
-//! Most markets run a Saturday/Sunday weekend; traditional Gulf markets
-//! observed Friday/Saturday; some markets have a single weekend day or
-//! none. A [`Weekend`] captures any of these configurations as a 7-bit
-//! mask that is `Copy` and const-constructible.
+//! Captures Sat/Sun, Fri/Sat, single-day, or no-weekend configurations
+//! as a `Copy`, const-constructible 7-bit mask.
 
 use crate::Weekday;
 

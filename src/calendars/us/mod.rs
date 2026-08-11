@@ -1,29 +1,15 @@
-//! US market calendars — settlement, NERC, Federal Reserve, etc.
-//!
-//! These are ports of `QuantLib`'s
+//! US market calendars — ports of `QuantLib`'s
 //! [`UnitedStates`](https://github.com/lballabio/QuantLib/blob/master/ql/time/calendars/unitedstates.cpp)
-//! market variants, expressed as sequences of [`Rule`](crate::Rule)s
-//! over a Saturday/Sunday weekend. Historical variants (pre-1971
-//! Washington's Birthday / Memorial Day, Veterans Day during the
-//! 1971–1977 Uniform Monday Holiday Act transition) are included.
-//!
-//! Variants currently shipped:
+//! market variants, historical pre-1971 rules included.
 //!
 //! - [`SETTLEMENT`] — generic US settlement calendar.
-//! - [`NERC`] — North American Energy Reliability Council off-peak
-//!   calendar (6 holidays + pre-1971 Memorial Day variant).
-//! - [`FEDERAL_RESERVE`] — Federal Reserve Bankwire System calendar
-//!   (same holiday set as Settlement but no Saturday-back shift).
-//! - [`NYSE`] — New York Stock Exchange calendar (MLK since 1998, no
-//!   Columbus/Veterans, Good Friday, pre-1981 election days, 20+
-//!   special historic closings).
-//! - [`GOVERNMENT_BOND`] — US government bond market calendar
-//!   (Settlement + Good Friday with post-1996 NFP exception + Veterans
-//!   Day `SunForward` + 3 historic closings).
-//! - [`SOFR`] — SOFR fixing calendar (Government Bond with Good Friday
-//!   always observed, no NFP exception).
+//! - [`NERC`] — energy off-peak calendar (6 holidays).
+//! - [`FEDERAL_RESERVE`] — Fed Bankwire (Settlement, no Saturday-back shift).
+//! - [`NYSE`] — New York Stock Exchange (Good Friday, historic closings).
+//! - [`GOVERNMENT_BOND`] — Settlement + Good Friday with post-1996 NFP exception.
+//! - [`SOFR`] — Government Bond with Good Friday always observed.
 //!
-//! Variant planned for follow-up: `LIBOR_IMPACT`.
+//! Planned: `LIBOR_IMPACT`.
 
 mod federal_reserve;
 mod government_bond;

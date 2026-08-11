@@ -1,8 +1,5 @@
-//! Built-in calendars, grouped by country / market.
-//!
-//! Every calendar is a `pub const Calendar<'static>` — zero allocation,
-//! zero vtable, construction-free at the call site. Callers pass by
-//! value (`Calendar` is `Copy`).
+//! Built-in calendars, grouped by country / market. Every calendar is a
+//! `pub const Calendar<'static>`, passed by value (`Copy`).
 //!
 //! ```
 //! use fasti::{Date, Month, calendars::us};
@@ -10,21 +7,15 @@
 //! # Ok::<(), fasti::TimeError>(())
 //! ```
 //!
-//! Two market-neutral baselines live at this level:
-//! [`WEEKENDS_ONLY`] (Saturday/Sunday weekend, no holidays) and
-//! [`NULL_CALENDAR`] (no weekend, no holidays — every day is a
-//! business day, as in `QuantLib`'s `NullCalendar`).
+//! Market-neutral baselines: [`WEEKENDS_ONLY`] and [`NULL_CALENDAR`].
 
 use crate::{Calendar, Weekend};
 
 pub mod france;
 pub mod us;
 
-/// Saturday/Sunday weekend, no holidays.
-///
-/// The right default when business-day adjustment should skip
-/// weekends but no market holiday set applies (or as a placeholder
-/// while a deal's calendar is undecided).
+/// Saturday/Sunday weekend, no holidays — the default when no market
+/// holiday set applies.
 ///
 /// ```
 /// use fasti::{Date, Month, calendars};
@@ -39,12 +30,8 @@ pub const WEEKENDS_ONLY: Calendar<'static> = Calendar {
     rules: &[],
 };
 
-/// No weekend, no holidays — every day is a business day.
-///
-/// The equivalent of `QuantLib`'s `NullCalendar`: useful for
-/// theoretical calculations and for markets that never close.
-/// Business-day adjustment under this calendar is always the
-/// identity.
+/// No weekend, no holidays — every day is a business day, as in
+/// `QuantLib`'s `NullCalendar`. Adjustment is always the identity.
 ///
 /// ```
 /// use fasti::{Date, Month, calendars};
@@ -78,8 +65,7 @@ mod tests {
 
     #[test]
     fn null_calendar_treats_every_day_as_business() {
-        // Scan a full leap year: every single day is a business day,
-        // so adjustment under any convention is the identity.
+        // Scan a full leap year: every day is a business day.
         let mut d = Date::from_ymd(2024, Month::Jan, 1).unwrap();
         let last = Date::from_ymd(2024, Month::Dec, 31).unwrap();
         while d <= last {

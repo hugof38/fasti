@@ -30,9 +30,7 @@ pub struct NthWeekday {
 }
 
 impl NthWeekday {
-    /// Construct an Nth-weekday-of-month rule, covering all supported
-    /// years. Refine with [`from_year`](Self::from_year) or
-    /// [`years`](Self::years).
+    /// Construct an Nth-weekday-of-month rule covering all supported years.
     #[must_use]
     pub const fn new(n: Ordinal, weekday: Weekday, month: Month) -> Self {
         Self {
@@ -94,8 +92,7 @@ impl NthWeekday {
         if date.weekday() as u8 != self.weekday as u8 {
             return false;
         }
-        // Day-of-month `d` → occurrence `(d - 1) / 7 + 1`:
-        //   1..=7  → 1st, 8..=14 → 2nd, 15..=21 → 3rd, ...
+        // Day-of-month d → occurrence (d − 1) / 7 + 1.
         let occurrence = (date.day() - 1) / 7 + 1;
         occurrence == self.n.get()
     }
@@ -113,8 +110,7 @@ mod tests {
     #[test]
     fn third_monday_of_january_is_mlk() {
         let mlk = NthWeekday::new(Ordinal::Third, Weekday::Mon, Month::Jan);
-        // Third Mondays of January across several years (independently
-        // verified).
+        // Third Mondays of January, independently verified.
         assert!(mlk.is_holiday(ymd(2024, Month::Jan, 15)));
         assert!(mlk.is_holiday(ymd(2025, Month::Jan, 20)));
         assert!(mlk.is_holiday(ymd(2026, Month::Jan, 19)));
@@ -153,8 +149,7 @@ mod tests {
         // MLK Day federal since 1986.
         let rule = NthWeekday::new(Ordinal::Third, Weekday::Mon, Month::Jan)
             .from_year(Year::new(1986).unwrap());
-        // 1985 third Monday of January is January 21 — NOT a holiday
-        // under this rule (pre-federal).
+        // 1985 Jan 21 (3rd Monday) — pre-federal, not a holiday.
         assert!(!rule.is_holiday(ymd(1985, Month::Jan, 21)));
         assert!(rule.is_holiday(ymd(1986, Month::Jan, 20)));
     }

@@ -6,13 +6,8 @@ use crate::{
     WeekendShift, Year, YearRange,
 };
 
-/// The NERC off-peak calendar — a minimal 6-holiday set (plus the
-/// pre-1971 Memorial Day variant) used for North American electricity
-/// off-peak-hours calculations. Port of `QuantLib`'s
-/// `UnitedStates::NERC`.
-///
-/// All weekend shifts are Sunday-forward only — Saturday observances
-/// are not moved back to Friday.
+/// The NERC off-peak calendar — port of `QuantLib`'s `UnitedStates::NERC`.
+/// A minimal 6-holiday set; weekend shifts are Sunday-forward only.
 ///
 /// | Holiday | Rule |
 /// |---|---|
@@ -29,9 +24,7 @@ pub const NERC: Calendar<'static> = Calendar {
     rules: &[
         // New Year's Day — Jan 1, Sunday→Monday only.
         Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::SunForward)),
-        // Memorial Day (pre-1971): May 30 with full weekend shift
-        // (QuantLib's `isMemorialDay` keeps the SatBack/SunForward form
-        // for the pre-1971 branch).
+        // Memorial Day (pre-1971): May 30 with full weekend shift.
         Rule::Fixed(
             FixedDate::new(Month::May, 30)
                 .shift(WeekendShift::SatBackSunForward)
@@ -73,8 +66,7 @@ mod tests {
         assert!(NERC.is_holiday(ymd(2024, Month::Dec, 25))); // Christmas
     }
 
-    /// NERC observes no MLK, no Washington's, no Juneteenth, no
-    /// Columbus, no Veterans Day.
+    /// NERC observes none of the other federal holidays.
     #[test]
     fn nerc_excludes_non_peak_holidays() {
         assert!(!NERC.is_holiday(ymd(2024, Month::Jan, 15))); // MLK
@@ -84,8 +76,7 @@ mod tests {
         assert!(!NERC.is_holiday(ymd(2024, Month::Nov, 11))); // Veterans
     }
 
-    /// Sunday→Monday shift but Saturday natural dates are NOT observed
-    /// the prior Friday under NERC.
+    /// Sunday→Monday shift only; no Friday observance for Saturdays.
     #[test]
     fn nerc_sunday_forward_only() {
         // Christmas 2022 (Sun) → observed Mon Dec 26.
@@ -93,9 +84,7 @@ mod tests {
         assert!(!NERC.is_holiday(ymd(2022, Month::Dec, 25)));
         // Jul 4 2026 (Sat) → NO Friday observance under NERC.
         assert!(!NERC.is_holiday(ymd(2026, Month::Jul, 3)));
-        // Jul 4 2026 itself is Saturday — also a weekend, not a
-        // business day, but the rule doesn't mark it as a holiday per
-        // se. Regardless, it's not a business day.
+        // Jul 4 2026 itself is a Saturday — not a business day.
         assert!(!NERC.is_business_day(ymd(2026, Month::Jul, 4)));
     }
 }

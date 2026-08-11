@@ -1,12 +1,6 @@
 //! Conversions to and from [`chrono`] types, behind the `chrono`
 //! feature flag.
 //!
-//! fasti never uses `chrono` internally — the serial [`Date`]
-//! representation stays — but codebases already holding
-//! [`chrono::NaiveDate`]s should not have to decompose them by hand
-//! at every call site. With this feature enabled, the boundary is one
-//! conversion:
-//!
 //! ```
 //! use fasti::{Date, calendars::us};
 //!
@@ -21,10 +15,8 @@
 //! # Ok::<(), fasti::TimeError>(())
 //! ```
 //!
-//! The forward direction is [`TryFrom`] because `chrono`'s year range
-//! is far wider than fasti's supported 1901..=2199; out-of-range
-//! dates return [`TimeError::YearOutOfRange`]. [`Weekday`] and
-//! [`Month`] convert infallibly in both directions.
+//! [`Date`] from chrono is [`TryFrom`] (chrono's year range is wider);
+//! [`Weekday`] and [`Month`] convert infallibly in both directions.
 
 use crate::{Date, Month, TimeError, Weekday};
 use chrono::Datelike;
@@ -37,9 +29,7 @@ impl TryFrom<chrono::NaiveDate> for Date {
     /// [`TimeError::YearOutOfRange`].
     fn try_from(naive: chrono::NaiveDate) -> Result<Self, Self::Error> {
         let year = u16::try_from(naive.year()).map_err(|_| TimeError::YearOutOfRange)?;
-        // chrono months are 1..=12 and days 1..=31 by construction, so
-        // both narrowings are exact and `from_ymd` can only fail on
-        // the year range (checked again inside).
+        // chrono months are 1..=12 and days 1..=31, so both narrowings are exact.
         #[allow(clippy::cast_possible_truncation)]
         let month = Month::try_from_u8(naive.month() as u8)?;
         #[allow(clippy::cast_possible_truncation)]
@@ -53,10 +43,8 @@ impl From<Date> for chrono::NaiveDate {
     /// fasti's supported range is representable in `chrono`.
     fn from(date: Date) -> Self {
         let (y, m, d) = date.to_ymd();
-        // `from_ymd_opt` is `Some` for every valid Gregorian date in
-        // chrono's range, which contains all of 1901..=2199; the
-        // `unwrap_or_default` arm is unreachable and exists only to
-        // honour the crate's no-panic contract.
+        // The `unwrap_or_default` arm is unreachable (chrono covers all of
+        // 1901..=2199); it exists only to honour the no-panic contract.
         Self::from_ymd_opt(i32::from(y.get()), u32::from(m.get()), u32::from(d)).unwrap_or_default()
     }
 }

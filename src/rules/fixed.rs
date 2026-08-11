@@ -9,15 +9,11 @@ use crate::{Date, Month, Weekday, Year, YearRange};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum WeekendShift {
-    /// Do not shift. The holiday is observed on the natural date
-    /// regardless of weekday. (Most bank holidays that coincide with a
-    /// weekend are simply "lost" under this policy.)
+    /// Do not shift; a weekend holiday is simply lost.
     None,
-    /// US federal convention: Saturday rolls back to Friday; Sunday rolls
-    /// forward to Monday.
+    /// US federal convention: Saturday → Friday, Sunday → Monday.
     SatBackSunForward,
-    /// UK bank-holiday convention: Sunday rolls forward to Monday;
-    /// Saturday natural date is unchanged.
+    /// UK convention: Sunday → Monday; Saturday unchanged.
     SunForward,
 }
 
@@ -47,10 +43,8 @@ pub struct FixedDate {
 }
 
 impl FixedDate {
-    /// Construct a fixed-date rule for the given month and day, with no
-    /// weekend shift and covering all supported years. Refine with
-    /// [`shift`](Self::shift), [`from_year`](Self::from_year), or
-    /// [`years`](Self::years).
+    /// Construct a fixed-date rule with no weekend shift, covering all
+    /// supported years; refine with [`shift`](Self::shift) etc.
     #[must_use]
     pub const fn new(month: Month, day: u8) -> Self {
         Self {
@@ -106,17 +100,11 @@ impl FixedDate {
         self.years
     }
 
-    /// `true` iff `date` is observed as this holiday.
-    ///
-    /// When the natural date falls on a weekend and the shift moves the
-    /// observed date into an adjacent year, both year candidates are
-    /// considered — so December 31 can be an observed Jan 1 from the
-    /// following year.
+    /// `true` iff `date` is observed as this holiday. Shifts crossing a
+    /// year boundary (e.g. Jan 1 → Dec 31) are handled.
     #[must_use]
     pub fn is_holiday(&self, date: Date) -> bool {
-        // Weekend shifts move the observed date by ±1 day, which can
-        // cross a year boundary (Jan 1 on Saturday → observed Fri
-        // Dec 31 of the previous year). Check a ±1-year window.
+        // A shift can cross a year boundary; check a ±1-year window.
         let mid = date.year().get();
         let candidates = [
             mid.saturating_sub(1),
@@ -143,9 +131,8 @@ impl FixedDate {
         false
     }
 
-    /// Resolve the observed date of the given natural date under this
-    /// rule's shift policy, or [`None`] if the shift would cross the
-    /// supported-date range.
+    /// Observed date under the shift policy, or [`None`] if it would
+    /// leave the supported date range.
     fn apply_shift(self, natural: Date) -> Option<Date> {
         match self.shift {
             WeekendShift::None => Some(natural),
@@ -175,8 +162,7 @@ mod tests {
     fn natural_no_shift() {
         let rule = FixedDate::new(Month::Jul, 4);
         assert!(rule.is_holiday(ymd(2024, Month::Jul, 4)));
-        // 2026-07-04 is a Saturday. With no shift, the natural date IS
-        // still the holiday (even though it is also a weekend).
+        // 2026-07-04 is a Saturday — still the holiday with no shift.
         assert!(rule.is_holiday(ymd(2026, Month::Jul, 4)));
         assert!(!rule.is_holiday(ymd(2026, Month::Jul, 3)));
     }
