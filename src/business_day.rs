@@ -19,19 +19,11 @@ use core::fmt;
 /// [`Date::MAX`](crate::Date::MAX).
 ///
 /// ```
-/// use fasti::{
-///     BusinessDayConvention, Calendar, Date, Month, Weekend,
-/// };
-///
-/// const WEEKENDS: Calendar<'static> = Calendar {
-///     name: "Weekends Only",
-///     weekend: Weekend::SAT_SUN,
-///     rules: &[],
-/// };
+/// use fasti::{BusinessDayConvention, Date, Month, calendars};
 ///
 /// // Saturday rolls forward to Monday under Following.
 /// let sat = Date::from_ymd(2024, Month::Jul, 6)?;
-/// let adjusted = WEEKENDS.adjust(sat, BusinessDayConvention::Following)?;
+/// let adjusted = calendars::WEEKENDS_ONLY.adjust(sat, BusinessDayConvention::Following)?;
 /// assert_eq!(adjusted, Date::from_ymd(2024, Month::Jul, 8)?);
 /// # Ok::<(), fasti::TimeError>(())
 /// ```

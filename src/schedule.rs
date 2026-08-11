@@ -191,17 +191,12 @@ impl Schedule {
     /// any.
     ///
     /// ```
-    /// use fasti::{Calendar, Date, Month, Period, ScheduleBuilder, Weekend};
-    /// const WEEKENDS: Calendar<'static> = Calendar {
-    ///     name: "Weekends Only",
-    ///     weekend: Weekend::SAT_SUN,
-    ///     rules: &[],
-    /// };
+    /// use fasti::{Date, Month, Period, ScheduleBuilder, calendars};
     /// let s = ScheduleBuilder::new(
     ///     Date::from_ymd(2025, Month::Jan, 15)?,
     ///     Date::from_ymd(2026, Month::Jan, 15)?,
     ///     Period::Months(3),
-    ///     WEEKENDS,
+    ///     calendars::WEEKENDS_ONLY,
     /// )
     /// .forwards()
     /// .build()?;
@@ -295,14 +290,8 @@ impl<'a> IntoIterator for &'a Schedule {
 ///
 /// ```
 /// use fasti::{
-///     BusinessDayConvention, Calendar, Date, DateGenerationRule, Month,
-///     Period, ScheduleBuilder, Weekend,
-/// };
-///
-/// const WEEKENDS: Calendar<'static> = Calendar {
-///     name: "Weekends Only",
-///     weekend: Weekend::SAT_SUN,
-///     rules: &[],
+///     BusinessDayConvention, Date, DateGenerationRule, Month, Period,
+///     ScheduleBuilder, calendars,
 /// };
 ///
 /// let effective = Date::from_ymd(2025, Month::Jan, 15)?;
@@ -312,7 +301,7 @@ impl<'a> IntoIterator for &'a Schedule {
 ///     effective,
 ///     termination,
 ///     Period::Months(3),
-///     WEEKENDS,
+///     calendars::WEEKENDS_ONLY,
 /// )
 /// .with_convention(BusinessDayConvention::ModifiedFollowing)
 /// .with_rule(DateGenerationRule::Forward)
@@ -689,14 +678,10 @@ impl<'a> BdcAdjuster<'a> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::{Month, Weekend};
+    use crate::Month;
     use proptest::prelude::*;
 
-    const WEEKENDS: Calendar<'static> = Calendar {
-        name: "Weekends Only",
-        weekend: Weekend::SAT_SUN,
-        rules: &[],
-    };
+    const WEEKENDS: Calendar<'static> = crate::calendars::WEEKENDS_ONLY;
 
     fn ymd(y: u16, m: Month, d: u8) -> Date {
         Date::from_ymd(y, m, d).unwrap()

@@ -99,25 +99,17 @@ impl Calendar<'_> {
     /// extreme boundary of the supported range.
     ///
     /// ```
-    /// use fasti::{
-    ///     BusinessDayConvention, Calendar, Date, Month, Weekend,
-    /// };
-    ///
-    /// const WEEKENDS: Calendar<'static> = Calendar {
-    ///     name: "Weekends Only",
-    ///     weekend: Weekend::SAT_SUN,
-    ///     rules: &[],
-    /// };
+    /// use fasti::{BusinessDayConvention, Date, Month, calendars};
     ///
     /// // Sun Aug 31 2025: Following crosses into Sep, ModifiedFollowing
     /// // falls back to Fri Aug 29.
     /// let sun = Date::from_ymd(2025, Month::Aug, 31)?;
     /// assert_eq!(
-    ///     WEEKENDS.adjust(sun, BusinessDayConvention::Following)?,
+    ///     calendars::WEEKENDS_ONLY.adjust(sun, BusinessDayConvention::Following)?,
     ///     Date::from_ymd(2025, Month::Sep, 1)?,
     /// );
     /// assert_eq!(
-    ///     WEEKENDS.adjust(sun, BusinessDayConvention::ModifiedFollowing)?,
+    ///     calendars::WEEKENDS_ONLY.adjust(sun, BusinessDayConvention::ModifiedFollowing)?,
     ///     Date::from_ymd(2025, Month::Aug, 29)?,
     /// );
     /// # Ok::<(), fasti::TimeError>(())
@@ -181,17 +173,10 @@ impl Calendar<'_> {
     /// stay within May:
     ///
     /// ```
-    /// use fasti::{
-    ///     BusinessDayConvention, Calendar, Date, Month, Period, Weekend,
-    /// };
-    /// const WEEKENDS: Calendar<'static> = Calendar {
-    ///     name: "Weekends Only",
-    ///     weekend: Weekend::SAT_SUN,
-    ///     rules: &[],
-    /// };
+    /// use fasti::{BusinessDayConvention, Date, Month, Period, calendars};
     /// let apr_eom = Date::from_ymd(2025, Month::Apr, 30)?;
     /// assert_eq!(
-    ///     WEEKENDS.advance(
+    ///     calendars::WEEKENDS_ONLY.advance(
     ///         apr_eom,
     ///         Period::Months(1),
     ///         BusinessDayConvention::ModifiedFollowing,
@@ -386,11 +371,7 @@ mod tests {
 
     // ---- adjust ---------------------------------------------------------
 
-    const WEEKENDS_ONLY: Calendar<'static> = Calendar {
-        name: "Weekends Only",
-        weekend: Weekend::SAT_SUN,
-        rules: &[],
-    };
+    const WEEKENDS_ONLY: Calendar<'static> = crate::calendars::WEEKENDS_ONLY;
 
     #[test]
     fn adjust_business_day_returns_input_for_every_convention() {

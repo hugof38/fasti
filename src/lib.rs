@@ -43,7 +43,7 @@
 //!
 //! Planned:
 //!
-//! - Further built-in calendars (`TARGET`, `UK_BANK`, `WEEKENDS_ONLY`)
+//! - Further built-in calendars (`TARGET`, `UK_BANK`)
 
 #![no_std]
 #![forbid(unsafe_code)]
