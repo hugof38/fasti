@@ -33,11 +33,13 @@
 //! methods), the [`Weekend`] bitmask, year ranges ([`YearRange`]),
 //! calendars ([`Calendar`], [`CalendarBuilder`]) with built-in
 //! `pub const` values under [`calendars`], [`BusinessDayConvention`]
-//! with [`Calendar::adjust`] and [`Calendar::advance`], and the
-//! [`TimeError`] type returned by fallible constructors.
+//! with [`Calendar::adjust`] and [`Calendar::advance`], the
+//! [`Fraction`] integer-rational type that day-count conventions
+//! return, the [`DayCount`] trait with [`Act360`], [`Act365Fixed`],
+//! [`Thirty360Bond`], and [`ActActISDA`] impls, and the [`TimeError`]
+//! type returned by fallible constructors.
 //!
-//! Planned: day-count conventions returning integer rationals, and
-//! payment-schedule generation.
+//! Planned: payment-schedule generation.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -48,8 +50,10 @@ mod business_day;
 mod calendar;
 pub mod calendars;
 mod date;
+mod daycount;
 mod easter;
 mod error;
+mod fraction;
 mod period;
 mod rules;
 mod weekend;
@@ -58,8 +62,10 @@ mod year_range;
 pub use business_day::BusinessDayConvention;
 pub use calendar::{Calendar, CalendarBuilder};
 pub use date::{Date, Month, Ordinal, Weekday, Year};
+pub use daycount::{Act360, Act365Fixed, ActActISDA, DayCount, Thirty360Bond};
 pub use easter::{EasterMethod, easter_monday, easter_sunday};
 pub use error::TimeError;
+pub use fraction::Fraction;
 pub use period::{Frequency, Period};
 pub use rules::{EasterOffset, FixedDate, LastWeekday, NthWeekday, OneOff, Rule, WeekendShift};
 pub use weekend::Weekend;

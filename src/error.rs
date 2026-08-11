@@ -43,4 +43,8 @@ pub enum TimeError {
     /// fails.
     #[error("period does not correspond to a canonical frequency")]
     NonCanonicalPeriod,
+    /// A [`Fraction`](crate::Fraction) was constructed with a
+    /// zero denominator.
+    #[error("year fraction denominator must be non-zero")]
+    ZeroDenominator,
 }
