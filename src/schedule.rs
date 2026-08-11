@@ -40,39 +40,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::{BusinessDayConvention, Calendar, Date, Frequency, Period, TimeError};
-
-/// One accrual window of a [`Schedule`] — the closed-open interval
-/// from `start` to the next period's start (which is this period's
-/// `end`).
-///
-/// Yielded by [`Schedule::periods`]. The two dates are always in
-/// strictly ascending order because the parent schedule is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct AccrualPeriod {
-    start: Date,
-    end: Date,
-}
-
-impl AccrualPeriod {
-    /// The start (earlier) date of the accrual window.
-    #[must_use]
-    pub const fn start(self) -> Date {
-        self.start
-    }
-
-    /// The end (later) date of the accrual window.
-    #[must_use]
-    pub const fn end(self) -> Date {
-        self.end
-    }
-}
-
-impl From<AccrualPeriod> for (Date, Date) {
-    fn from(p: AccrualPeriod) -> Self {
-        (p.start, p.end)
-    }
-}
+use crate::{BusinessDayConvention, Calendar, Date, Frequency, Period, Span, TimeError};
 
 /// How to walk the schedule grid between effective and termination.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -124,22 +92,10 @@ pub struct Schedule {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Generation {
-    tenor: Period,
-    end_of_month: bool,
-}
-
-impl Generation {
     /// The regular period between coupons.
-    #[must_use]
-    pub const fn tenor(self) -> Period {
-        self.tenor
-    }
-
+    pub tenor: Period,
     /// Whether generation snapped dates to the end of their month.
-    #[must_use]
-    pub const fn end_of_month(self) -> bool {
-        self.end_of_month
-    }
+    pub end_of_month: bool,
 }
 
 impl TryFrom<Vec<Date>> for Schedule {
@@ -252,53 +208,10 @@ impl Schedule {
         self.generation
     }
 
-    /// Number of dates (i.e., `periods + 1`).
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.dates.len()
-    }
-
-    /// `true` iff the schedule has no dates. Cannot occur on a
-    /// successfully built `Schedule`.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.dates.is_empty()
-    }
-
-    /// First date — the adjusted effective.
-    #[must_use]
-    pub fn first(&self) -> Option<Date> {
-        self.dates.first().copied()
-    }
-
-    /// Last date — the adjusted termination.
-    #[must_use]
-    pub fn last(&self) -> Option<Date> {
-        self.dates.last().copied()
-    }
-
-    /// Iterate dates in chronological order.
-    pub fn iter(&self) -> core::slice::Iter<'_, Date> {
-        self.dates.iter()
-    }
-
-    /// Iterate accrual periods — adjacent `(start, end)` windows
-    /// over the schedule's dates.
-    pub fn periods(&self) -> impl Iterator<Item = AccrualPeriod> + '_ {
-        self.dates.windows(2).map(|w| AccrualPeriod {
-            start: w[0],
-            end: w[1],
-        })
-    }
-
-    /// Non-panicking date access.
-    ///
-    /// Use this in preference to indexing when the index might be
-    /// out of bounds. Indexing via `schedule[i]` panics, matching
-    /// slice semantics.
-    #[must_use]
-    pub fn get(&self, index: usize) -> Option<Date> {
-        self.dates.get(index).copied()
+    /// Iterate accrual periods — adjacent windows over the coupon
+    /// dates.
+    pub fn periods(&self) -> impl Iterator<Item = Span> + '_ {
+        self.dates.windows(2).map(|w| Span::from(w[0]..w[1]))
     }
 
     /// The largest schedule date strictly less than `ref_date`, if
@@ -384,13 +297,13 @@ impl Schedule {
     }
 }
 
-impl core::ops::Index<usize> for Schedule {
-    type Output = Date;
+impl core::ops::Deref for Schedule {
+    type Target = [Date];
 
-    /// Panicking date access. Use [`Schedule::get`] for the
-    /// non-panicking variant.
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.dates[index]
+    /// The coupon dates, so a `Schedule` indexes, slices, and iterates
+    /// like the date list it is. Reference dates stay explicit.
+    fn deref(&self) -> &Self::Target {
+        &self.dates
     }
 }
 
@@ -400,6 +313,15 @@ impl<'a> IntoIterator for &'a Schedule {
 
     fn into_iter(self) -> Self::IntoIter {
         self.dates.iter()
+    }
+}
+
+impl IntoIterator for Schedule {
+    type Item = Date;
+    type IntoIter = alloc::vec::IntoIter<Date>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.dates.into_iter()
     }
 }
 
@@ -425,9 +347,10 @@ impl<'a> IntoIterator for &'a Schedule {
 /// .with_rule(DateGenerationRule::Forward)
 /// .build()?;
 ///
+/// // A Schedule derefs to its coupon dates, so slice methods apply.
 /// assert_eq!(schedule.len(), 5);
-/// assert_eq!(schedule.first().unwrap(), effective);
-/// assert_eq!(schedule.last().unwrap(), termination);
+/// assert_eq!(schedule[0], effective);
+/// assert_eq!(schedule.last().copied(), Some(termination));
 /// # Ok::<(), fasti::TimeError>(())
 /// ```
 #[derive(Debug, Clone)]
@@ -1114,8 +1037,8 @@ mod tests {
         .with_termination_convention(BusinessDayConvention::Unadjusted)
         .build()
         .unwrap();
-        assert_eq!(s.first().unwrap(), ymd(2025, Month::Jan, 6));
-        assert_eq!(s.last().unwrap(), ymd(2026, Month::Jan, 17));
+        assert_eq!(s.first().copied().unwrap(), ymd(2025, Month::Jan, 6));
+        assert_eq!(s.last().copied().unwrap(), ymd(2026, Month::Jan, 17));
     }
 
     // ---- Periods iterator ---------------------------------------------
@@ -1133,7 +1056,7 @@ mod tests {
         .with_termination_convention(BusinessDayConvention::Unadjusted)
         .build()
         .unwrap();
-        let pairs: Vec<(Date, Date)> = s.periods().map(Into::into).collect();
+        let pairs: Vec<(Date, Date)> = s.periods().map(|p| (p.start, p.end)).collect();
         assert_eq!(
             pairs,
             vec![
@@ -1158,8 +1081,8 @@ mod tests {
         .build()
         .unwrap();
         let p = s.periods().next().unwrap();
-        assert_eq!(p.start(), ymd(2025, Month::Jan, 15));
-        assert_eq!(p.end(), ymd(2025, Month::Feb, 15));
+        assert_eq!(p.start, ymd(2025, Month::Jan, 15));
+        assert_eq!(p.end, ymd(2025, Month::Feb, 15));
     }
 
     // ---- Validation errors --------------------------------------------
@@ -1248,9 +1171,9 @@ mod tests {
     }
 
     #[test]
-    fn get_returns_some_or_none() {
+    fn slice_access_is_bounds_checked() {
         let s = quarterly_2025();
-        assert_eq!(s.get(0), Some(ymd(2025, Month::Jan, 15)));
+        assert_eq!(s.first().copied(), Some(ymd(2025, Month::Jan, 15)));
         assert_eq!(s.get(s.len()), None);
     }
 
@@ -1338,7 +1261,7 @@ mod tests {
         );
         // Cutoff equal to a schedule date — that date is included.
         let truncated = s.after(ymd(2025, Month::Jul, 15));
-        assert_eq!(truncated.first(), Some(ymd(2025, Month::Jul, 15)));
+        assert_eq!(truncated.first().copied(), Some(ymd(2025, Month::Jul, 15)));
         // Cutoff past the last → empty.
         assert!(s.after(ymd(2027, Month::Jan, 1)).is_empty());
         // Cutoff before the first → all dates.
@@ -1357,7 +1280,7 @@ mod tests {
         );
         // Cutoff equal to a schedule date — that date is included.
         let truncated = s.until(ymd(2025, Month::Jul, 15));
-        assert_eq!(truncated.last(), Some(ymd(2025, Month::Jul, 15)));
+        assert_eq!(truncated.last().copied(), Some(ymd(2025, Month::Jul, 15)));
         // Cutoff before the first → empty.
         assert!(s.until(ymd(2024, Month::Dec, 1)).is_empty());
         // Cutoff past the last → all dates.
@@ -1421,8 +1344,8 @@ mod tests {
                 let expected_last = WEEKENDS
                     .adjust(termination, BusinessDayConvention::Unadjusted)
                     .unwrap();
-                prop_assert_eq!(s.first().unwrap(), expected_first);
-                prop_assert_eq!(s.last().unwrap(), expected_last);
+                prop_assert_eq!(s.first().copied().unwrap(), expected_first);
+                prop_assert_eq!(s.last().copied().unwrap(), expected_last);
             }
         }
 

@@ -45,6 +45,7 @@ mod fraction;
 mod period;
 mod rules;
 mod schedule;
+mod span;
 mod weekend;
 mod year_range;
 
@@ -60,6 +61,7 @@ pub use error::TimeError;
 pub use fraction::Fraction;
 pub use period::{Frequency, Period};
 pub use rules::{EasterOffset, FixedDate, LastWeekday, NthWeekday, OneOff, Rule, WeekendShift};
-pub use schedule::{AccrualPeriod, DateGenerationRule, Generation, Schedule, ScheduleBuilder};
+pub use schedule::{DateGenerationRule, Generation, Schedule, ScheduleBuilder};
+pub use span::Span;
 pub use weekend::Weekend;
 pub use year_range::YearRange;

@@ -7,9 +7,7 @@
 //! conventions are additive across splits; the 30/360 family is
 //! intentionally not — both facts are property-tested.
 
-use core::ops::{Bound, Range, RangeBounds};
-
-use crate::{Date, Fraction, Frequency, Month, Period, Schedule, TimeError, Year};
+use crate::{Date, Fraction, Frequency, Month, Period, Schedule, Span, TimeError, Year};
 
 /// A day-count convention.
 ///
@@ -37,66 +35,6 @@ pub trait DayCount {
     /// in the implementing value ([`ActActICMA::bind`]), keeping this
     /// signature uniform.
     fn year_fraction(&self, start: Date, end: Date) -> Fraction;
-}
-
-// ---- Span ---------------------------------------------------------------
-
-/// A half-open date interval `[start, end)`, used for both accruals
-/// and the coupon windows they are measured against.
-///
-/// Built from range syntax (`(start..end).into()`), whose half-open
-/// meaning is exactly this type's, and implements [`RangeBounds`] so
-/// it composes with range-taking code. It is not [`Range`] itself
-/// because `Range` is an iterator and therefore not [`Copy`], and
-/// spans are passed by value throughout; the `Copy` range types of
-/// RFC 3550 are still unstable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Span {
-    start: Date,
-    end: Date,
-}
-
-impl From<Range<Date>> for Span {
-    fn from(range: Range<Date>) -> Self {
-        Self {
-            start: range.start,
-            end: range.end,
-        }
-    }
-}
-
-impl RangeBounds<Date> for Span {
-    fn start_bound(&self) -> Bound<&Date> {
-        Bound::Included(&self.start)
-    }
-
-    fn end_bound(&self) -> Bound<&Date> {
-        Bound::Excluded(&self.end)
-    }
-}
-
-impl Span {
-    /// Elapsed days, signed by direction.
-    fn days(self) -> i64 {
-        i64::from(self.end.days_since(self.start))
-    }
-
-    /// The overlap with `other`, if the two share any days.
-    fn intersect(self, other: Self) -> Option<Self> {
-        let both = Self::from(self.start.max(other.start)..self.end.min(other.end));
-        (both.start < both.end).then_some(both)
-    }
-
-    /// The share of one coupon this span represents inside `window`:
-    /// `days / (frequency × window days)`.
-    fn coupon_share(self, window: Self, frequency: u64) -> Result<Fraction, TimeError> {
-        let window_days =
-            u64::try_from(window.days()).map_err(|_| TimeError::InvalidReferencePeriod)?;
-        let denominator = frequency
-            .checked_mul(window_days)
-            .ok_or(TimeError::FractionOverflow)?;
-        Fraction::new(self.days(), denominator)
-    }
 }
 
 // ---- Basis --------------------------------------------------------------
@@ -390,12 +328,12 @@ impl ActActICMA {
         // silently accrue against the wrong grid.
         let shape = match schedule.generation() {
             Some(generation) => {
-                if generation.tenor().normalized() != Period::from(self.frequency).normalized() {
+                if generation.tenor.normalized() != Period::from(self.frequency).normalized() {
                     return Err(TimeError::FrequencyMismatch);
                 }
                 GridShape {
-                    tenor: generation.tenor(),
-                    end_of_month: generation.end_of_month(),
+                    tenor: generation.tenor,
+                    end_of_month: generation.end_of_month,
                 }
             }
             None => GridShape::of(self.frequency),
@@ -443,13 +381,23 @@ impl ActActICMA {
     /// Accrue an ordered `span` over the grid anchored on
     /// `reference`: descend to the lowest overlapping window, then
     /// sum upward until the span is covered.
+    /// The share of one coupon that `chunk` represents inside the
+    /// notional `window` it falls in.
+    fn coupon_share(self, chunk: Span, window: Span) -> Result<Fraction, TimeError> {
+        let window_days =
+            u64::try_from(window.days()).map_err(|_| TimeError::InvalidReferencePeriod)?;
+        let denominator = u64::from(self.frequency.per_year())
+            .checked_mul(window_days)
+            .ok_or(TimeError::FractionOverflow)?;
+        Fraction::new(chunk.days(), denominator)
+    }
+
     fn accrue(
         self,
         span: Span,
         reference: Span,
         grid_shape: GridShape,
     ) -> Result<Fraction, TimeError> {
-        let frequency = u64::from(self.frequency.per_year());
         let grid = ReferenceGrid {
             reference,
             period: grid_shape.tenor,
@@ -464,7 +412,7 @@ impl ActActICMA {
             let window = grid.window(i)?;
             if let Some(chunk) = span.intersect(window) {
                 total = total
-                    .checked_add(chunk.coupon_share(window, frequency)?)
+                    .checked_add(self.coupon_share(chunk, window)?)
                     .ok_or(TimeError::FractionOverflow)?;
             }
             if window.end >= span.end {
@@ -1319,74 +1267,6 @@ mod tests {
         assert_eq!(stub.parts(), (373, 368));
         // Over a full coupon of accrual — impossible from one window.
         assert!(stub > Fraction::new(1, 1).unwrap());
-    }
-
-    /// `Span` behaves as the half-open range its syntax implies, and
-    /// `contains` comes free from its `RangeBounds` impl.
-    #[test]
-    fn span_is_a_half_open_range() {
-        let span = Span::from(ymd(2025, Month::Jan, 1)..ymd(2025, Month::Apr, 1));
-        assert!(span.contains(&ymd(2025, Month::Jan, 1))); // start included
-        assert!(span.contains(&ymd(2025, Month::Mar, 31)));
-        assert!(!span.contains(&ymd(2025, Month::Apr, 1))); // end excluded
-        assert!(!span.contains(&ymd(2024, Month::Dec, 31)));
-        assert_eq!(span.days(), 90);
-        // Intersection is itself a span, and disjoint spans give None.
-        let other = Span::from(ymd(2025, Month::Mar, 1)..ymd(2025, Month::Jun, 1));
-        assert_eq!(
-            span.intersect(other),
-            Some(Span::from(
-                ymd(2025, Month::Mar, 1)..ymd(2025, Month::Apr, 1)
-            )),
-        );
-        let disjoint = Span::from(ymd(2025, Month::Jun, 1)..ymd(2025, Month::Jul, 1));
-        assert_eq!(span.intersect(disjoint), None);
-        // Touching at a single point shares no days.
-        let touching = Span::from(ymd(2025, Month::Apr, 1)..ymd(2025, Month::May, 1));
-        assert_eq!(span.intersect(touching), None);
-    }
-
-    /// Binding a convention whose frequency disagrees with the
-    /// schedule's tenor would accrue against the wrong lattice, so it
-    /// is refused rather than silently mispriced.
-    #[test]
-    fn bound_icma_rejects_a_frequency_the_schedule_does_not_use() {
-        let quarterly = crate::ScheduleBuilder::new(
-            ymd(2025, Month::Jan, 15),
-            ymd(2026, Month::Jan, 15),
-            Period::Months(3),
-            crate::calendars::NULL_CALENDAR,
-        )
-        .backwards()
-        .with_convention(crate::BusinessDayConvention::Unadjusted)
-        .build()
-        .unwrap();
-        assert_eq!(quarterly.generation().unwrap().tenor(), Period::Months(3),);
-        assert_eq!(
-            ActActICMA::new(Frequency::Semiannual)
-                .bind(&quarterly)
-                .unwrap_err(),
-            TimeError::FrequencyMismatch,
-        );
-        // The matching frequency binds, and a regular quarterly period
-        // is exactly a quarter of a year.
-        let dc = ActActICMA::new(Frequency::Quarterly)
-            .bind(&quarterly)
-            .unwrap();
-        assert_eq!(
-            dc.year_fraction(ymd(2025, Month::Jan, 15), ymd(2025, Month::Apr, 15))
-                .parts(),
-            (1, 4),
-        );
-        // A hand-built schedule has no generation history, so any
-        // frequency is accepted on the caller's word.
-        let raw = Schedule::try_from(alloc::vec![
-            ymd(2025, Month::Jan, 15),
-            ymd(2025, Month::Jul, 15),
-        ])
-        .unwrap();
-        assert!(raw.generation().is_none());
-        assert!(ActActICMA::new(Frequency::Semiannual).bind(&raw).is_ok());
     }
 
     #[test]

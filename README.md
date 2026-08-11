@@ -97,9 +97,9 @@ fn main() -> Result<(), fasti::TimeError> {
     // Accrue each period under ACT/ACT (ISDA) — exact integer rationals.
     for period in schedule.periods() {
         let (num, den) = ActActISDA
-            .year_fraction(period.start(), period.end())
+            .year_fraction(period.start, period.end)
             .parts();
-        println!("{} -> {}: {num}/{den}", period.start(), period.end());
+        println!("{} -> {}: {num}/{den}", period.start, period.end);
     }
     Ok(())
 }
