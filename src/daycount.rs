@@ -9,31 +9,9 @@
 
 use core::ops::Range;
 
-use crate::{Date, Fraction, Frequency, Generation, Month, Period, Schedule, TimeError, Year};
-
-/// Date-range operations the accrual math needs. An extension trait
-/// rather than a newtype so schedules, coupon periods, and notional
-/// windows are all plain `Range<Date>` — the vocabulary type callers
-/// already know, with `contains` and range syntax for free.
-trait DateRange: Sized {
-    /// Elapsed days, signed by direction.
-    fn days(&self) -> i64;
-
-    /// The overlap with `other`, if the two share any days. Ranges
-    /// that merely touch at a boundary share none.
-    fn intersect(&self, other: &Self) -> Option<Self>;
-}
-
-impl DateRange for Range<Date> {
-    fn days(&self) -> i64 {
-        i64::from(self.end.days_since(self.start))
-    }
-
-    fn intersect(&self, other: &Self) -> Option<Self> {
-        let both = self.start.max(other.start)..self.end.min(other.end);
-        (both.start < both.end).then_some(both)
-    }
-}
+use crate::{
+    Date, DateRange, Fraction, Frequency, Generation, Month, Period, Schedule, TimeError, Year,
+};
 
 /// A day-count convention.
 ///

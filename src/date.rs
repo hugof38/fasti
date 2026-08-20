@@ -6,7 +6,7 @@
 
 use crate::{Period, TimeError};
 use core::fmt;
-use core::ops::{Add, Sub};
+use core::ops::{Add, Range, Sub};
 
 // ---- Range constants ----------------------------------------------------
 
@@ -774,6 +774,71 @@ impl Date {
         )
     }
 
+    /// The first day of `self`'s month.
+    ///
+    /// ```
+    /// use fasti::{Date, Month};
+    /// let d = Date::from_ymd(2024, Month::Feb, 10)?;
+    /// assert_eq!(d.start_of_month(), Date::from_ymd(2024, Month::Feb, 1)?);
+    /// # Ok::<(), fasti::TimeError>(())
+    /// ```
+    #[must_use]
+    pub const fn start_of_month(self) -> Self {
+        Self(self.0 - (self.day() as u32 - 1))
+    }
+
+    /// `true` iff `self` is the first day of its month.
+    #[must_use]
+    pub const fn is_start_of_month(self) -> bool {
+        self.day() == 1
+    }
+
+    /// The first `weekday` on or after `self`.
+    ///
+    /// ```
+    /// use fasti::{Date, Month, Weekday};
+    /// let wed = Date::from_ymd(2025, Month::Jan, 1)?; // a Wednesday
+    /// assert_eq!(wed.next_weekday(Weekday::Wed)?, wed); // already Wednesday
+    /// assert_eq!(wed.next_weekday(Weekday::Mon)?, Date::from_ymd(2025, Month::Jan, 6)?);
+    /// # Ok::<(), fasti::TimeError>(())
+    /// ```
+    pub fn next_weekday(self, weekday: Weekday) -> Result<Self, TimeError> {
+        let delta = (i32::from(weekday.get()) - i32::from(self.weekday().get())).rem_euclid(7);
+        self.add_days(delta)
+    }
+
+    /// The `n`th `weekday` of `month` in `year` — "third Monday of
+    /// January", the shape `QuantLib` spells `Date::nthWeekday`.
+    ///
+    /// Returns [`TimeError::DayOutOfRange`] when that occurrence does
+    /// not exist, which only a fifth occurrence can fail to.
+    ///
+    /// ```
+    /// use fasti::{Date, Month, Ordinal, Weekday, Year};
+    /// // MLK Day 2026: third Monday of January.
+    /// assert_eq!(
+    ///     Date::nth_weekday(Ordinal::Third, Weekday::Mon, Month::Jan, Year::new(2026)?)?,
+    ///     Date::from_ymd(2026, Month::Jan, 19)?,
+    /// );
+    /// // February 2026 has only four Sundays.
+    /// assert!(Date::nth_weekday(Ordinal::Fifth, Weekday::Sun, Month::Feb, Year::new(2026)?).is_err());
+    /// # Ok::<(), fasti::TimeError>(())
+    /// ```
+    pub fn nth_weekday(
+        n: Ordinal,
+        weekday: Weekday,
+        month: Month,
+        year: Year,
+    ) -> Result<Self, TimeError> {
+        let first = Self::from_ymd(year.get(), month, 1)?.next_weekday(weekday)?;
+        let nth = first.add_days(7 * (i32::from(n.get()) - 1))?;
+        if nth.month() == month {
+            Ok(nth)
+        } else {
+            Err(TimeError::DayOutOfRange)
+        }
+    }
+
     /// The last day of `self`'s month.
     ///
     /// ```
@@ -804,6 +869,49 @@ impl Date {
     pub const fn is_end_of_month(self) -> bool {
         let (year, month, day) = self.to_ymd();
         day == month.length(year)
+    }
+}
+
+/// Date-aware operations on a half-open range `start..end`.
+///
+/// `fasti` spells every date interval — accrual periods, schedule
+/// periods, calendar queries — as a [`Range<Date>`](core::ops::Range)
+/// rather than a bespoke type; this trait is the vocabulary that goes
+/// with it.
+///
+/// ```
+/// use fasti::{Date, DateRange, Month};
+/// let jan = Date::from_ymd(2026, Month::Jan, 1)?..Date::from_ymd(2026, Month::Feb, 1)?;
+/// assert_eq!(jan.days(), 31);
+/// assert_eq!(jan.dates().count(), 31);
+/// # Ok::<(), fasti::TimeError>(())
+/// ```
+pub trait DateRange: Sized {
+    /// Elapsed days, signed by direction.
+    fn days(&self) -> i64;
+
+    /// The overlap with `other`, if the two share any days. Ranges
+    /// that merely touch at a boundary share none.
+    fn intersect(&self, other: &Self) -> Option<Self>;
+
+    /// Every date in the range, ascending; the end bound is excluded.
+    /// The iterator copies the bounds, so it outlives the range.
+    fn dates(&self) -> impl DoubleEndedIterator<Item = Date> + use<Self>;
+}
+
+impl DateRange for Range<Date> {
+    fn days(&self) -> i64 {
+        i64::from(self.end.days_since(self.start))
+    }
+
+    fn intersect(&self, other: &Self) -> Option<Self> {
+        let both = self.start.max(other.start)..self.end.min(other.end);
+        (both.start < both.end).then_some(both)
+    }
+
+    fn dates(&self) -> impl DoubleEndedIterator<Item = Date> + use<> {
+        // Both bounds are valid dates, so every serial between them is too.
+        (self.start.serial()..self.end.serial()).filter_map(|s| Date::from_serial(s).ok())
     }
 }
 
@@ -1506,6 +1614,88 @@ mod tests {
                 .unwrap()
                 .is_end_of_month()
         );
+    }
+
+    #[test]
+    fn start_of_month_examples() {
+        let d = Date::from_ymd(2024, Month::Feb, 29).unwrap();
+        assert_eq!(
+            d.start_of_month(),
+            Date::from_ymd(2024, Month::Feb, 1).unwrap()
+        );
+        assert!(d.start_of_month().is_start_of_month());
+        assert!(!d.is_start_of_month());
+        assert_eq!(Date::MIN.start_of_month(), Date::MIN);
+    }
+
+    #[test]
+    fn next_weekday_is_the_identity_on_a_match() {
+        // Thu Jan 1 2026.
+        let thu = Date::from_ymd(2026, Month::Jan, 1).unwrap();
+        assert_eq!(thu.next_weekday(Weekday::Thu).unwrap(), thu);
+        assert_eq!(
+            thu.next_weekday(Weekday::Wed).unwrap(),
+            Date::from_ymd(2026, Month::Jan, 7).unwrap(),
+        );
+    }
+
+    #[test]
+    fn nth_weekday_examples() {
+        let y = Year::new(2026).unwrap();
+        // MLK Day: third Monday of January 2026.
+        assert_eq!(
+            Date::nth_weekday(Ordinal::Third, Weekday::Mon, Month::Jan, y).unwrap(),
+            Date::from_ymd(2026, Month::Jan, 19).unwrap(),
+        );
+        // Thanksgiving: fourth Thursday of November 2026.
+        assert_eq!(
+            Date::nth_weekday(Ordinal::Fourth, Weekday::Thu, Month::Nov, y).unwrap(),
+            Date::from_ymd(2026, Month::Nov, 26).unwrap(),
+        );
+        // Feb 2026 has four Sundays, not five.
+        assert_eq!(
+            Date::nth_weekday(Ordinal::Fifth, Weekday::Sun, Month::Feb, y),
+            Err(TimeError::DayOutOfRange),
+        );
+    }
+
+    #[test]
+    fn date_range_dates_walks_both_ends() {
+        let jan = Date::from_ymd(2026, Month::Jan, 1).unwrap()
+            ..Date::from_ymd(2026, Month::Feb, 1).unwrap();
+        assert_eq!(i64::try_from(jan.dates().count()).unwrap(), jan.days());
+        assert_eq!(jan.dates().next(), Some(jan.start));
+        assert_eq!(
+            jan.dates().next_back(),
+            Some(Date::from_ymd(2026, Month::Jan, 31).unwrap()),
+        );
+        // Empty and reversed ranges are both empty.
+        assert_eq!((jan.start..jan.start).dates().count(), 0);
+        assert_eq!((jan.end..jan.start).dates().count(), 0);
+    }
+
+    proptest! {
+        /// Every date in a range is contained by it, and the count
+        /// matches the day span.
+        #[test]
+        fn dates_agree_with_days(serial in 0u32..(MAX_SERIAL - 400), len in 0u32..400) {
+            let start = Date::from_serial(serial).unwrap();
+            let range = start..Date::from_serial(serial + len).unwrap();
+            prop_assert_eq!(i64::try_from(range.dates().count()).unwrap(), range.days());
+            prop_assert!(range.dates().all(|d| range.contains(&d)));
+        }
+
+        /// `nth_weekday` lands on the requested weekday and month.
+        #[test]
+        fn nth_weekday_lands_where_asked(y in 1901u16..=2199, m in 1u8..=12, w in 1u8..=7, n in 1u8..=5) {
+            let (month, weekday) = (Month::try_from_u8(m).unwrap(), Weekday::try_from_u8(w).unwrap());
+            let ordinal = Ordinal::try_from_u8(n).unwrap();
+            if let Ok(d) = Date::nth_weekday(ordinal, weekday, month, Year::new(y).unwrap()) {
+                prop_assert_eq!(d.weekday(), weekday);
+                prop_assert_eq!(d.month(), month);
+                prop_assert!(d.day() > 7 * (n - 1) && d.day() <= 7 * n);
+            }
+        }
     }
 
     #[test]
