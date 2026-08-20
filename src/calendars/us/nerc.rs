@@ -81,7 +81,7 @@ mod tests {
     fn nerc_sunday_forward_only() {
         // Christmas 2022 (Sun) → observed Mon Dec 26.
         assert!(NERC.is_holiday(ymd(2022, Month::Dec, 26)));
-        assert!(!NERC.is_holiday(ymd(2022, Month::Dec, 25)));
+        assert!(NERC.is_holiday(ymd(2022, Month::Dec, 25))); // natural date too
         // Jul 4 2026 (Sat) → NO Friday observance under NERC.
         assert!(!NERC.is_holiday(ymd(2026, Month::Jul, 3)));
         // Jul 4 2026 itself is a Saturday — not a business day.

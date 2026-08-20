@@ -170,7 +170,7 @@ mod tests {
     fn washington_pre_1971() {
         // 1970: Feb 22 was a Sunday — observed Monday Feb 23.
         assert!(SETTLEMENT.is_holiday(ymd(1970, Month::Feb, 23)));
-        assert!(!SETTLEMENT.is_holiday(ymd(1970, Month::Feb, 22)));
+        assert!(SETTLEMENT.is_holiday(ymd(1970, Month::Feb, 22))); // natural date too
         // 1969: Feb 22 was a Saturday — observed Friday Feb 21.
         assert!(SETTLEMENT.is_holiday(ymd(1969, Month::Feb, 21)));
         // 1971: moves to 3rd Monday (= Feb 15).
@@ -218,10 +218,10 @@ mod tests {
     fn weekend_shifts() {
         // Jul 4 2026 (Sat) observed Friday July 3.
         assert!(SETTLEMENT.is_holiday(ymd(2026, Month::Jul, 3)));
-        assert!(!SETTLEMENT.is_holiday(ymd(2026, Month::Jul, 4)));
+        assert!(SETTLEMENT.is_holiday(ymd(2026, Month::Jul, 4))); // natural date too
         // Christmas 2022 (Sun) observed Monday Dec 26.
         assert!(SETTLEMENT.is_holiday(ymd(2022, Month::Dec, 26)));
-        assert!(!SETTLEMENT.is_holiday(ymd(2022, Month::Dec, 25)));
+        assert!(SETTLEMENT.is_holiday(ymd(2022, Month::Dec, 25))); // natural date too
         // Jan 1 2022 (Sat) observed Friday Dec 31 2021 — cross-year.
         assert!(SETTLEMENT.is_holiday(ymd(2021, Month::Dec, 31)));
     }

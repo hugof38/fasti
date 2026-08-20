@@ -1,4 +1,6 @@
-//! [`Calendar`]: a weekend definition + a sequence of holiday [`Rule`]s.
+//! [`Calendar`]: a weekend definition + a sequence of holiday [`Rule`]s,
+//! and the substitute-day resolution that turns a rule's
+//! [`WeekendShift`] into an observed date.
 //!
 //! `Calendar<'a>` is a borrowed view; built-in calendars are `pub const`
 //! (`'a = 'static`), and [`CalendarBuilder`] produces calendars borrowing
@@ -10,10 +12,16 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use crate::{BusinessDayConvention, Date, DateRange, Period, Rule, TimeError, Weekend};
+use crate::{
+    BusinessDayConvention, Date, DateRange, Period, Rule, TimeError, Weekday, Weekend, WeekendShift,
+};
+
+/// How far a substitute day can sit from its natural date. Two adjacent
+/// holidays over a weekend need three; the rest is slack.
+const SUBSTITUTE_SPAN: i32 = 7;
 
 /// A holiday calendar: a [`Weekend`] configuration plus a sequence of
-/// [`Rule`]s. A date is a holiday iff at least one rule says so.
+/// [`Rule`]s naming holidays' natural dates.
 ///
 /// ```no_run
 /// use fasti::{Calendar, Date, Month, Weekend};
@@ -34,7 +42,7 @@ pub struct Calendar<'a> {
     pub name: &'a str,
     /// The weekly weekend.
     pub weekend: Weekend,
-    /// Holiday rules; a date is a holiday iff any rule matches.
+    /// Holiday rules, each naming a holiday's natural date.
     pub rules: &'a [Rule],
 }
 
@@ -45,11 +53,106 @@ impl Calendar<'_> {
         self.weekend.contains(date.weekday())
     }
 
-    /// `true` iff any rule in this calendar marks `date` as a holiday.
-    /// Does not consider weekends.
+    /// `true` iff `date` is a holiday — either a rule's natural date,
+    /// or the substitute weekday granted to a holiday that fell on a
+    /// weekend. Does not consider weekends.
+    ///
+    /// Rules name natural dates; a [`WeekendShift`] names only a
+    /// direction. Turning that into a date is the calendar's job,
+    /// because a substitute may not land on a day another holiday has
+    /// already taken — the reason Christmas on a Saturday sends Boxing
+    /// Day's substitute to the Tuesday.
+    ///
+    /// ```
+    /// use fasti::{Date, Month, calendars};
+    /// let uk = calendars::uk::SETTLEMENT;
+    /// // Christmas 2021 fell on a Saturday. It keeps its natural date
+    /// // and gains the Monday; Boxing Day is pushed on to the Tuesday.
+    /// assert!(uk.is_holiday(Date::from_ymd(2021, Month::Dec, 25)?));
+    /// assert!(uk.is_holiday(Date::from_ymd(2021, Month::Dec, 27)?));
+    /// assert!(uk.is_holiday(Date::from_ymd(2021, Month::Dec, 28)?));
+    /// # Ok::<(), fasti::TimeError>(())
+    /// ```
     #[must_use]
     pub fn is_holiday(&self, date: Date) -> bool {
+        self.is_natural_holiday(date) || self.is_substitute(date)
+    }
+
+    /// `true` iff a rule names `date` outright, before any shift.
+    fn is_natural_holiday(&self, date: Date) -> bool {
         self.rules.iter().any(|r| r.is_holiday(date))
+    }
+
+    /// `true` iff `date` is the substitute day for a weekend holiday
+    /// nearby.
+    ///
+    /// Substitutes are assigned in natural-date order so the result
+    /// does not depend on the order the rules happen to be listed in,
+    /// and each one skips whatever the earlier ones took.
+    fn is_substitute(&self, date: Date) -> bool {
+        if self.is_weekend(date) || self.is_natural_holiday(date) {
+            return false;
+        }
+        // Calendars whose holidays never shift — France, TARGET — stop here.
+        if !self
+            .rules
+            .iter()
+            .any(|r| r.weekend_shift() != WeekendShift::None)
+        {
+            return false;
+        }
+        let mut taken = [None; SUBSTITUTE_SPAN as usize];
+        let mut count = 0;
+        let mut natural = date.add_days(-SUBSTITUTE_SPAN).unwrap_or(Date::MIN);
+        let last = date.add_days(SUBSTITUTE_SPAN).unwrap_or(Date::MAX);
+        while natural <= last {
+            if self.is_weekend(natural) {
+                for rule in self.rules.iter().filter(|r| r.is_holiday(natural)) {
+                    let Some(substitute) =
+                        self.first_free(natural, rule.weekend_shift(), &taken[..count])
+                    else {
+                        continue;
+                    };
+                    if substitute == date {
+                        return true;
+                    }
+                    if count < taken.len() {
+                        taken[count] = Some(substitute);
+                        count += 1;
+                    }
+                }
+            }
+            let Ok(next) = natural.add_days(1) else { break };
+            natural = next;
+        }
+        false
+    }
+
+    /// The first weekday from `natural` in the shift's direction that is
+    /// neither a holiday itself nor already claimed by `taken`.
+    fn first_free(
+        &self,
+        natural: Date,
+        shift: WeekendShift,
+        taken: &[Option<Date>],
+    ) -> Option<Date> {
+        let step = match (shift, natural.weekday()) {
+            (WeekendShift::SatBackSunForward, Weekday::Sat) => -1,
+            (WeekendShift::SatBackSunForward | WeekendShift::SunForward, Weekday::Sun)
+            | (WeekendShift::NextWeekday, Weekday::Sat | Weekday::Sun) => 1,
+            _ => return None,
+        };
+        let mut candidate = natural;
+        for _ in 0..SUBSTITUTE_SPAN {
+            candidate = candidate.add_days(step).ok()?;
+            if !self.is_weekend(candidate)
+                && !self.is_natural_holiday(candidate)
+                && !taken.contains(&Some(candidate))
+            {
+                return Some(candidate);
+            }
+        }
+        None
     }
 
     /// `true` iff `date` is neither a weekend nor a holiday.
@@ -397,6 +500,107 @@ mod tests {
         let cal = builder.view();
         assert_eq!(cal.name, "Test");
         assert!(cal.rules.is_empty());
+    }
+
+    // ---- substitute days -------------------------------------------------
+
+    /// Two adjacent holidays, both taking the next free weekday — the
+    /// UK Christmas/Boxing Day shape.
+    const PAIR: Calendar<'static> = Calendar {
+        name: "Pair",
+        weekend: Weekend::SAT_SUN,
+        rules: &[
+            Rule::Fixed(FixedDate::new(Month::Dec, 25).shift(WeekendShift::NextWeekday)),
+            Rule::Fixed(FixedDate::new(Month::Dec, 26).shift(WeekendShift::NextWeekday)),
+        ],
+    };
+
+    #[test]
+    fn a_substitute_skips_a_day_an_earlier_one_took() {
+        // 2021: Dec 25 Sat → Mon 27; Dec 26 Sun would also want Mon 27,
+        // so it is pushed to Tue 28.
+        assert!(PAIR.is_holiday(ymd(2021, Month::Dec, 27)));
+        assert!(PAIR.is_holiday(ymd(2021, Month::Dec, 28)));
+        assert!(PAIR.is_business_day(ymd(2021, Month::Dec, 29)));
+    }
+
+    #[test]
+    fn a_substitute_skips_a_natural_holiday() {
+        // 2022: Dec 25 Sun, Dec 26 Mon. Monday is already Boxing Day,
+        // so Christmas lands on the Tuesday — after Boxing Day.
+        assert!(PAIR.is_holiday(ymd(2022, Month::Dec, 26)));
+        assert!(PAIR.is_holiday(ymd(2022, Month::Dec, 27)));
+        assert!(PAIR.is_business_day(ymd(2022, Month::Dec, 28)));
+    }
+
+    #[test]
+    fn the_natural_date_survives_alongside_its_substitute() {
+        // Both are holidays; only the substitute is a day off, because
+        // the natural date is a weekend anyway.
+        let sat = ymd(2021, Month::Dec, 25);
+        assert!(PAIR.is_holiday(sat));
+        assert!(!PAIR.is_business_day(sat));
+        assert!(PAIR.is_holiday(ymd(2021, Month::Dec, 27)));
+    }
+
+    #[test]
+    fn each_shift_moves_the_right_way() {
+        const SAT_BACK: Calendar<'static> = Calendar {
+            name: "SatBack",
+            weekend: Weekend::SAT_SUN,
+            rules: &[Rule::Fixed(
+                FixedDate::new(Month::Jul, 4).shift(WeekendShift::SatBackSunForward),
+            )],
+        };
+        const SUN_ONLY: Calendar<'static> = Calendar {
+            name: "SunForward",
+            weekend: Weekend::SAT_SUN,
+            rules: &[Rule::Fixed(
+                FixedDate::new(Month::Jul, 4).shift(WeekendShift::SunForward),
+            )],
+        };
+        const UNSHIFTED: Calendar<'static> = Calendar {
+            name: "None",
+            weekend: Weekend::SAT_SUN,
+            rules: &[Rule::Fixed(FixedDate::new(Month::Jul, 4))],
+        };
+        // Jul 4 2026 is a Saturday; Jul 4 2021 is a Sunday.
+        let (sat_year, sun_year) = (2026, 2021);
+        assert!(SAT_BACK.is_holiday(ymd(sat_year, Month::Jul, 3)));
+        assert!(SAT_BACK.is_holiday(ymd(sun_year, Month::Jul, 5)));
+        // Sunday-forward grants nothing for a Saturday holiday.
+        assert!(SUN_ONLY.is_business_day(ymd(sat_year, Month::Jul, 3)));
+        assert!(SUN_ONLY.is_holiday(ymd(sun_year, Month::Jul, 5)));
+        // No shift, no substitute either way.
+        assert!(UNSHIFTED.is_business_day(ymd(sat_year, Month::Jul, 3)));
+        assert!(UNSHIFTED.is_business_day(ymd(sun_year, Month::Jul, 5)));
+    }
+
+    #[test]
+    fn a_substitute_may_cross_a_year_boundary() {
+        const NEW_YEAR: Calendar<'static> = Calendar {
+            name: "New Year",
+            weekend: Weekend::SAT_SUN,
+            rules: &[Rule::Fixed(
+                FixedDate::new(Month::Jan, 1).shift(WeekendShift::SatBackSunForward),
+            )],
+        };
+        // Jan 1 2022 was a Saturday → observed Friday Dec 31 2021.
+        assert!(NEW_YEAR.is_holiday(ymd(2021, Month::Dec, 31)));
+    }
+
+    proptest! {
+        /// A substitute is always a weekday, and never a date some rule
+        /// already claims outright.
+        #[test]
+        fn substitutes_are_free_weekdays(serial in any_serial()) {
+            let d = Date::from_serial(serial).unwrap();
+            for cal in [PAIR, crate::calendars::uk::SETTLEMENT] {
+                if cal.is_holiday(d) && !cal.rules.iter().any(|r| r.is_holiday(d)) {
+                    prop_assert!(!cal.is_weekend(d), "{d} substitute on a weekend");
+                }
+            }
+        }
     }
 
     // ---- ranges and month edges ----------------------------------------

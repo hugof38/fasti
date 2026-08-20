@@ -14,7 +14,7 @@ use crate::{
 ///
 /// | Holiday | Rule |
 /// |---|---|
-/// | New Year's Day | Jan 1 + [`NextMonday`](crate::WeekendShift::NextMonday) |
+/// | New Year's Day | Jan 1 + [`NextWeekday`](crate::WeekendShift::NextWeekday) |
 /// | Good Friday | Easter Sunday − 2 |
 /// | Easter Monday | Easter Sunday + 1 |
 /// | Early May Bank Holiday | 1st Mon of May *[except 1995 and 2020]* |
@@ -24,8 +24,8 @@ use crate::{
 /// | Diamond Jubilee | Jun 4–5 *[2012 only]* |
 /// | Platinum Jubilee | Jun 2–3 *[2022 only]* |
 /// | Summer Bank Holiday | Last Mon of August |
-/// | Christmas | Dec 25 + [`NextMondayOrTuesday`](crate::WeekendShift::NextMondayOrTuesday) |
-/// | Boxing Day | Dec 26 + [`NextMondayOrTuesday`](crate::WeekendShift::NextMondayOrTuesday) |
+/// | Christmas | Dec 25 + [`NextWeekday`](crate::WeekendShift::NextWeekday) |
+/// | Boxing Day | Dec 26 + [`NextWeekday`](crate::WeekendShift::NextWeekday) |
 /// | Queen Elizabeth II's funeral | Sep 19 *[2022 only]* |
 /// | King Charles III's coronation | May 8 *[2023 only]* |
 /// | Millennium Day | Dec 31 *[1999 only]* |
@@ -50,7 +50,7 @@ pub const SETTLEMENT: Calendar<'static> = Calendar {
     weekend: Weekend::SAT_SUN,
     rules: &[
         // New Year's Day, with a substitute Monday.
-        Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::NextMonday)),
+        Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::NextWeekday)),
         // Good Friday and Easter Monday.
         Rule::Easter(EasterOffset::good_friday()),
         Rule::Easter(EasterOffset::easter_monday()),
@@ -97,9 +97,10 @@ pub const SETTLEMENT: Calendar<'static> = Calendar {
         Rule::OneOff(OneOff::new(Date::literal(2022, Month::Jun, 3))),
         // Summer Bank Holiday.
         Rule::LastWeekday(LastWeekday::new(Weekday::Mon, Month::Aug)),
-        // Christmas and Boxing Day move together so they never collide.
-        Rule::Fixed(FixedDate::new(Month::Dec, 25).shift(WeekendShift::NextMondayOrTuesday)),
-        Rule::Fixed(FixedDate::new(Month::Dec, 26).shift(WeekendShift::NextMondayOrTuesday)),
+        // Both take the next free weekday, so a weekend Christmas
+        // pushes Boxing Day's substitute on by one.
+        Rule::Fixed(FixedDate::new(Month::Dec, 25).shift(WeekendShift::NextWeekday)),
+        Rule::Fixed(FixedDate::new(Month::Dec, 26).shift(WeekendShift::NextWeekday)),
         // Queen Elizabeth II's state funeral.
         Rule::OneOff(OneOff::new(Date::literal(2022, Month::Sep, 19))),
         // King Charles III's coronation.
@@ -113,16 +114,25 @@ pub const SETTLEMENT: Calendar<'static> = Calendar {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::DateRange;
     use alloc::vec::Vec;
 
     fn ymd(y: u16, m: Month, d: u8) -> Date {
         Date::from_ymd(y, m, d).unwrap()
     }
 
-    /// The bank holidays observed in `year`, ascending.
-    fn observed(year: u16) -> Vec<Date> {
-        let range = ymd(year, Month::Jan, 1)..ymd(year, Month::Dec, 31).add_days(1).unwrap();
-        SETTLEMENT.holidays(range).collect()
+    fn year(year: u16) -> core::ops::Range<Date> {
+        ymd(year, Month::Jan, 1)..ymd(year, Month::Dec, 31).add_days(1).unwrap()
+    }
+
+    /// The days actually taken off in `year`. `holidays` also reports a
+    /// holiday's natural date when that falls on a weekend, which is
+    /// never a day off, so those are filtered out.
+    fn observed(y: u16) -> Vec<Date> {
+        SETTLEMENT
+            .holidays(year(y))
+            .filter(|d| !SETTLEMENT.is_weekend(*d))
+            .collect()
     }
 
     /// Each year's list is the one published by the UK government for
@@ -299,12 +309,16 @@ mod tests {
     }
 
     #[test]
-    fn every_observed_holiday_falls_on_a_weekday() {
-        // The shifts exist precisely so nothing lands on a weekend.
-        for year in 1996..=2030 {
-            for d in observed(year) {
-                assert!(!SETTLEMENT.is_weekend(d), "{d} is a weekend");
-            }
+    fn no_substitute_is_ever_lost_to_a_collision() {
+        // Every holiday yields exactly one day off: weekday holidays
+        // keep their own date, weekend ones get a distinct substitute.
+        // A collision would silently merge two into one.
+        for y in 1996..=2060 {
+            let natural: Vec<Date> = year(y)
+                .dates()
+                .filter(|d| SETTLEMENT.rules.iter().any(|r| r.is_holiday(*d)))
+                .collect();
+            assert_eq!(observed(y).len(), natural.len(), "{y}: {natural:?}");
         }
     }
 
