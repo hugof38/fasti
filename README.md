@@ -44,7 +44,7 @@ same capability surface with:
 | Date primitives | `Date` (serial, 1901-01-01..=2199-12-31), `Year`, `Month`, `Weekday`, `Ordinal` |
 | Durations | `Period` (days/weeks/months/years), `Frequency` |
 | Holiday rules | `Rule`: fixed-date (with weekend-shift policies), nth/last weekday, Easter offsets (Western & Orthodox), one-offs, custom `fn(Date) -> bool` |
-| Calendars | `Calendar` / `CalendarBuilder`; built-ins: US Settlement, NYSE, Federal Reserve, Government Bond, SOFR, NERC, France Settlement & Exchange, plus `WEEKENDS_ONLY` / `NULL_CALENDAR` baselines |
+| Calendars | `Calendar` / `CalendarBuilder`; built-ins: TARGET, UK Settlement, US Settlement, NYSE, Federal Reserve, Government Bond, SOFR, NERC, France Settlement & Exchange, plus `WEEKENDS_ONLY` / `NULL_CALENDAR` baselines. Business-day and holiday enumeration over a date range, month edges, and joint calendars via `CalendarBuilder::union` |
 | Business days | `BusinessDayConvention` (Following, ModifiedFollowing, Preceding, ModifiedPreceding, Unadjusted), `adjust`, `advance` |
 | Day counts | `DayCount`: ACT/360, ACT/365F, 30/360 (Bond Basis, US, 30E/360, 30E/360 ISDA), ACT/ACT (ISDA and schedule-aware ICMA) — all returning `Fraction` |
 | Schedules | `Schedule` / `ScheduleBuilder`: forward/backward/zero generation, stubs, end-of-month preservation |
@@ -127,9 +127,8 @@ implementations, so they are reproducible from first principles.
 ## Status
 
 Pre-1.0. The public surface is small and deliberate but may still move.
-Planned next: more built-in calendars (TARGET, UK bank holidays),
-calendar conveniences (business-day counting, holiday enumeration,
-joint calendars), and CDS/IMM schedule generation rules.
+Planned next: CDS/IMM schedule generation rules and the long-tail day
+counts (Business/252, ACT/365 Canadian, NASD 30/360).
 
 ## License
 

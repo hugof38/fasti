@@ -13,8 +13,14 @@ pub enum WeekendShift {
     None,
     /// US federal convention: Saturday → Friday, Sunday → Monday.
     SatBackSunForward,
-    /// UK convention: Sunday → Monday; Saturday unchanged.
+    /// Sunday → Monday; Saturday unchanged.
     SunForward,
+    /// UK substitute day: a weekend holiday moves to the following
+    /// Monday. Saturday → +2, Sunday → +1.
+    NextMonday,
+    /// The UK Christmas/Boxing Day pair: both move forward two days so
+    /// they land on Monday and Tuesday instead of colliding on Monday.
+    NextMondayOrTuesday,
 }
 
 /// A fixed-date holiday rule.
@@ -145,6 +151,15 @@ impl FixedDate {
                 Weekday::Sun => natural.add_days(1).ok(),
                 _ => Some(natural),
             },
+            WeekendShift::NextMonday => match natural.weekday() {
+                Weekday::Sat => natural.add_days(2).ok(),
+                Weekday::Sun => natural.add_days(1).ok(),
+                _ => Some(natural),
+            },
+            WeekendShift::NextMondayOrTuesday => match natural.weekday() {
+                Weekday::Sat | Weekday::Sun => natural.add_days(2).ok(),
+                _ => Some(natural),
+            },
         }
     }
 }
@@ -189,6 +204,41 @@ mod tests {
         assert!(!rule.is_holiday(ymd(2021, Month::Dec, 26)));
         // 2020-12-26 = Sat → unchanged under SunForward.
         assert!(rule.is_holiday(ymd(2020, Month::Dec, 26)));
+    }
+
+    #[test]
+    fn next_monday_takes_the_substitute_day() {
+        // New Year's Day, UK style: a weekend Jan 1 moves to Monday.
+        let rule = FixedDate::new(Month::Jan, 1).shift(WeekendShift::NextMonday);
+        // 2022-01-01 = Sat → Mon 2022-01-03.
+        assert!(rule.is_holiday(ymd(2022, Month::Jan, 3)));
+        assert!(!rule.is_holiday(ymd(2022, Month::Jan, 1)));
+        // 2023-01-01 = Sun → Mon 2023-01-02.
+        assert!(rule.is_holiday(ymd(2023, Month::Jan, 2)));
+        assert!(!rule.is_holiday(ymd(2023, Month::Jan, 1)));
+        // 2024-01-01 = Mon → unchanged.
+        assert!(rule.is_holiday(ymd(2024, Month::Jan, 1)));
+    }
+
+    #[test]
+    fn next_monday_or_tuesday_keeps_a_holiday_pair_apart() {
+        let christmas = FixedDate::new(Month::Dec, 25).shift(WeekendShift::NextMondayOrTuesday);
+        let boxing_day = FixedDate::new(Month::Dec, 26).shift(WeekendShift::NextMondayOrTuesday);
+        // 2021: Dec 25 Sat → Mon 27, Dec 26 Sun → Tue 28.
+        assert!(christmas.is_holiday(ymd(2021, Month::Dec, 27)));
+        assert!(boxing_day.is_holiday(ymd(2021, Month::Dec, 28)));
+        // 2022: Dec 25 Sun → Tue 27, Dec 26 Mon → unchanged.
+        assert!(christmas.is_holiday(ymd(2022, Month::Dec, 27)));
+        assert!(boxing_day.is_holiday(ymd(2022, Month::Dec, 26)));
+        // 2020: Dec 25 Fri → unchanged, Dec 26 Sat → Mon 28.
+        assert!(christmas.is_holiday(ymd(2020, Month::Dec, 25)));
+        assert!(boxing_day.is_holiday(ymd(2020, Month::Dec, 28)));
+        // The pair never collides, across every weekday Christmas can fall on.
+        for year in 1990..=2060 {
+            let observed =
+                |r: FixedDate| (1..=31u8).find(|d| r.is_holiday(ymd(year, Month::Dec, *d)));
+            assert_ne!(observed(christmas), observed(boxing_day), "{year}");
+        }
     }
 
     #[test]
