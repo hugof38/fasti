@@ -60,15 +60,15 @@ fn main() -> Result<(), TimeError> {
     let dc = ActActISDA;
     let mut total_cents: u128 = 0;
     for (i, period) in schedule.periods().enumerate() {
-        let (num, den) = dc.year_fraction(period.start(), period.end()).parts();
+        let (num, den) = dc.year_fraction(period.start, period.end).parts();
         // coupon = face × rate × year_fraction, all in integer cents.
         let cents = FACE_CENTS * COUPON_BPS * num as u128 / (10_000 * u128::from(den));
         total_cents += cents;
         println!(
             "{:>3}  {:<12}  {:<12}  {:>7} / {:<6}  {:>10}.{:02}",
             i + 1,
-            period.start(),
-            period.end(),
+            period.start,
+            period.end,
             num,
             den,
             cents / 100,

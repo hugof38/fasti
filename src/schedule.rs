@@ -40,39 +40,9 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use core::ops::Range;
+
 use crate::{BusinessDayConvention, Calendar, Date, Frequency, Period, TimeError};
-
-/// One accrual window of a [`Schedule`] — the closed-open interval
-/// from `start` to the next period's start (which is this period's
-/// `end`).
-///
-/// Yielded by [`Schedule::periods`]. The two dates are always in
-/// strictly ascending order because the parent schedule is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct AccrualPeriod {
-    start: Date,
-    end: Date,
-}
-
-impl AccrualPeriod {
-    /// The start (earlier) date of the accrual window.
-    #[must_use]
-    pub const fn start(self) -> Date {
-        self.start
-    }
-
-    /// The end (later) date of the accrual window.
-    #[must_use]
-    pub const fn end(self) -> Date {
-        self.end
-    }
-}
-
-impl From<AccrualPeriod> for (Date, Date) {
-    fn from(p: AccrualPeriod) -> Self {
-        (p.start, p.end)
-    }
-}
 
 /// How to walk the schedule grid between effective and termination.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -89,102 +59,212 @@ pub enum DateGenerationRule {
     Zero,
 }
 
-/// A list of business-day-adjusted scheduled dates in chronological
-/// order. Length is `periods + 1`.
+/// Parallel lists of business-day-adjusted dates in chronological
+/// order, each of length `periods + 1`: the coupon dates, and the
+/// reference dates of the regular coupon grid.
+///
+/// The two are identical for a regular schedule. At a short or long
+/// stub, the end reference date is instead the notional quasi-coupon
+/// boundary one tenor from the adjacent coupon, which is what
+/// schedule-defined day counts (ACT/ACT ICMA) accrue against.
 ///
 /// `Schedule` owns its dates; once built, it is independent of the
-/// [`Calendar`] used to construct it.
-///
-/// # Serde
-///
-/// Under the `serde` feature, [`Schedule`] round-trips as a `Vec<Date>`.
-/// Deserialization goes through [`TryFrom<Vec<Date>>`], so the strict
-/// monotonicity invariant is enforced at the boundary — a deserialized
+/// [`Calendar`] used to construct it. Serde round-trips both lists
+/// through [`TryFrom<(Vec<Date>, Vec<Date>)>`], so a deserialized
 /// `Schedule` is always valid.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(try_from = "Vec<Date>", into = "Vec<Date>"))]
+#[cfg_attr(
+    feature = "serde",
+    serde(try_from = "ScheduleData", into = "ScheduleData")
+)]
 pub struct Schedule {
     dates: Vec<Date>,
+    stubs: StubReferences,
+    generation: Option<Generation>,
+}
+
+/// The parameters a [`Schedule`] was generated from, retained so that
+/// schedule-defined day counts can extend its grid — `QuantLib`'s
+/// `Schedule` keeps the same information in its `tenor_` and
+/// `endOfMonth_` members.
+///
+/// Absent on a schedule built from raw date lists, which carry no
+/// generation history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Generation {
+    /// The regular period between coupons.
+    pub tenor: Period,
+    /// Whether generation snapped dates to the end of their month.
+    pub end_of_month: bool,
+}
+
+impl Generation {
+    /// `anchor + i · tenor`, the lattice's own stepping rule.
+    ///
+    /// Computed as a fresh multiple rather than by chaining, which
+    /// avoids the add-months clamp pathology: successive `+1M` steps
+    /// from `Jan 31` stick at day 28, while `Jan 31 + i·1M` gives the
+    /// natural `Jan 31, Feb 28, Mar 31, …`. When `end_of_month` is set
+    /// and the anchor is itself month-end, the result snaps to the end
+    /// of its own month.
+    ///
+    /// Negative `i` steps backward. Returns
+    /// [`TimeError::DateOutOfRange`] on scaling overflow or a date
+    /// outside the supported range.
+    pub fn step(self, anchor: Date, i: i32) -> Result<Date, TimeError> {
+        let scaled = self.tenor.checked_mul(i).ok_or(TimeError::DateOutOfRange)?;
+        anchor.advance(scaled, self.end_of_month)
+    }
+
+    /// The notional coupon window `i` steps from `reference` along
+    /// this lattice: window 0 is `reference` itself, negative windows
+    /// precede it and positive ones follow.
+    ///
+    /// Schedule-defined day counts walk these when a stub period
+    /// reaches beyond the reference period a schedule names for it.
+    pub fn window(self, reference: &Range<Date>, i: i32) -> Result<Range<Date>, TimeError> {
+        let (anchor, k) = match i {
+            0 => return Ok(reference.clone()),
+            i if i < 0 => (reference.start, i),
+            i => (reference.end, i - 1),
+        };
+        Ok(self.step(anchor, k)?..self.step(anchor, k + 1)?)
+    }
 }
 
 impl TryFrom<Vec<Date>> for Schedule {
     type Error = TimeError;
 
-    /// Wrap a chronologically ordered date list in a `Schedule`,
-    /// enforcing strict monotonicity. The only path from a raw
-    /// `Vec<Date>` to a `Schedule`.
+    /// Wrap a chronologically ordered date list — a term sheet's
+    /// coupon dates, say. Every period is taken as regular, and the
+    /// schedule carries no [`Generation`] because a bare date list
+    /// names no lattice.
     fn try_from(dates: Vec<Date>) -> Result<Self, Self::Error> {
-        for window in dates.windows(2) {
-            if window[0] >= window[1] {
-                return Err(TimeError::ScheduleNotMonotonic);
-            }
-        }
-        Ok(Self { dates })
+        Self::new(dates, StubReferences::default(), None)
     }
 }
 
 impl From<Schedule> for Vec<Date> {
-    /// Unwrap the underlying date list. Inverse of [`TryFrom<Vec<Date>>`].
+    /// Unwrap the coupon date list.
     fn from(s: Schedule) -> Self {
         s.dates
     }
 }
 
+/// Where a schedule departs from its regular lattice: the notional
+/// quasi-coupon boundary of each end period that is a stub.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+struct StubReferences {
+    front: Option<Date>,
+    back: Option<Date>,
+}
+
+/// Serde representation of a [`Schedule`], validated on the way back
+/// in through [`Schedule::new`].
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ScheduleData {
+    dates: Vec<Date>,
+    stubs: StubReferences,
+    generation: Option<Generation>,
+}
+
+#[cfg(feature = "serde")]
+impl TryFrom<ScheduleData> for Schedule {
+    type Error = TimeError;
+
+    fn try_from(stored: ScheduleData) -> Result<Self, Self::Error> {
+        Self::new(stored.dates, stored.stubs, stored.generation)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl From<Schedule> for ScheduleData {
+    fn from(s: Schedule) -> Self {
+        Self {
+            dates: s.dates,
+            stubs: s.stubs,
+            generation: s.generation,
+        }
+    }
+}
+
 impl Schedule {
-    /// Borrow the adjusted dates as a slice.
+    /// The one constructor: validates that the coupon dates strictly
+    /// increase and that any stub boundary lies outside the coupon it
+    /// anchors, so every reference period is non-degenerate.
+    fn new(
+        dates: Vec<Date>,
+        stubs: StubReferences,
+        generation: Option<Generation>,
+    ) -> Result<Self, TimeError> {
+        if dates.windows(2).any(|w| w[0] >= w[1]) {
+            return Err(TimeError::ScheduleNotMonotonic);
+        }
+        let front_ok = stubs
+            .front
+            .is_none_or(|r| dates.get(1).is_some_and(|d| r < *d));
+        let back_ok = stubs.back.is_none_or(|r| {
+            dates
+                .len()
+                .checked_sub(2)
+                .and_then(|i| dates.get(i))
+                .is_some_and(|d| r > *d)
+        });
+        if !front_ok || !back_ok {
+            return Err(TimeError::InvalidReferencePeriod);
+        }
+        Ok(Self {
+            dates,
+            stubs,
+            generation,
+        })
+    }
+
+    /// Borrow the adjusted coupon dates as a slice.
     #[must_use]
     pub fn dates(&self) -> &[Date] {
         &self.dates
     }
 
-    /// Number of dates (i.e., `periods + 1`).
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.dates.len()
-    }
-
-    /// `true` iff the schedule has no dates. Cannot occur on a
-    /// successfully built `Schedule`.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.dates.is_empty()
-    }
-
-    /// First date — the adjusted effective.
-    #[must_use]
-    pub fn first(&self) -> Option<Date> {
-        self.dates.first().copied()
-    }
-
-    /// Last date — the adjusted termination.
-    #[must_use]
-    pub fn last(&self) -> Option<Date> {
-        self.dates.last().copied()
-    }
-
-    /// Iterate dates in chronological order.
-    pub fn iter(&self) -> core::slice::Iter<'_, Date> {
-        self.dates.iter()
-    }
-
-    /// Iterate accrual periods — adjacent `(start, end)` windows
-    /// over the schedule's dates.
-    pub fn periods(&self) -> impl Iterator<Item = AccrualPeriod> + '_ {
-        self.dates.windows(2).map(|w| AccrualPeriod {
-            start: w[0],
-            end: w[1],
+    /// The reference period each coupon period accrues against —
+    /// equal to the coupon period unless it is a stub, where it is the
+    /// notional quasi-coupon period one tenor from the adjacent
+    /// coupon.
+    pub fn reference_periods(&self) -> impl Iterator<Item = Range<Date>> + '_ {
+        let last = self.dates.len().saturating_sub(2);
+        self.dates.windows(2).enumerate().map(move |(i, w)| {
+            let start = if i == 0 {
+                self.stubs.front.unwrap_or(w[0])
+            } else {
+                w[0]
+            };
+            let end = if i == last {
+                self.stubs.back.unwrap_or(w[1])
+            } else {
+                w[1]
+            };
+            start..end
         })
     }
 
-    /// Non-panicking date access.
-    ///
-    /// Use this in preference to indexing when the index might be
-    /// out of bounds. Indexing via `schedule[i]` panics, matching
-    /// slice semantics.
+    /// The lattice this schedule was generated on, absent when it was
+    /// built from a bare date list that names no tenor — mirroring
+    /// `QuantLib`'s optional `tenor_`. Only stub periods need it, and
+    /// stubs only arise from generation, so a schedule without one is
+    /// always entirely regular.
     #[must_use]
-    pub fn get(&self, index: usize) -> Option<Date> {
-        self.dates.get(index).copied()
+    pub const fn generation(&self) -> Option<Generation> {
+        self.generation
+    }
+
+    /// Iterate accrual periods as half-open ranges — adjacent windows
+    /// over the coupon dates.
+    pub fn periods(&self) -> impl Iterator<Item = Range<Date>> + '_ {
+        self.dates.windows(2).map(|w| w[0]..w[1])
     }
 
     /// The largest schedule date strictly less than `ref_date`, if
@@ -250,6 +330,12 @@ impl Schedule {
         let idx = self.dates.partition_point(|d| *d < cutoff);
         Self {
             dates: self.dates[idx..].to_vec(),
+            // Slicing off the front drops the front stub with it.
+            stubs: StubReferences {
+                front: (idx == 0).then_some(self.stubs.front).flatten(),
+                ..self.stubs
+            },
+            generation: self.generation,
         }
     }
 
@@ -262,17 +348,25 @@ impl Schedule {
         let idx = self.dates.partition_point(|d| *d <= cutoff);
         Self {
             dates: self.dates[..idx].to_vec(),
+            // Likewise a truncated tail is no longer the back stub.
+            stubs: StubReferences {
+                back: (idx == self.dates.len())
+                    .then_some(self.stubs.back)
+                    .flatten(),
+                ..self.stubs
+            },
+            generation: self.generation,
         }
     }
 }
 
-impl core::ops::Index<usize> for Schedule {
-    type Output = Date;
+impl core::ops::Deref for Schedule {
+    type Target = [Date];
 
-    /// Panicking date access. Use [`Schedule::get`] for the
-    /// non-panicking variant.
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.dates[index]
+    /// The coupon dates, so a `Schedule` indexes, slices, and iterates
+    /// like the date list it is. Reference dates stay explicit.
+    fn deref(&self) -> &Self::Target {
+        &self.dates
     }
 }
 
@@ -282,6 +376,15 @@ impl<'a> IntoIterator for &'a Schedule {
 
     fn into_iter(self) -> Self::IntoIter {
         self.dates.iter()
+    }
+}
+
+impl IntoIterator for Schedule {
+    type Item = Date;
+    type IntoIter = alloc::vec::IntoIter<Date>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.dates.into_iter()
     }
 }
 
@@ -307,9 +410,10 @@ impl<'a> IntoIterator for &'a Schedule {
 /// .with_rule(DateGenerationRule::Forward)
 /// .build()?;
 ///
+/// // A Schedule derefs to its coupon dates, so slice methods apply.
 /// assert_eq!(schedule.len(), 5);
-/// assert_eq!(schedule.first().unwrap(), effective);
-/// assert_eq!(schedule.last().unwrap(), termination);
+/// assert_eq!(schedule[0], effective);
+/// assert_eq!(schedule.last().copied(), Some(termination));
 /// # Ok::<(), fasti::TimeError>(())
 /// ```
 #[derive(Debug, Clone)]
@@ -429,15 +533,40 @@ impl<'cal> ScheduleBuilder<'cal> {
     /// day.
     pub fn build(self) -> Result<Schedule, TimeError> {
         self.validate_inputs()?;
-        let unadjusted = match self.rule {
-            DateGenerationRule::Zero => vec![self.effective, self.termination],
+        let (dates, stubs) = match self.rule {
+            // A Zero schedule's single period is its own reference.
+            DateGenerationRule::Zero => (
+                vec![self.effective, self.termination],
+                StubReferences::default(),
+            ),
             DateGenerationRule::Forward => Generator::forward(&self).generate()?,
-            DateGenerationRule::Backward => Generator::backward(&self)?.generate()?,
+            DateGenerationRule::Backward => Generator::backward(&self).generate()?,
+        };
+        // Stub boundaries roll under the convention that governs their
+        // side, matching the coupon date they stand in for.
+        let stubs = StubReferences {
+            front: stubs
+                .front
+                .map(|d| self.calendar.adjust(d, self.convention))
+                .transpose()?,
+            back: stubs
+                .back
+                .map(|d| self.calendar.adjust(d, self.termination_convention))
+                .transpose()?,
         };
         let adjusted =
             BdcAdjuster::new(self.calendar, self.convention, self.termination_convention)
-                .apply(unadjusted)?;
-        Schedule::try_from(adjusted)
+                .apply(dates)?;
+        let generation = (!matches!(self.rule, DateGenerationRule::Zero)).then(|| self.lattice());
+        Schedule::new(adjusted, stubs, generation)
+    }
+
+    /// The lattice this builder generates on.
+    const fn lattice(&self) -> Generation {
+        Generation {
+            tenor: self.tenor,
+            end_of_month: self.end_of_month,
+        }
     }
 
     fn validate_inputs(&self) -> Result<(), TimeError> {
@@ -473,66 +602,38 @@ enum Direction {
     Backward,
 }
 
-/// Stepping primitive: `seed + i · step`, with optional snap to the
-/// end of the resulting month when the seed is itself end-of-month
-/// and the step is in months or years.
-///
-/// This is the only place the `EoM`-preservation rule lives. The
-/// step is signed; backward walks pass a negative `Period`.
-#[derive(Debug, Clone, Copy)]
-struct Stepper {
-    seed: Date,
-    step: Period,
-    end_of_month: bool,
-}
-
-impl Stepper {
-    const fn new(seed: Date, step: Period, end_of_month: bool) -> Self {
-        Self {
-            seed,
-            step,
-            end_of_month,
-        }
-    }
-
-    /// Compute `seed + i · step`. Returns
-    /// [`TimeError::DateOutOfRange`] on either step-scaling overflow
-    /// or a date that escapes the supported range.
-    fn step(&self, i: i32) -> Result<Date, TimeError> {
-        let scaled = self.step.checked_mul(i).ok_or(TimeError::DateOutOfRange)?;
-        let stepped = (self.seed + scaled)?;
-        if self.end_of_month
-            && self.seed.is_end_of_month()
-            && matches!(self.step, Period::Months(_) | Period::Years(_))
-        {
-            Ok(stepped.end_of_month())
-        } else {
-            Ok(stepped)
-        }
-    }
-}
-
-/// Iterator over candidates produced by a [`Stepper`], halting at
-/// (and never emitting) the first candidate that has reached or
-/// passed `stop` in the configured direction.
+/// Iterator over lattice points from a seed, halting at (and never
+/// emitting) the first candidate that has reached or passed `stop` in
+/// the configured direction.
 ///
 /// The walk yields only the *interior* dates — anchors and stubs
 /// are the [`Generator`]'s job.
-struct Walk<'a> {
-    stepper: &'a Stepper,
+struct Walk {
+    lattice: Generation,
+    seed: Date,
     stop: Date,
     direction: Direction,
     i: i32,
 }
 
-impl<'a> Walk<'a> {
-    const fn new(stepper: &'a Stepper, stop: Date, direction: Direction) -> Self {
+impl Walk {
+    const fn new(lattice: Generation, seed: Date, stop: Date, direction: Direction) -> Self {
         Self {
-            stepper,
+            lattice,
+            seed,
             stop,
             direction,
             i: 1,
         }
+    }
+
+    /// The lattice point at index `i`, signed by direction.
+    fn at(&self, i: i32) -> Result<Date, TimeError> {
+        let step = match self.direction {
+            Direction::Forward => i,
+            Direction::Backward => -i,
+        };
+        self.lattice.step(self.seed, step)
     }
 
     fn past_stop(&self, candidate: Date) -> bool {
@@ -543,11 +644,11 @@ impl<'a> Walk<'a> {
     }
 }
 
-impl Iterator for Walk<'_> {
+impl Iterator for Walk {
     type Item = Result<Date, TimeError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let candidate = match self.stepper.step(self.i) {
+        let candidate = match self.at(self.i) {
             Ok(d) => d,
             Err(e) => return Some(Err(e)),
         };
@@ -555,7 +656,7 @@ impl Iterator for Walk<'_> {
             return None;
         }
         // `i` overflow is unreachable: the supported date range
-        // (1901..=2199, ~109k days) means `Stepper::step(i)` errors
+        // (1901..=2199, ~109k days) means stepping errors
         // long before `i` itself approaches `i32::MAX`.
         self.i += 1;
         Some(Ok(candidate))
@@ -575,9 +676,8 @@ struct Generator {
     start_stub: Option<Date>,
     end_anchor: Date,
     end_stub: Option<Date>,
-    step: Period,
+    lattice: Generation,
     direction: Direction,
-    end_of_month: bool,
 }
 
 impl Generator {
@@ -587,49 +687,76 @@ impl Generator {
             start_stub: b.first_date,
             end_anchor: b.termination,
             end_stub: b.next_to_last_date,
-            step: b.tenor,
+            lattice: b.lattice(),
             direction: Direction::Forward,
-            end_of_month: b.end_of_month,
         }
     }
 
-    /// Negates the step so a `Backward` generator can drive the
-    /// same [`Stepper`] / [`Walk`] machinery as `Forward`. Returns
-    /// [`TimeError::DateOutOfRange`] only if the tenor's length is
-    /// `i32::MIN` (no positive counterpart in `i32`).
-    fn backward(b: &ScheduleBuilder<'_>) -> Result<Self, TimeError> {
-        Ok(Self {
+    /// The same machinery as `Forward`; `Walk` signs its steps by
+    /// direction, so no negated tenor is needed.
+    fn backward(b: &ScheduleBuilder<'_>) -> Self {
+        Self {
             start_anchor: b.termination,
             start_stub: b.next_to_last_date,
             end_anchor: b.effective,
             end_stub: b.first_date,
-            step: b.tenor.checked_neg().ok_or(TimeError::DateOutOfRange)?,
+            lattice: b.lattice(),
             direction: Direction::Backward,
-            end_of_month: b.end_of_month,
-        })
+        }
     }
 
-    fn generate(&self) -> Result<Vec<Date>, TimeError> {
+    fn generate(&self) -> Result<(Vec<Date>, StubReferences), TimeError> {
         let seed = self.start_stub.unwrap_or(self.start_anchor);
         let stop = self.end_stub.unwrap_or(self.end_anchor);
-        let stepper = Stepper::new(seed, self.step, self.end_of_month);
 
         let mut out: Vec<Date> = Vec::new();
         out.push(self.start_anchor);
         if let Some(s) = self.start_stub {
             out.push(s);
         }
-        for candidate in Walk::new(&stepper, stop, self.direction) {
+        let mut walk = Walk::new(self.lattice, seed, stop, self.direction);
+        for candidate in walk.by_ref() {
             out.push(candidate?);
         }
+        // The lattice point the walk halted on: the stop-side
+        // quasi-coupon boundary, equal to the anchor exactly when that
+        // period is regular.
+        let stopping = walk.at(walk.i)?;
         if let Some(s) = self.end_stub {
             out.push(s);
         }
         out.push(self.end_anchor);
-        if matches!(self.direction, Direction::Backward) {
-            out.reverse();
-        }
-        Ok(out)
+
+        // A stub's boundary steps away from the stub along the
+        // lattice, one step *against* the walk's direction. `None`
+        // marks a regular end, which is its own reference.
+        let outward = match self.direction {
+            Direction::Forward => -1,
+            Direction::Backward => 1,
+        };
+        let seed_side = self
+            .start_stub
+            .map(|s| self.lattice.step(s, outward))
+            .transpose()?;
+        let stop_side = match self.end_stub {
+            Some(s) => Some(self.lattice.step(s, -outward)?),
+            None => (stopping != self.end_anchor).then_some(stopping),
+        };
+
+        let stubs = match self.direction {
+            Direction::Forward => StubReferences {
+                front: seed_side,
+                back: stop_side,
+            },
+            Direction::Backward => {
+                out.reverse();
+                StubReferences {
+                    front: stop_side,
+                    back: seed_side,
+                }
+            }
+        };
+        Ok((out, stubs))
     }
 }
 
@@ -963,8 +1090,8 @@ mod tests {
         .with_termination_convention(BusinessDayConvention::Unadjusted)
         .build()
         .unwrap();
-        assert_eq!(s.first().unwrap(), ymd(2025, Month::Jan, 6));
-        assert_eq!(s.last().unwrap(), ymd(2026, Month::Jan, 17));
+        assert_eq!(s.first().copied().unwrap(), ymd(2025, Month::Jan, 6));
+        assert_eq!(s.last().copied().unwrap(), ymd(2026, Month::Jan, 17));
     }
 
     // ---- Periods iterator ---------------------------------------------
@@ -982,7 +1109,7 @@ mod tests {
         .with_termination_convention(BusinessDayConvention::Unadjusted)
         .build()
         .unwrap();
-        let pairs: Vec<(Date, Date)> = s.periods().map(Into::into).collect();
+        let pairs: Vec<(Date, Date)> = s.periods().map(|p| (p.start, p.end)).collect();
         assert_eq!(
             pairs,
             vec![
@@ -1007,8 +1134,8 @@ mod tests {
         .build()
         .unwrap();
         let p = s.periods().next().unwrap();
-        assert_eq!(p.start(), ymd(2025, Month::Jan, 15));
-        assert_eq!(p.end(), ymd(2025, Month::Feb, 15));
+        assert_eq!(p.start, ymd(2025, Month::Jan, 15));
+        assert_eq!(p.end, ymd(2025, Month::Feb, 15));
     }
 
     // ---- Validation errors --------------------------------------------
@@ -1097,9 +1224,9 @@ mod tests {
     }
 
     #[test]
-    fn get_returns_some_or_none() {
+    fn slice_access_is_bounds_checked() {
         let s = quarterly_2025();
-        assert_eq!(s.get(0), Some(ymd(2025, Month::Jan, 15)));
+        assert_eq!(s.first().copied(), Some(ymd(2025, Month::Jan, 15)));
         assert_eq!(s.get(s.len()), None);
     }
 
@@ -1187,7 +1314,7 @@ mod tests {
         );
         // Cutoff equal to a schedule date — that date is included.
         let truncated = s.after(ymd(2025, Month::Jul, 15));
-        assert_eq!(truncated.first(), Some(ymd(2025, Month::Jul, 15)));
+        assert_eq!(truncated.first().copied(), Some(ymd(2025, Month::Jul, 15)));
         // Cutoff past the last → empty.
         assert!(s.after(ymd(2027, Month::Jan, 1)).is_empty());
         // Cutoff before the first → all dates.
@@ -1206,7 +1333,7 @@ mod tests {
         );
         // Cutoff equal to a schedule date — that date is included.
         let truncated = s.until(ymd(2025, Month::Jul, 15));
-        assert_eq!(truncated.last(), Some(ymd(2025, Month::Jul, 15)));
+        assert_eq!(truncated.last().copied(), Some(ymd(2025, Month::Jul, 15)));
         // Cutoff before the first → empty.
         assert!(s.until(ymd(2024, Month::Dec, 1)).is_empty());
         // Cutoff past the last → all dates.
@@ -1270,8 +1397,8 @@ mod tests {
                 let expected_last = WEEKENDS
                     .adjust(termination, BusinessDayConvention::Unadjusted)
                     .unwrap();
-                prop_assert_eq!(s.first().unwrap(), expected_first);
-                prop_assert_eq!(s.last().unwrap(), expected_last);
+                prop_assert_eq!(s.first().copied().unwrap(), expected_first);
+                prop_assert_eq!(s.last().copied().unwrap(), expected_last);
             }
         }
 
@@ -1301,62 +1428,82 @@ mod tests {
         }
     }
 
-    // ---- Stepper ------------------------------------------------------
+    // ---- Generation::step ---------------------------------------------
 
-    #[test]
-    fn stepper_steps_forward_in_months() {
-        let s = Stepper::new(ymd(2025, Month::Jan, 15), Period::Months(3), false);
-        assert_eq!(s.step(1).unwrap(), ymd(2025, Month::Apr, 15));
-        assert_eq!(s.step(2).unwrap(), ymd(2025, Month::Jul, 15));
-        assert_eq!(s.step(4).unwrap(), ymd(2026, Month::Jan, 15));
-    }
-
-    #[test]
-    fn stepper_steps_forward_in_days() {
-        let s = Stepper::new(ymd(2025, Month::Jan, 1), Period::Days(7), false);
-        assert_eq!(s.step(1).unwrap(), ymd(2025, Month::Jan, 8));
-        assert_eq!(s.step(3).unwrap(), ymd(2025, Month::Jan, 22));
-    }
-
-    #[test]
-    fn stepper_with_negative_step_walks_backward() {
-        let s = Stepper::new(ymd(2025, Month::Apr, 15), Period::Months(-1), false);
-        assert_eq!(s.step(1).unwrap(), ymd(2025, Month::Mar, 15));
-        assert_eq!(s.step(3).unwrap(), ymd(2025, Month::Jan, 15));
-    }
-
-    #[test]
-    fn stepper_eom_snaps_when_seed_is_eom_and_step_is_monthly() {
-        // Feb 28 + 1M without `EoM`= Mar 28; with `EoM`= Mar 31.
-        let s = Stepper::new(ymd(2025, Month::Feb, 28), Period::Months(1), true);
-        assert_eq!(s.step(1).unwrap(), ymd(2025, Month::Mar, 31));
-        assert_eq!(s.step(2).unwrap(), ymd(2025, Month::Apr, 30));
-        assert_eq!(s.step(3).unwrap(), ymd(2025, Month::May, 31));
-    }
-
-    #[test]
-    fn stepper_eom_inert_when_seed_is_not_eom() {
-        let with_flag = Stepper::new(ymd(2025, Month::Jan, 15), Period::Months(1), true);
-        let without_flag = Stepper::new(ymd(2025, Month::Jan, 15), Period::Months(1), false);
-        for i in 1..=4 {
-            assert_eq!(with_flag.step(i).unwrap(), without_flag.step(i).unwrap());
+    fn lattice(tenor: Period, end_of_month: bool) -> Generation {
+        Generation {
+            tenor,
+            end_of_month,
         }
     }
 
     #[test]
-    fn stepper_eom_inert_for_day_step() {
-        // Seed is EoM but step is in days — `EoM`rule does not apply.
-        let s = Stepper::new(ymd(2025, Month::Feb, 28), Period::Days(1), true);
-        assert_eq!(s.step(1).unwrap(), ymd(2025, Month::Mar, 1));
+    fn step_advances_by_fresh_multiples() {
+        let anchor = ymd(2025, Month::Jan, 15);
+        let quarterly = lattice(Period::Months(3), false);
+        assert_eq!(
+            quarterly.step(anchor, 1).unwrap(),
+            ymd(2025, Month::Apr, 15)
+        );
+        assert_eq!(
+            quarterly.step(anchor, 2).unwrap(),
+            ymd(2025, Month::Jul, 15)
+        );
+        assert_eq!(
+            quarterly.step(anchor, 4).unwrap(),
+            ymd(2026, Month::Jan, 15)
+        );
+        let weekly = lattice(Period::Days(7), false);
+        let start = ymd(2025, Month::Jan, 1);
+        assert_eq!(weekly.step(start, 1).unwrap(), ymd(2025, Month::Jan, 8));
+        assert_eq!(weekly.step(start, 3).unwrap(), ymd(2025, Month::Jan, 22));
+    }
+
+    #[test]
+    fn step_walks_backward_on_negative_indices() {
+        let anchor = ymd(2025, Month::Apr, 15);
+        let monthly = lattice(Period::Months(1), false);
+        assert_eq!(monthly.step(anchor, -1).unwrap(), ymd(2025, Month::Mar, 15));
+        assert_eq!(monthly.step(anchor, -3).unwrap(), ymd(2025, Month::Jan, 15));
+    }
+
+    #[test]
+    fn step_snaps_to_month_end_only_when_configured() {
+        // Feb 28 + 1M is Mar 28 plainly, Mar 31 under end-of-month.
+        let anchor = ymd(2025, Month::Feb, 28);
+        let snapping = lattice(Period::Months(1), true);
+        assert_eq!(snapping.step(anchor, 1).unwrap(), ymd(2025, Month::Mar, 31));
+        assert_eq!(snapping.step(anchor, 2).unwrap(), ymd(2025, Month::Apr, 30));
+        assert_eq!(
+            lattice(Period::Months(1), false).step(anchor, 1).unwrap(),
+            ymd(2025, Month::Mar, 28)
+        );
+        // Inert when the anchor is not month-end.
+        let mid = ymd(2025, Month::Jan, 15);
+        assert_eq!(snapping.step(mid, 1).unwrap(), ymd(2025, Month::Feb, 15));
+        // Inert for day-based tenors, where the concept does not apply.
+        assert_eq!(
+            lattice(Period::Days(1), true).step(anchor, 1).unwrap(),
+            ymd(2025, Month::Mar, 1)
+        );
+    }
+
+    #[test]
+    fn step_refuses_to_leave_the_supported_range() {
+        assert_eq!(
+            lattice(Period::Years(1), false).step(Date::MAX, 1),
+            Err(TimeError::DateOutOfRange),
+        );
     }
 
     // ---- Walk ---------------------------------------------------------
 
     #[test]
     fn walk_forward_emits_interior_and_halts_before_stop() {
-        let stepper = Stepper::new(ymd(2025, Month::Jan, 15), Period::Months(1), false);
+        let seed = ymd(2025, Month::Jan, 15);
+        let monthly = lattice(Period::Months(1), false);
         let stop = ymd(2025, Month::Apr, 15);
-        let dates: Vec<Date> = Walk::new(&stepper, stop, Direction::Forward)
+        let dates: Vec<Date> = Walk::new(monthly, seed, stop, Direction::Forward)
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(
@@ -1367,9 +1514,10 @@ mod tests {
 
     #[test]
     fn walk_backward_emits_interior_and_halts_after_stop() {
-        let stepper = Stepper::new(ymd(2025, Month::Apr, 15), Period::Months(-1), false);
+        let seed = ymd(2025, Month::Apr, 15);
+        let monthly = lattice(Period::Months(1), false);
         let stop = ymd(2025, Month::Jan, 15);
-        let dates: Vec<Date> = Walk::new(&stepper, stop, Direction::Backward)
+        let dates: Vec<Date> = Walk::new(monthly, seed, stop, Direction::Backward)
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(
@@ -1381,9 +1529,10 @@ mod tests {
     #[test]
     fn walk_immediately_terminates_when_stop_equals_seed_plus_step() {
         // Forward: stop hit on first candidate → empty.
-        let stepper = Stepper::new(ymd(2025, Month::Jan, 15), Period::Months(1), false);
+        let seed = ymd(2025, Month::Jan, 15);
+        let monthly = lattice(Period::Months(1), false);
         let stop = ymd(2025, Month::Feb, 15);
-        let dates: Vec<Date> = Walk::new(&stepper, stop, Direction::Forward)
+        let dates: Vec<Date> = Walk::new(monthly, seed, stop, Direction::Forward)
             .collect::<Result<_, _>>()
             .unwrap();
         assert!(dates.is_empty());
@@ -1400,7 +1549,7 @@ mod tests {
             WEEKENDS,
         )
         .with_next_to_last_date(ymd(2025, Month::Apr, 15));
-        let dates = Generator::forward(&b).generate().unwrap();
+        let (dates, _) = Generator::forward(&b).generate().unwrap();
         assert_eq!(
             dates,
             vec![
@@ -1421,7 +1570,7 @@ mod tests {
             Period::Months(1),
             WEEKENDS,
         );
-        let dates = Generator::backward(&b).unwrap().generate().unwrap();
+        let (dates, _) = Generator::backward(&b).generate().unwrap();
         assert_eq!(
             dates,
             vec![
@@ -1543,6 +1692,137 @@ mod tests {
         let d = ymd(2025, Month::Jan, 15);
         let r = Schedule::try_from(vec![d, d]);
         assert_eq!(r.unwrap_err(), TimeError::ScheduleNotMonotonic);
+    }
+
+    // ---- reference dates ----------------------------------------------
+
+    fn unadjusted(effective: Date, termination: Date, rule: DateGenerationRule) -> Schedule {
+        ScheduleBuilder::new(effective, termination, Period::Months(6), WEEKENDS)
+            .with_rule(rule)
+            .with_convention(BusinessDayConvention::Unadjusted)
+            .with_termination_convention(BusinessDayConvention::Unadjusted)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn regular_schedule_reference_periods_equal_coupon_periods() {
+        let s = unadjusted(
+            ymd(2025, Month::Jan, 15),
+            ymd(2026, Month::Jan, 15),
+            DateGenerationRule::Backward,
+        );
+        let periods: Vec<_> = s.periods().collect();
+        let references: Vec<_> = s.reference_periods().collect();
+        assert_eq!(periods, references);
+    }
+
+    #[test]
+    fn front_stub_reference_date_is_one_tenor_before_the_first_coupon() {
+        let s = unadjusted(
+            ymd(2002, Month::Aug, 15),
+            ymd(2004, Month::Jan, 15),
+            DateGenerationRule::Backward,
+        );
+        let references: Vec<_> = s.reference_periods().collect();
+        assert_eq!(
+            references[0],
+            ymd(2002, Month::Jul, 15)..ymd(2003, Month::Jan, 15)
+        );
+        // Every later period is its own reference.
+        assert_eq!(references[1..], s.periods().skip(1).collect::<Vec<_>>()[..]);
+    }
+
+    #[test]
+    fn back_stub_reference_date_is_one_tenor_after_the_last_coupon() {
+        let s = unadjusted(
+            ymd(2003, Month::Jan, 15),
+            ymd(2004, Month::Jun, 30),
+            DateGenerationRule::Forward,
+        );
+        let references: Vec<_> = s.reference_periods().collect();
+        let last = references.len() - 1;
+        assert_eq!(references[last].end, ymd(2004, Month::Jul, 15));
+        assert_eq!(references[..last], s.periods().collect::<Vec<_>>()[..last]);
+    }
+
+    #[test]
+    fn slicing_keeps_both_lists_parallel() {
+        let s = unadjusted(
+            ymd(2002, Month::Aug, 15),
+            ymd(2004, Month::Jan, 15),
+            DateGenerationRule::Backward,
+        );
+        // Slicing off the front drops the front stub: every remaining
+        // period is regular.
+        let tail = s.after(ymd(2003, Month::Jan, 15));
+        assert_eq!(
+            tail.periods().collect::<Vec<_>>(),
+            tail.reference_periods().collect::<Vec<_>>(),
+        );
+        // Truncating the tail keeps the front stub.
+        let head = s.until(ymd(2003, Month::Jul, 15));
+        assert_eq!(
+            head.reference_periods().next().unwrap().start,
+            ymd(2002, Month::Jul, 15),
+        );
+    }
+
+    #[test]
+    fn construction_rejects_degenerate_stub_references() {
+        // A front stub boundary must sit before the coupon it anchors.
+        assert_eq!(
+            Schedule::new(
+                alloc::vec![ymd(2025, Month::Jan, 15), ymd(2025, Month::Jul, 15)],
+                StubReferences {
+                    front: Some(ymd(2025, Month::Aug, 1)),
+                    back: None,
+                },
+                None,
+            ),
+            Err(TimeError::InvalidReferencePeriod),
+        );
+        // A back stub boundary must sit after its coupon.
+        assert_eq!(
+            Schedule::new(
+                alloc::vec![ymd(2025, Month::Jan, 15), ymd(2025, Month::Jul, 15)],
+                StubReferences {
+                    front: None,
+                    back: Some(ymd(2025, Month::Jan, 1)),
+                },
+                None,
+            ),
+            Err(TimeError::InvalidReferencePeriod),
+        );
+        // A boundary outside its coupon is exactly what a stub needs.
+        let s = Schedule::new(
+            alloc::vec![ymd(2025, Month::Jan, 15), ymd(2025, Month::Jul, 15)],
+            StubReferences {
+                front: Some(ymd(2025, Month::Jan, 1)),
+                back: None,
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            s.reference_periods().next().unwrap(),
+            ymd(2025, Month::Jan, 1)..ymd(2025, Month::Jul, 15),
+        );
+    }
+
+    #[test]
+    fn a_bare_date_list_is_all_regular_and_names_no_lattice() {
+        let s = Schedule::try_from(alloc::vec![
+            ymd(2025, Month::Jan, 15),
+            ymd(2025, Month::Jul, 15),
+            ymd(2026, Month::Jan, 15),
+        ])
+        .unwrap();
+        assert!(s.generation().is_none());
+        assert_eq!(
+            s.periods().collect::<Vec<_>>(),
+            s.reference_periods().collect::<Vec<_>>(),
+        );
     }
 
     #[test]

@@ -162,16 +162,7 @@ impl Calendar<'_> {
         convention: BusinessDayConvention,
         end_of_month: bool,
     ) -> Result<Date, TimeError> {
-        let stepped = (date + period)?;
-        let target = if end_of_month
-            && date.is_end_of_month()
-            && matches!(period, Period::Months(_) | Period::Years(_))
-        {
-            stepped.end_of_month()
-        } else {
-            stepped
-        };
-        self.adjust(target, convention)
+        self.adjust(date.advance(period, end_of_month)?, convention)
     }
 }
 

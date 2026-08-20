@@ -51,12 +51,15 @@ mod year_range;
 pub use business_day::BusinessDayConvention;
 pub use calendar::{Calendar, CalendarBuilder};
 pub use date::{Date, Month, Ordinal, Weekday, Year};
-pub use daycount::{Act360, Act365Fixed, ActActISDA, DayCount, Thirty360Bond};
+pub use daycount::{
+    Act360, Act365Fixed, ActActICMA, ActActISDA, BoundActActICMA, DayCount, Thirty360Bond,
+    Thirty360European, Thirty360ISDA, Thirty360US,
+};
 pub use easter::{EasterMethod, easter_monday, easter_sunday};
 pub use error::TimeError;
 pub use fraction::Fraction;
 pub use period::{Frequency, Period};
 pub use rules::{EasterOffset, FixedDate, LastWeekday, NthWeekday, OneOff, Rule, WeekendShift};
-pub use schedule::{AccrualPeriod, DateGenerationRule, Schedule, ScheduleBuilder};
+pub use schedule::{DateGenerationRule, Generation, Schedule, ScheduleBuilder};
 pub use weekend::Weekend;
 pub use year_range::YearRange;

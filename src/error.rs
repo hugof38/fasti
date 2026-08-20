@@ -47,6 +47,19 @@ pub enum TimeError {
     /// zero denominator.
     #[error("year fraction denominator must be non-zero")]
     ZeroDenominator,
+    /// An [`ActActICMA`](crate::ActActICMA) reference period did not have
+    /// its start strictly before its end, or a bound schedule had fewer
+    /// than two dates.
+    #[error("reference period start must be strictly before its end")]
+    InvalidReferencePeriod,
+    /// [`Fraction`](crate::Fraction) arithmetic inside a day-count
+    /// computation overflowed the `i64`/`u64` representation.
+    #[error("year-fraction arithmetic overflowed")]
+    FractionOverflow,
+    /// A day count was bound to a [`Schedule`](crate::Schedule) whose
+    /// tenor disagrees with the convention's coupon frequency.
+    #[error("day-count frequency does not match the schedule's tenor")]
+    FrequencyMismatch,
     /// A [`Schedule`](crate::Schedule) builder was given an
     /// effective date at or after the termination date.
     #[error("schedule effective date must be strictly before termination")]

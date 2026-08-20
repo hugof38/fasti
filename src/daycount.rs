@@ -1,83 +1,101 @@
-//! [`DayCount`] — convention for measuring elapsed time between two
-//! [`Date`]s as a [`Fraction`].
+//! [`DayCount`] — conventions measuring elapsed time between two
+//! [`Date`]s as a [`Fraction`]. Modeled on `QuantLib`'s `ql/time`
+//! day counters.
 //!
-//! Modeled on `QuantLib`'s
-//! [`ql/time/daycounter.hpp`](https://github.com/lballabio/QuantLib/blob/master/ql/time/daycounter.hpp).
-//! Concrete impls are zero-sized unit structs (`Act360`,
-//! `Act365Fixed`, …) — this is the one place in the crate where
-//! traits + generics carry their weight, driven by the goal of
-//! covering `QuantLib`'s full day-count surface over time.
-//!
-//! # The trait contract
-//!
-//! Both `day_count` and `year_fraction` are signed by direction:
-//! reversed inputs (`end < start`) produce negative results that
-//! mirror the ordered ones. `year_fraction(d, d)` returns
-//! [`Fraction::ZERO`].
-//!
-//! Implementations are pure functions of `(start, end)`. They hold
-//! no state, so the trait is implemented on unit structs and trait
-//! objects (`&dyn DayCount`) are cheap.
-//!
-//! # Additivity
-//!
-//! ACT-family conventions ([`Act360`], [`Act365Fixed`],
-//! [`ActActISDA`]) are additive across splits:
-//! `yf(a, b) + yf(b, c) == yf(a, c)` for any `a <= b <= c`. This is
-//! tested as a proptest invariant on every ACT impl. 30/360 family
-//! conventions are intentionally *not* additive — the day-count
-//! adjustments mean the per-segment counts can diverge from the
-//! whole-period count. That non-additivity is documented and tested
-//! at the impl site.
+//! All conventions are signed by direction (`yf(a, b) == -yf(b, a)`)
+//! and return [`Fraction::ZERO`] for equal dates. ACT-family
+//! conventions are additive across splits; the 30/360 family is
+//! intentionally not — both facts are property-tested.
 
-use crate::{Date, Fraction, Month};
+use core::ops::Range;
+
+use crate::{Date, Fraction, Frequency, Generation, Month, Period, Schedule, TimeError, Year};
+
+/// Date-range operations the accrual math needs. An extension trait
+/// rather than a newtype so schedules, coupon periods, and notional
+/// windows are all plain `Range<Date>` — the vocabulary type callers
+/// already know, with `contains` and range syntax for free.
+trait DateRange: Sized {
+    /// Elapsed days, signed by direction.
+    fn days(&self) -> i64;
+
+    /// The overlap with `other`, if the two share any days. Ranges
+    /// that merely touch at a boundary share none.
+    fn intersect(&self, other: &Self) -> Option<Self>;
+}
+
+impl DateRange for Range<Date> {
+    fn days(&self) -> i64 {
+        i64::from(self.end.days_since(self.start))
+    }
+
+    fn intersect(&self, other: &Self) -> Option<Self> {
+        let both = self.start.max(other.start)..self.end.min(other.end);
+        (both.start < both.end).then_some(both)
+    }
+}
 
 /// A day-count convention.
 ///
 /// ```
 /// use fasti::{Act360, DayCount, Date, Month};
-/// let dc = Act360;
 /// let start = Date::from_ymd(2025, Month::Jan, 1)?;
 /// let end = Date::from_ymd(2025, Month::Apr, 1)?;
-/// // 90 days at 360-day basis = 90/360 = 1/4.
-/// assert_eq!(dc.year_fraction(start, end).parts(), (1, 4));
+/// assert_eq!(Act360.year_fraction(start, end).parts(), (1, 4));
 /// # Ok::<(), fasti::TimeError>(())
 /// ```
 pub trait DayCount {
     /// A short human-readable name like `"Actual/360"`.
     fn name(&self) -> &'static str;
 
-    /// Days between `start` and `end`, signed by direction.
-    ///
-    /// `day_count(d, d) == 0`. For ordered inputs (`start <= end`)
-    /// the result is non-negative; for reversed inputs the result is
-    /// the negation of the ordered count.
-    fn day_count(&self, start: Date, end: Date) -> i64;
+    /// Days between `start` and `end`, signed by direction. Defaults
+    /// to calendar days; the 30/360 family overrides.
+    fn day_count(&self, start: Date, end: Date) -> i64 {
+        (start..end).days()
+    }
 
-    /// The year fraction between `start` and `end` under this
-    /// convention.
+    /// The year fraction between `start` and `end`: signed by
+    /// direction, [`Fraction::ZERO`] for equal dates.
     ///
-    /// Signed by direction: reversed inputs produce a negative
-    /// fraction, mirroring [`day_count`](Self::day_count). Equal
-    /// inputs return [`Fraction::ZERO`].
+    /// Conventions needing schedule context (ACT/ACT ICMA) carry it
+    /// in the implementing value ([`ActActICMA::bind`]), keeping this
+    /// signature uniform.
     fn year_fraction(&self, start: Date, end: Date) -> Fraction;
 }
 
-// ---- Actual/360 --------------------------------------------------------
+// ---- Basis --------------------------------------------------------------
 
-/// Actual/360 day-count convention.
-///
-/// Year fraction is the calendar day count divided by 360, regardless
-/// of leap years. Standard for USD money-market and most floating-rate
-/// structured-credit accruals.
+/// The denominator a day count divides by — a fixed 360/365 basis, or
+/// a year length for the ACT/ACT family.
+#[derive(Debug, Clone, Copy)]
+struct Basis(u64);
+
+impl Basis {
+    const DAYS_360: Self = Self(360);
+    const DAYS_365: Self = Self(365);
+
+    const fn of(days: u64) -> Self {
+        Self(days)
+    }
+
+    /// `days / self`, reduced. Every basis is non-zero, so the
+    /// zero-denominator arm is unreachable and yields
+    /// [`Fraction::ZERO`] to honour the no-panic contract.
+    fn fraction(self, days: i64) -> Fraction {
+        Fraction::new(days, self.0).unwrap_or_default()
+    }
+}
+
+// ---- ACT family ---------------------------------------------------------
+
+/// Actual/360: calendar days over 360. Standard for USD money-market
+/// and most floating-rate structured-credit accruals.
 ///
 /// ```
 /// use fasti::{Act360, DayCount, Date, Month};
-/// let dc = Act360;
 /// let start = Date::from_ymd(2024, Month::Jan, 1)?;
 /// let end = Date::from_ymd(2025, Month::Jan, 1)?;
-/// // 2024 is a leap year — 366 days, year fraction 366/360 > 1.
-/// assert_eq!(dc.year_fraction(start, end).parts(), (61, 60));
+/// assert_eq!(Act360.year_fraction(start, end).parts(), (61, 60)); // 366/360
 /// # Ok::<(), fasti::TimeError>(())
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -88,35 +106,19 @@ impl DayCount for Act360 {
         "Actual/360"
     }
 
-    fn day_count(&self, start: Date, end: Date) -> i64 {
-        i64::from(end.days_since(start))
-    }
-
     fn year_fraction(&self, start: Date, end: Date) -> Fraction {
-        // Denominator 360 is non-zero, so `new` cannot fail in
-        // practice; `unwrap_or_default` returns `Fraction::ZERO`
-        // on the unreachable `Err` arm and honours the no-panic
-        // library contract.
-        Fraction::new(self.day_count(start, end), 360).unwrap_or_default()
+        Basis::DAYS_360.fraction(self.day_count(start, end))
     }
 }
 
-// ---- Actual/365 (Fixed) ------------------------------------------------
-
-/// Actual/365 (Fixed) day-count convention.
-///
-/// Year fraction is the calendar day count divided by 365, regardless
-/// of leap years. Standard for GBP money market and many fixed-income
-/// pricing libraries that want a constant-denominator ACT
-/// convention.
+/// Actual/365 (Fixed): calendar days over 365, regardless of leap
+/// years. Standard for GBP money markets.
 ///
 /// ```
 /// use fasti::{Act365Fixed, DayCount, Date, Month};
-/// let dc = Act365Fixed;
 /// let start = Date::from_ymd(2025, Month::Jan, 1)?;
 /// let end = Date::from_ymd(2026, Month::Jan, 1)?;
-/// // 2025 is non-leap — 365 days, year fraction 365/365 = 1.
-/// assert_eq!(dc.year_fraction(start, end).parts(), (1, 1));
+/// assert_eq!(Act365Fixed.year_fraction(start, end).parts(), (1, 1));
 /// # Ok::<(), fasti::TimeError>(())
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -127,219 +129,53 @@ impl DayCount for Act365Fixed {
         "Actual/365 (Fixed)"
     }
 
-    fn day_count(&self, start: Date, end: Date) -> i64 {
-        i64::from(end.days_since(start))
-    }
-
     fn year_fraction(&self, start: Date, end: Date) -> Fraction {
-        // Denominator 365 is non-zero; see `Act360::year_fraction`
-        // for the `unwrap_or_default` rationale.
-        Fraction::new(self.day_count(start, end), 365).unwrap_or_default()
+        Basis::DAYS_365.fraction(self.day_count(start, end))
     }
 }
 
-// ---- 30/360 (Bond Basis) -----------------------------------------------
-
-/// 30/360 Bond Basis day-count convention — the ISDA 2006
-/// "30/360 or Bond Basis" definition.
-///
-/// Each calendar month is counted as 30 days and each year as 360
-/// days, with two day adjustments before computing
-/// `360·ΔY + 30·ΔM + ΔD`:
-///
-/// 1. `D1 := 30` if `D1 = 31`.
-/// 2. `D2 := 30` if `D2 = 31` and `D1 = 30` (after the first
-///    adjustment).
-///
-/// Used by many bond indentures and standard Eurobond swaps. The day
-/// count is computed for `start <= end` and extended by negation
-/// for reversed inputs.
-///
-/// # `QuantLib` parity
-///
-/// Bit-for-bit equivalent to `QuantLib`'s
-/// [`Thirty360::ISMA_Impl`](https://github.com/lballabio/QuantLib/blob/master/ql/time/daycounters/thirty360.cpp),
-/// reachable via the `Thirty360::BondBasis` enum value.
-///
-/// **Not** the same as `QuantLib`'s `Thirty360::USA` (NASD / SIA /
-/// "U.S. corporate" convention), which adds a last-of-February
-/// rule: when both `D1` and `D2` are the last calendar day of
-/// February, both are treated as 30, and the `D2 = 31` adjustment
-/// uses `D1 ≥ 30` against the *unadjusted* `D1`. Deal documents that
-/// say "30/360 (Bond Basis)" want this type; documents that say
-/// "NASD" or "SIA 30/360" want a separate impl that has not yet
-/// been added.
-///
-/// # Non-additivity
-///
-/// 30/360 is *not* additive across splits in general:
-/// `yf(a, b) + yf(b, c) ≠ yf(a, c)` for some triples. The
-/// asymmetric day adjustments mean per-segment counts can diverge
-/// from the whole-period count. The conventional approach in bond
-/// modelling is to compute period-by-period and accept the small
-/// per-period drift. The crate has a regression test
-/// (`thirty_360_bond_is_not_additive_jan31_feb28_mar31`) demonstrating
-/// the drift on the canonical example.
-///
-/// ```
-/// use fasti::{DayCount, Date, Month, Thirty360Bond};
-/// let dc = Thirty360Bond;
-/// let start = Date::from_ymd(2025, Month::Jan, 1)?;
-/// let end = Date::from_ymd(2025, Month::Jul, 1)?;
-/// // 6 months at 30 days each = 180/360 = 1/2.
-/// assert_eq!(dc.year_fraction(start, end).parts(), (1, 2));
-/// # Ok::<(), fasti::TimeError>(())
-/// ```
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub struct Thirty360Bond;
-
-impl Thirty360Bond {
-    /// 30/360 (Bond Basis) day count assuming `d1 <= d2`.
-    ///
-    /// Implementation of the ISDA 2006 "30/360 or Bond Basis"
-    /// formula. Conversions widen `u16`/`u8` calendar fields to
-    /// `i64` so the signed differences `Δyear`, `Δmonth`, `Δday`
-    /// cannot overflow. Private helper called from
-    /// [`day_count`](DayCount::day_count); the convention's
-    /// asymmetric formula means callers must order the inputs
-    /// before invoking this.
-    fn ordered_count(d1: Date, d2: Date) -> i64 {
-        let (y1, m1, dd1) = d1.to_ymd();
-        let (y2, m2, dd2) = d2.to_ymd();
-        // D1: 31 → 30.
-        let dd1 = if dd1 == 31 { 30 } else { dd1 };
-        // D2: 31 → 30 only when D1 (post-adjustment) is 30. This is
-        // the ISDA condition "D1 ∈ {30, 31}" — equivalent because
-        // D1 = 31 already became 30 on the previous line.
-        let dd2 = if dd2 == 31 && dd1 == 30 { 30 } else { dd2 };
-        let year_part = 360 * (i64::from(y2.get()) - i64::from(y1.get()));
-        let month_part = 30 * (i64::from(m2.get()) - i64::from(m1.get()));
-        let day_part = i64::from(dd2) - i64::from(dd1);
-        year_part + month_part + day_part
-    }
-}
-
-impl DayCount for Thirty360Bond {
-    fn name(&self) -> &'static str {
-        "30/360 (Bond Basis)"
-    }
-
-    fn day_count(&self, start: Date, end: Date) -> i64 {
-        // The bond-basis formula is asymmetric — D2's adjustment
-        // depends on D1. To keep the trait contract
-        // `dc(a, b) == -dc(b, a)` total, compute the count for the
-        // ordered pair and negate when the inputs are reversed.
-        if start <= end {
-            Self::ordered_count(start, end)
-        } else {
-            -Self::ordered_count(end, start)
-        }
-    }
-
-    fn year_fraction(&self, start: Date, end: Date) -> Fraction {
-        // Denominator 360 is non-zero; see `Act360::year_fraction`
-        // for the `unwrap_or_default` rationale.
-        Fraction::new(self.day_count(start, end), 360).unwrap_or_default()
-    }
-}
-
-// ---- ACT/ACT (ISDA) ----------------------------------------------------
-
-/// Actual/Actual (ISDA) day-count convention — the ISDA 2006
-/// "Actual/Actual (ISDA)" definition (a.k.a. "Actual/Actual
-/// (Historical)" in some literature).
-///
-/// Splits the period at calendar-year boundaries and weights leap
-/// vs. non-leap days separately:
-///
-/// ```text
-/// yf = days_in_leap_years / 366 + days_in_non_leap_years / 365
-/// ```
-///
-/// Equivalently — and as `QuantLib`'s `ISDA_Impl` codes it:
-///
-/// ```text
-/// yf = (y2 - y1 - 1) + first_partial / dib1 + last_partial / dib2
-/// ```
-///
-/// where `dib1 = 366` if `y1` is leap else `365`, and `dib2`
-/// similarly for `y2`. The two formulations are algebraically equal:
-/// a full leap year contributes `366 / 366 = 1` and a full non-leap
-/// year contributes `365 / 365 = 1`, so the middle full years add up
-/// to `y2 - y1 - 1` regardless of how many of them are leap.
-///
-/// Standard for fixed-income accruals worldwide and the most common
-/// "actual/actual" choice in ISDA documentation.
-///
-/// # `QuantLib` parity
-///
-/// Equivalent (modulo float vs. integer-rational representation) to
-/// `QuantLib`'s
-/// [`ActualActual::ISDA_Impl`](https://github.com/lballabio/QuantLib/blob/master/ql/time/daycounters/actualactual.cpp)
-/// — same year-boundary split, same per-year denominators, same
-/// signed-by-reversal contract.
-///
-/// # Additivity
-///
-/// ACT/ACT (ISDA) is additive across splits: `yf(a, b) + yf(b, c) =
-/// yf(a, c)` for any `a ≤ b ≤ c`. The proptest exercises this.
+/// Actual/Actual (ISDA): splits at calendar-year boundaries, weighting
+/// leap-year days by 1/366 and others by 1/365. Matches `QuantLib`'s
+/// `ActualActual::ISDA_Impl`.
 ///
 /// ```
 /// use fasti::{ActActISDA, DayCount, Date, Month};
-/// let dc = ActActISDA;
-/// // Period crossing a leap-year boundary: Nov 1 2003 → May 1 2004.
-/// // 61 non-leap days in 2003 + 121 leap days in 2004
-/// // = 61/365 + 121/366
-/// // = (61·366 + 121·365) / (365·366)
-/// // = (22326 + 44165) / 133590
-/// // = 66491 / 133590  (already reduced — gcd = 1)
+/// // 61 days in 2003 (/365) + 121 days in 2004 (/366):
 /// let start = Date::from_ymd(2003, Month::Nov, 1)?;
 /// let end = Date::from_ymd(2004, Month::May, 1)?;
-/// assert_eq!(dc.year_fraction(start, end).parts(), (66491, 133590));
+/// assert_eq!(ActActISDA.year_fraction(start, end).parts(), (66491, 133590));
 /// # Ok::<(), fasti::TimeError>(())
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct ActActISDA;
 
 impl ActActISDA {
-    /// ACT/ACT (ISDA) year fraction assuming `d1 <= d2`.
-    fn ordered_year_fraction(d1: Date, d2: Date) -> Fraction {
-        if d1 == d2 {
+    /// `(N·dib1·dib2 + a·dib2 + b·dib1) / (dib1·dib2)` for an ordered
+    /// span: `N` full middle years, `a`/`b` partial days in the end
+    /// years, `dib*` those years' lengths.
+    fn ordered_year_fraction(span: &Range<Date>) -> Fraction {
+        if span.start == span.end {
             return Fraction::ZERO;
         }
-        let y1 = d1.year();
-        let y2 = d2.year();
+        let (y1, y2) = (span.start.year(), span.end.year());
         if y1 == y2 {
-            // Same year: ACT / year_length.
-            let days = i64::from(d2.days_since(d1));
-            let denom = u64::from(y1.length());
-            return Fraction::new(days, denom).unwrap_or_default();
+            return Basis::of(u64::from(y1.length())).fraction(span.days());
         }
-        // Cross-year: yf = N + a/dib1 + b/dib2 where
-        //   N    = y2 - y1 - 1     (full middle years)
-        //   a    = days from d1 to Jan 1 of (y1+1)
-        //   b    = days from Jan 1 of y2 to d2
-        //   dib1 = 365 or 366 (length of y1)
-        //   dib2 = 365 or 366 (length of y2)
-        // Express as a single rational:
-        //   yf = (N·dib1·dib2 + a·dib2 + b·dib1) / (dib1·dib2)
         let n = i64::from(y2.get()) - i64::from(y1.get()) - 1;
         let dib1 = i64::from(y1.length());
         let dib2 = i64::from(y2.length());
-        // y1 < y2 ≤ Year::MAX ⇒ y1+1 ≤ y2 ≤ Year::MAX, both in range.
-        let Ok(next_year_start) = Date::from_ymd(y1.get() + 1, Month::Jan, 1) else {
+        // y1 < y2 <= Year::MAX, so both constructions are in range.
+        let (Ok(next_year_start), Ok(this_year_start)) = (
+            Date::from_ymd(y1.get() + 1, Month::Jan, 1),
+            Date::from_ymd(y2.get(), Month::Jan, 1),
+        ) else {
             return Fraction::ZERO;
         };
-        let Ok(this_year_start) = Date::from_ymd(y2.get(), Month::Jan, 1) else {
-            return Fraction::ZERO;
-        };
-        let a = i64::from(next_year_start.days_since(d1));
-        let b = i64::from(d2.days_since(this_year_start));
-        let num = n * dib1 * dib2 + a * dib2 + b * dib1;
-        // dib1·dib2 ∈ {365², 365·366, 366²}, all positive and ≤ u64.
+        let a = (span.start..next_year_start).days();
+        let b = (this_year_start..span.end).days();
+        // dib1·dib2 <= 366², positive.
         #[allow(clippy::cast_sign_loss)]
-        let denom = (dib1 * dib2) as u64;
-        Fraction::new(num, denom).unwrap_or_default()
+        Basis::of((dib1 * dib2) as u64).fraction(n * dib1 * dib2 + a * dib2 + b * dib1)
     }
 }
 
@@ -348,24 +184,530 @@ impl DayCount for ActActISDA {
         "Actual/Actual (ISDA)"
     }
 
-    fn day_count(&self, start: Date, end: Date) -> i64 {
-        // QuantLib uses calendar days for ACT-family `dayCount`; the
-        // convention's nuance lives in `year_fraction`.
-        i64::from(end.days_since(start))
-    }
-
     fn year_fraction(&self, start: Date, end: Date) -> Fraction {
         if start <= end {
-            Self::ordered_year_fraction(start, end)
+            Self::ordered_year_fraction(&(start..end))
         } else {
-            // Reverse direction: compute ordered, then negate.
-            // `checked_neg` returns None only at i64::MIN, which the
-            // ACT/ACT numerator (bounded by ~5·10⁷ across the
-            // supported date range) never approaches.
-            Self::ordered_year_fraction(end, start)
+            // Numerators stay far below |i64::MIN|; negation cannot fail.
+            Self::ordered_year_fraction(&(end..start))
                 .checked_neg()
                 .unwrap_or_default()
         }
+    }
+}
+
+// ---- ACT/ACT (ICMA) -----------------------------------------------------
+
+/// Actual/Actual (ICMA), ICMA Rule 251 — the standard for fixed-rate
+/// bond accruals: a regular coupon period accrues exactly
+/// `1 / frequency`, days accrue proportionally against their period's
+/// actual length, and stubs accrue against a notional coupon grid.
+///
+/// ICMA needs schedule context: [`bind`](Self::bind) a [`Schedule`]
+/// (whose parallel reference dates carry the regular grid) to get a
+/// [`BoundActActICMA`] answering plain two-date
+/// [`year_fraction`](DayCount::year_fraction) calls;
+/// [`year_fraction_with_reference`](Self::year_fraction_with_reference)
+/// is the manual escape hatch. Unbound, `year_fraction` returns
+/// `1 / frequency`, matching `QuantLib` without reference dates.
+///
+/// The coupon [`Frequency`] is explicit (where `QuantLib` float-rounds
+/// a month count from the reference-period length); the algorithm
+/// matches `QuantLib`'s `ActualActual::Old_ISMA_Impl`.
+///
+/// ```
+/// use fasti::{ActActICMA, DayCount, Date, Frequency, Month};
+/// let dc = ActActICMA::new(Frequency::Semiannual);
+/// let start = Date::from_ymd(2003, Month::Nov, 1)?;
+/// let end = Date::from_ymd(2004, Month::May, 1)?;
+/// assert_eq!(
+///     dc.year_fraction_with_reference(start, end, start, end)?.parts(),
+///     (1, 2),
+/// );
+/// # Ok::<(), fasti::TimeError>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ActActICMA {
+    frequency: Frequency,
+}
+
+impl ActActICMA {
+    /// Construct for the given coupon frequency.
+    #[must_use]
+    pub const fn new(frequency: Frequency) -> Self {
+        Self { frequency }
+    }
+
+    /// The coupon frequency this convention was constructed with.
+    #[must_use]
+    pub const fn frequency(&self) -> Frequency {
+        self.frequency
+    }
+
+    /// The lattice implied by the frequency alone, used when no
+    /// schedule names one. End-of-month snapping is assumed, matching
+    /// how coupon grids are conventionally laid out.
+    fn lattice(self) -> Generation {
+        Generation {
+            tenor: Period::from(self.frequency),
+            end_of_month: true,
+        }
+    }
+
+    /// Bind to a coupon [`Schedule`], yielding a [`BoundActActICMA`]
+    /// that reads the schedule's parallel reference dates — stub
+    /// periods accrue against their notional grid automatically.
+    ///
+    /// Bind an **unadjusted** schedule (ICMA's grid is the natural
+    /// coupon grid). Errors with
+    /// [`TimeError::InvalidReferencePeriod`] if the schedule has
+    /// fewer than two dates.
+    ///
+    /// ```
+    /// use fasti::{
+    ///     ActActICMA, BusinessDayConvention, Date, DayCount, Frequency,
+    ///     Month, Period, ScheduleBuilder, calendars,
+    /// };
+    /// let schedule = ScheduleBuilder::new(
+    ///     Date::from_ymd(2002, Month::Aug, 15)?,
+    ///     Date::from_ymd(2004, Month::Jan, 15)?,
+    ///     Period::Months(6),
+    ///     calendars::NULL_CALENDAR,
+    /// )
+    /// .backwards()
+    /// .with_convention(BusinessDayConvention::Unadjusted)
+    /// .build()?;
+    ///
+    /// let dc = ActActICMA::new(Frequency::Semiannual).bind(&schedule)?;
+    /// // The front stub accrues against its notional grid:
+    /// let stub = dc.year_fraction(
+    ///     Date::from_ymd(2002, Month::Aug, 15)?,
+    ///     Date::from_ymd(2003, Month::Jan, 15)?,
+    /// );
+    /// assert_eq!(stub.parts(), (153, 368));
+    /// # Ok::<(), fasti::TimeError>(())
+    /// ```
+    pub fn bind(self, schedule: &Schedule) -> Result<BoundActActICMA<'_>, TimeError> {
+        if schedule.len() < 2 {
+            return Err(TimeError::InvalidReferencePeriod);
+        }
+        // A generated schedule names the lattice it was built on; a
+        // convention whose frequency disagrees with that tenor would
+        // silently accrue against the wrong grid.
+        let lattice = match schedule.generation() {
+            Some(generation) => {
+                if generation.tenor.normalized() != Period::from(self.frequency).normalized() {
+                    return Err(TimeError::FrequencyMismatch);
+                }
+                generation
+            }
+            None => self.lattice(),
+        };
+        Ok(BoundActActICMA {
+            inner: self,
+            schedule,
+            lattice,
+        })
+    }
+
+    /// The year fraction given the (unadjusted) regular reference
+    /// period `ref_start..ref_end` the accrual belongs to. Prefer
+    /// [`bind`](Self::bind) when the accruals come from a
+    /// [`Schedule`].
+    ///
+    /// Errors: [`TimeError::InvalidReferencePeriod`] when
+    /// `ref_start >= ref_end`; [`TimeError::DateOutOfRange`] when a
+    /// notional walk escapes the supported range;
+    /// [`TimeError::FractionOverflow`] on overflow.
+    pub fn year_fraction_with_reference(
+        &self,
+        start: Date,
+        end: Date,
+        ref_start: Date,
+        ref_end: Date,
+    ) -> Result<Fraction, TimeError> {
+        if ref_start >= ref_end {
+            return Err(TimeError::InvalidReferencePeriod);
+        }
+        if start == end {
+            return Ok(Fraction::ZERO);
+        }
+        let reference = ref_start..ref_end;
+        let lattice = self.lattice();
+        if start < end {
+            self.accrue(start..end, reference.clone(), lattice)
+        } else {
+            self.accrue(end..start, reference.clone(), lattice)?
+                .checked_neg()
+                .ok_or(TimeError::FractionOverflow)
+        }
+    }
+
+    /// Accrue an ordered `span` over the grid anchored on
+    /// `reference`: descend to the lowest overlapping window, then
+    /// sum upward until the span is covered.
+    /// The share of one coupon that `chunk` represents inside the
+    /// notional `window` it falls in.
+    fn coupon_share(
+        self,
+        chunk: &Range<Date>,
+        window: &Range<Date>,
+    ) -> Result<Fraction, TimeError> {
+        let window_days =
+            u64::try_from(window.days()).map_err(|_| TimeError::InvalidReferencePeriod)?;
+        let denominator = u64::from(self.frequency.per_year())
+            .checked_mul(window_days)
+            .ok_or(TimeError::FractionOverflow)?;
+        Fraction::new(chunk.days(), denominator)
+    }
+
+    fn accrue(
+        self,
+        span: Range<Date>,
+        reference: Range<Date>,
+        lattice: Generation,
+    ) -> Result<Fraction, TimeError> {
+        let mut i = 0;
+        while lattice.window(&reference, i)?.start > span.start {
+            i -= 1;
+        }
+        let mut total = Fraction::ZERO;
+        loop {
+            let window = lattice.window(&reference, i)?;
+            if let Some(chunk) = span.intersect(&window) {
+                total = total
+                    .checked_add(self.coupon_share(&chunk, &window)?)
+                    .ok_or(TimeError::FractionOverflow)?;
+            }
+            if window.end >= span.end {
+                return Ok(total);
+            }
+            i += 1;
+        }
+    }
+}
+
+impl DayCount for ActActICMA {
+    fn name(&self) -> &'static str {
+        "Actual/Actual (ICMA)"
+    }
+
+    /// Unbound: the accrual counts as one full regular coupon period,
+    /// `±1 / frequency`. Use [`ActActICMA::bind`] for real schedules.
+    fn year_fraction(&self, start: Date, end: Date) -> Fraction {
+        if start == end {
+            return Fraction::ZERO;
+        }
+        Basis::of(u64::from(self.frequency.per_year())).fraction(if start < end { 1 } else { -1 })
+    }
+}
+
+/// [`ActActICMA`] bound to a coupon [`Schedule`] by
+/// [`ActActICMA::bind`]: the uniform two-date [`DayCount`] API with
+/// stub handling driven by the schedule's parallel reference dates,
+/// mirroring `QuantLib`'s schedule-carrying ISMA day counter.
+///
+/// Dates outside the schedule's span accrue nothing — the schedule
+/// defines the instrument's life. Deliberate semantics, not a
+/// fallback.
+#[derive(Debug, Clone, Copy)]
+pub struct BoundActActICMA<'s> {
+    inner: ActActICMA,
+    schedule: &'s Schedule,
+    lattice: Generation,
+}
+
+impl BoundActActICMA<'_> {
+    /// The coupon frequency of the underlying convention.
+    #[must_use]
+    pub const fn frequency(&self) -> Frequency {
+        self.inner.frequency()
+    }
+
+    /// The schedule this counter is bound to.
+    #[must_use]
+    pub const fn schedule(&self) -> &Schedule {
+        self.schedule
+    }
+
+    /// Sum of per-period accruals for an ordered span, clamped to the
+    /// schedule's own span.
+    fn ordered_year_fraction(&self, span: &Range<Date>) -> Fraction {
+        let (Some(&first), Some(&last)) = (self.schedule.first(), self.schedule.last()) else {
+            // Unreachable: bind requires at least two dates.
+            return Fraction::ZERO;
+        };
+        let Some(covered) = span.intersect(&(first..last)) else {
+            return Fraction::ZERO;
+        };
+        let mut total = Fraction::ZERO;
+        for (period, reference) in self
+            .schedule
+            .periods()
+            .zip(self.schedule.reference_periods())
+        {
+            if period.start >= covered.end {
+                break;
+            }
+            let Some(chunk) = covered.intersect(&period) else {
+                continue;
+            };
+            // A regular period is its own reference, so the grid walk
+            // is a single window; a stub extends it. Errors need a
+            // window outside the supported range, where ZERO is the
+            // documented fallback, and one schedule's denominators
+            // keep the running sum in range.
+            let accrued = self
+                .inner
+                .accrue(chunk, reference, self.lattice)
+                .unwrap_or_default();
+            total = total.checked_add(accrued).unwrap_or_default();
+        }
+        total
+    }
+}
+
+impl DayCount for BoundActActICMA<'_> {
+    fn name(&self) -> &'static str {
+        "Actual/Actual (ICMA)"
+    }
+
+    fn year_fraction(&self, start: Date, end: Date) -> Fraction {
+        if start == end {
+            return Fraction::ZERO;
+        }
+        if start < end {
+            self.ordered_year_fraction(&(start..end))
+        } else {
+            self.ordered_year_fraction(&(end..start))
+                .checked_neg()
+                .unwrap_or_default()
+        }
+    }
+}
+
+// ---- 30/360 family ------------------------------------------------------
+
+/// A date decomposed into the fields 30/360 conventions adjust,
+/// keeping the original [`Date`] for identity comparisons.
+#[derive(Debug, Clone, Copy)]
+struct Thirty360Date {
+    date: Date,
+    year: Year,
+    month: Month,
+    day: u8,
+}
+
+impl Thirty360Date {
+    fn of(date: Date) -> Self {
+        let (year, month, day) = date.to_ymd();
+        Self {
+            date,
+            year,
+            month,
+            day,
+        }
+    }
+
+    /// Apply a variant's `rule` to the ordered pair, negating for
+    /// reversed inputs so `dc(a, b) == -dc(b, a)` holds for the
+    /// family's asymmetric formulas.
+    fn signed(start: Date, end: Date, rule: impl FnOnce(Self, Self) -> i64) -> i64 {
+        if start <= end {
+            rule(Self::of(start), Self::of(end))
+        } else {
+            -rule(Self::of(end), Self::of(start))
+        }
+    }
+
+    fn is_last_of_february(self) -> bool {
+        matches!(self.month, Month::Feb) && self.day == Month::Feb.length(self.year)
+    }
+
+    /// The 31st counted as the 30th.
+    fn capped(self) -> Self {
+        self.with_day(if self.day == 31 { 30 } else { self.day })
+    }
+
+    fn with_day(self, day: u8) -> Self {
+        Self { day, ..self }
+    }
+
+    /// The family's shared formula, `360·Δy + 30·Δm + Δd`, over the
+    /// variant's already-adjusted day-of-month pair.
+    fn days_to(self, end: Self) -> i64 {
+        360 * (i64::from(end.year.get()) - i64::from(self.year.get()))
+            + 30 * (i64::from(end.month.get()) - i64::from(self.month.get()))
+            + (i64::from(end.day) - i64::from(self.day))
+    }
+}
+
+/// 30/360 Bond Basis (ISDA 2006). Matches `QuantLib`'s
+/// `Thirty360::BondBasis`. Not additive across splits.
+///
+/// ```
+/// use fasti::{DayCount, Date, Month, Thirty360Bond};
+/// let start = Date::from_ymd(2025, Month::Jan, 1)?;
+/// let end = Date::from_ymd(2025, Month::Jul, 1)?;
+/// assert_eq!(Thirty360Bond.year_fraction(start, end).parts(), (1, 2));
+/// # Ok::<(), fasti::TimeError>(())
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct Thirty360Bond;
+
+impl DayCount for Thirty360Bond {
+    fn name(&self) -> &'static str {
+        "30/360 (Bond Basis)"
+    }
+
+    fn day_count(&self, start: Date, end: Date) -> i64 {
+        Thirty360Date::signed(start, end, |start, end| {
+            let start = start.capped();
+            let end = if end.day == 31 && start.day == 30 {
+                end.with_day(30)
+            } else {
+                end
+            };
+            start.days_to(end)
+        })
+    }
+
+    fn year_fraction(&self, start: Date, end: Date) -> Fraction {
+        Basis::DAYS_360.fraction(self.day_count(start, end))
+    }
+}
+
+/// 30/360 (US) — SIA convention: Bond Basis plus the
+/// last-day-of-February rule, applied first. Matches `QuantLib`'s
+/// `Thirty360::USA`.
+///
+/// ```
+/// use fasti::{DayCount, Date, Month, Thirty360US};
+/// // Last-of-Feb start: D1 -> 30, then D2 = 31 -> 30.
+/// let start = Date::from_ymd(2025, Month::Feb, 28)?;
+/// let end = Date::from_ymd(2025, Month::Mar, 31)?;
+/// assert_eq!(Thirty360US.day_count(start, end), 30);
+/// # Ok::<(), fasti::TimeError>(())
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct Thirty360US;
+
+impl DayCount for Thirty360US {
+    fn name(&self) -> &'static str {
+        "30/360 (US)"
+    }
+
+    fn day_count(&self, start: Date, end: Date) -> i64 {
+        Thirty360Date::signed(start, end, |start, end| {
+            let (start, end) = if start.is_last_of_february() {
+                let end = if end.is_last_of_february() {
+                    end.with_day(30)
+                } else {
+                    end
+                };
+                (start.with_day(30), end)
+            } else {
+                (start, end)
+            };
+            let end = if end.day == 31 && start.day >= 30 {
+                end.with_day(30)
+            } else {
+                end
+            };
+            start.capped().days_to(end)
+        })
+    }
+
+    fn year_fraction(&self, start: Date, end: Date) -> Fraction {
+        Basis::DAYS_360.fraction(self.day_count(start, end))
+    }
+}
+
+/// 30E/360 (Eurobond Basis): both day-of-month values independently
+/// capped at 30. Matches `QuantLib`'s `Thirty360::EurobondBasis`.
+///
+/// ```
+/// use fasti::{DayCount, Date, Month, Thirty360European};
+/// let start = Date::from_ymd(2025, Month::Jan, 15)?;
+/// let end = Date::from_ymd(2025, Month::Mar, 31)?;
+/// assert_eq!(Thirty360European.day_count(start, end), 75);
+/// # Ok::<(), fasti::TimeError>(())
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct Thirty360European;
+
+impl DayCount for Thirty360European {
+    fn name(&self) -> &'static str {
+        "30E/360 (Eurobond Basis)"
+    }
+
+    fn day_count(&self, start: Date, end: Date) -> i64 {
+        Thirty360Date::signed(start, end, |start, end| {
+            start.capped().days_to(end.capped())
+        })
+    }
+
+    fn year_fraction(&self, start: Date, end: Date) -> Fraction {
+        Basis::DAYS_360.fraction(self.day_count(start, end))
+    }
+}
+
+/// 30E/360 (ISDA), a.k.a. 30/360 German: [`Thirty360European`] plus
+/// February handling — a last-of-February day counts as 30, except an
+/// end date equal to the instrument's termination date (hence the
+/// constructor argument). Matches `QuantLib`'s `Thirty360::ISDA`.
+///
+/// ```
+/// use fasti::{DayCount, Date, Month, Thirty360ISDA};
+/// let start = Date::from_ymd(2025, Month::Aug, 31)?;
+/// let feb_end = Date::from_ymd(2026, Month::Feb, 28)?;
+/// // Mid-schedule Feb end counts as 30; at maturity it stays 28.
+/// assert_eq!(Thirty360ISDA::new(Date::MAX).day_count(start, feb_end), 180);
+/// assert_eq!(Thirty360ISDA::new(feb_end).day_count(start, feb_end), 178);
+/// # Ok::<(), fasti::TimeError>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Thirty360ISDA {
+    termination: Date,
+}
+
+impl Thirty360ISDA {
+    /// Construct for an instrument maturing on `termination`.
+    #[must_use]
+    pub const fn new(termination: Date) -> Self {
+        Self { termination }
+    }
+
+    /// The termination (maturity) date.
+    #[must_use]
+    pub const fn termination(&self) -> Date {
+        self.termination
+    }
+}
+
+impl DayCount for Thirty360ISDA {
+    fn name(&self) -> &'static str {
+        "30E/360 (ISDA)"
+    }
+
+    fn day_count(&self, start: Date, end: Date) -> i64 {
+        Thirty360Date::signed(start, end, |start, end| {
+            let start = if start.is_last_of_february() {
+                start.with_day(30)
+            } else {
+                start.capped()
+            };
+            let end = if end.date != self.termination && end.is_last_of_february() {
+                end.with_day(30)
+            } else {
+                end.capped()
+            };
+            start.days_to(end)
+        })
+    }
+
+    fn year_fraction(&self, start: Date, end: Date) -> Fraction {
+        Basis::DAYS_360.fraction(self.day_count(start, end))
     }
 }
 
@@ -374,6 +716,8 @@ impl DayCount for ActActISDA {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    extern crate alloc;
+
     use super::*;
     use crate::Month;
     use proptest::prelude::*;
@@ -545,6 +889,461 @@ mod tests {
         assert_eq!(split, 61);
         assert_eq!(direct, 60);
         assert_ne!(split, direct);
+    }
+
+    // ---- Thirty360US / European / ISDA examples -----------------------
+
+    #[test]
+    fn thirty_360_variant_names() {
+        assert_eq!(Thirty360US.name(), "30/360 (US)");
+        assert_eq!(Thirty360European.name(), "30E/360 (Eurobond Basis)");
+        let isda = Thirty360ISDA::new(ymd(2030, Month::Jan, 1));
+        assert_eq!(isda.name(), "30E/360 (ISDA)");
+    }
+
+    /// The canonical case distinguishing the three 31st-day rules:
+    /// Jan 15 → Mar 31.
+    #[test]
+    fn thirty_360_variants_disagree_on_lone_31_end() {
+        let start = ymd(2025, Month::Jan, 15);
+        let end = ymd(2025, Month::Mar, 31);
+        // Bond Basis and US keep D2 = 31 because D1 < 30.
+        assert_eq!(Thirty360Bond.day_count(start, end), 76);
+        assert_eq!(Thirty360US.day_count(start, end), 76);
+        // European caps D2 unconditionally.
+        assert_eq!(Thirty360European.day_count(start, end), 75);
+        assert_eq!(
+            Thirty360ISDA::new(ymd(2030, Month::Jan, 1)).day_count(start, end),
+            75,
+        );
+    }
+
+    /// The last-of-February rule distinguishing US from Bond Basis.
+    #[test]
+    fn thirty_360_us_february_rule() {
+        // Feb 28 2025 (last of Feb, non-leap) → Mar 31 2025.
+        // US: D1 = 30 (Feb rule), then D2 = 31 → 30. Count = 30.
+        // Bond: D1 = 28 stays, D2 = 31 stays (D1 ≠ 30). Count = 33.
+        let start = ymd(2025, Month::Feb, 28);
+        let end = ymd(2025, Month::Mar, 31);
+        assert_eq!(Thirty360US.day_count(start, end), 30);
+        assert_eq!(Thirty360Bond.day_count(start, end), 33);
+
+        // Both dates last-of-Feb: Feb 29 2024 → Feb 28 2025.
+        // US: both → 30, count = 360. Bond: 360 + (28 - 29) = 359.
+        let leap_feb = ymd(2024, Month::Feb, 29);
+        let next_feb = ymd(2025, Month::Feb, 28);
+        assert_eq!(Thirty360US.day_count(leap_feb, next_feb), 360);
+        assert_eq!(Thirty360Bond.day_count(leap_feb, next_feb), 359);
+
+        // Feb 28 in a leap year is NOT the last of February — no rule.
+        let feb28_leap = ymd(2024, Month::Feb, 28);
+        assert_eq!(
+            Thirty360US.day_count(feb28_leap, ymd(2024, Month::Mar, 31)),
+            33,
+        );
+    }
+
+    #[test]
+    fn thirty_360_isda_termination_exception() {
+        // Aug 31 2025 → Feb 28 2026 (last of Feb).
+        // Mid-schedule: D1 = 31 → 30, D2 = 28 → 30 (Feb rule): 180.
+        let start = ymd(2025, Month::Aug, 31);
+        let feb_end = ymd(2026, Month::Feb, 28);
+        let interim = Thirty360ISDA::new(ymd(2030, Month::Jan, 1));
+        assert_eq!(interim.day_count(start, feb_end), 180);
+        // Same dates but Feb 28 2026 IS the termination: D2 stays 28,
+        // count = 360·1 + 30·(2−8) + (28−30) = 178.
+        let at_maturity = Thirty360ISDA::new(feb_end);
+        assert_eq!(at_maturity.day_count(start, feb_end), 178);
+        // Start-side Feb rule has no termination exception.
+        assert_eq!(
+            at_maturity.day_count(ymd(2025, Month::Feb, 28), ymd(2025, Month::Aug, 15)),
+            165, // D1 = 28 → 30: 30·6 + (15 − 30)
+        );
+    }
+
+    // ---- ActActICMA examples ------------------------------------------
+
+    #[test]
+    fn act_act_icma_name_and_frequency() {
+        let dc = ActActICMA::new(Frequency::Semiannual);
+        assert_eq!(dc.name(), "Actual/Actual (ICMA)");
+        assert_eq!(dc.frequency(), Frequency::Semiannual);
+    }
+
+    /// Without reference dates a period counts as one full coupon:
+    /// exactly 1/frequency, signed by direction.
+    #[test]
+    fn act_act_icma_without_reference_is_one_over_frequency() {
+        let dc = ActActICMA::new(Frequency::Quarterly);
+        let a = ymd(2025, Month::Jan, 15);
+        let b = ymd(2025, Month::Apr, 15);
+        assert_eq!(dc.year_fraction(a, b).parts(), (1, 4));
+        assert_eq!(dc.year_fraction(b, a).parts(), (-1, 4));
+        assert!(dc.year_fraction(a, a).is_zero());
+        // Length doesn't matter without schedule context — QL parity.
+        assert_eq!(
+            dc.year_fraction(a, ymd(2025, Month::Jan, 16)).parts(),
+            (1, 4),
+        );
+    }
+
+    /// ISDA "EMU and Market Conventions" / `QuantLib` test-suite anchor:
+    /// a regular semiannual US Treasury period accrues exactly 1/2.
+    #[test]
+    fn act_act_icma_regular_period() {
+        let dc = ActActICMA::new(Frequency::Semiannual);
+        let start = ymd(2003, Month::Nov, 1);
+        let end = ymd(2004, Month::May, 1);
+        assert_eq!(
+            dc.year_fraction_with_reference(start, end, start, end)
+                .unwrap()
+                .parts(),
+            (1, 2),
+        );
+    }
+
+    /// EMU paper: short first calculation period. Accrual
+    /// 1999-02-01 → 1999-07-01 against annual reference
+    /// 1998-07-01 → 1999-07-01: 150 / (1 × 365) = 30/73.
+    #[test]
+    fn act_act_icma_short_front_stub() {
+        let dc = ActActICMA::new(Frequency::Annual);
+        let yf = dc
+            .year_fraction_with_reference(
+                ymd(1999, Month::Feb, 1),
+                ymd(1999, Month::Jul, 1),
+                ymd(1998, Month::Jul, 1),
+                ymd(1999, Month::Jul, 1),
+            )
+            .unwrap();
+        assert_eq!(yf.parts(), (30, 73)); // 150/365 reduced
+    }
+
+    /// EMU paper / `QuantLib` test-suite: long first calculation
+    /// period. Accrual 2002-08-15 → 2003-07-15, reference period
+    /// 2003-01-15 → 2003-07-15, semiannual. Decomposes as the full
+    /// reference period (181/362 = 1/2) plus the chunk
+    /// 2002-08-15 → 2003-01-15 against the notional period
+    /// 2002-07-15 → 2003-01-15 (153 / (2 × 184)):
+    /// 1/2 + 153/368 = 337/368.
+    #[test]
+    fn act_act_icma_long_front_stub() {
+        let dc = ActActICMA::new(Frequency::Semiannual);
+        let yf = dc
+            .year_fraction_with_reference(
+                ymd(2002, Month::Aug, 15),
+                ymd(2003, Month::Jul, 15),
+                ymd(2003, Month::Jan, 15),
+                ymd(2003, Month::Jul, 15),
+            )
+            .unwrap();
+        assert_eq!(yf.parts(), (337, 368));
+    }
+
+    /// EMU paper: short final calculation period. The regular period
+    /// 1999-07-30 → 2000-01-30 is exactly 1/2; the short final
+    /// accrual 2000-01-30 → 2000-06-30 against its reference period
+    /// 2000-01-30 → 2000-07-30 is 152 / (2 × 182) = 38/91.
+    #[test]
+    fn act_act_icma_short_back_stub() {
+        let dc = ActActICMA::new(Frequency::Semiannual);
+        let regular = dc
+            .year_fraction_with_reference(
+                ymd(1999, Month::Jul, 30),
+                ymd(2000, Month::Jan, 30),
+                ymd(1999, Month::Jul, 30),
+                ymd(2000, Month::Jan, 30),
+            )
+            .unwrap();
+        assert_eq!(regular.parts(), (1, 2));
+        let stub = dc
+            .year_fraction_with_reference(
+                ymd(2000, Month::Jan, 30),
+                ymd(2000, Month::Jun, 30),
+                ymd(2000, Month::Jan, 30),
+                ymd(2000, Month::Jul, 30),
+            )
+            .unwrap();
+        assert_eq!(stub.parts(), (38, 91)); // 152/364 reduced
+    }
+
+    /// Accrual extending several periods past the reference period
+    /// exercises the forward notional walk: mid 1/2, two full
+    /// notional periods (1/2 each), and a 15-day partial against a
+    /// 184-day window → 3/2 + 15/368 = 567/368.
+    #[test]
+    fn act_act_icma_forward_notional_walk() {
+        let dc = ActActICMA::new(Frequency::Semiannual);
+        let yf = dc
+            .year_fraction_with_reference(
+                ymd(2003, Month::Jan, 15),
+                ymd(2004, Month::Jul, 30),
+                ymd(2003, Month::Jan, 15),
+                ymd(2003, Month::Jul, 15),
+            )
+            .unwrap();
+        assert_eq!(yf.parts(), (567, 368));
+    }
+
+    #[test]
+    fn act_act_icma_rejects_degenerate_reference_period() {
+        let dc = ActActICMA::new(Frequency::Semiannual);
+        let d = ymd(2025, Month::Jan, 15);
+        let later = ymd(2025, Month::Jul, 15);
+        assert_eq!(
+            dc.year_fraction_with_reference(d, later, d, d),
+            Err(TimeError::InvalidReferencePeriod),
+        );
+        assert_eq!(
+            dc.year_fraction_with_reference(d, later, later, d),
+            Err(TimeError::InvalidReferencePeriod),
+        );
+    }
+
+    // ---- BoundActActICMA (schedule-bound) -----------------------------
+
+    /// Build an unadjusted schedule for the bound-counter tests.
+    fn unadjusted_schedule(
+        effective: Date,
+        termination: Date,
+        rule: crate::DateGenerationRule,
+    ) -> Schedule {
+        crate::ScheduleBuilder::new(
+            effective,
+            termination,
+            Period::Months(6),
+            crate::calendars::NULL_CALENDAR,
+        )
+        .with_rule(rule)
+        .with_convention(crate::BusinessDayConvention::Unadjusted)
+        .with_termination_convention(crate::BusinessDayConvention::Unadjusted)
+        .build()
+        .unwrap()
+    }
+
+    /// Long-front-stub schedule (the EMU example, via bind): the stub
+    /// decomposes automatically through the plain two-date API.
+    #[test]
+    fn bound_icma_front_stub_schedule() {
+        let schedule = unadjusted_schedule(
+            ymd(2002, Month::Aug, 15),
+            ymd(2004, Month::Jan, 15),
+            crate::DateGenerationRule::Backward,
+        );
+        assert_eq!(
+            schedule.dates(),
+            &[
+                ymd(2002, Month::Aug, 15),
+                ymd(2003, Month::Jan, 15),
+                ymd(2003, Month::Jul, 15),
+                ymd(2004, Month::Jan, 15),
+            ],
+        );
+        let dc = ActActICMA::new(Frequency::Semiannual)
+            .bind(&schedule)
+            .unwrap();
+        assert_eq!(dc.name(), "Actual/Actual (ICMA)");
+        // Stub period: 153 days against the notional 184-day period.
+        let stub = dc.year_fraction(ymd(2002, Month::Aug, 15), ymd(2003, Month::Jan, 15));
+        assert_eq!(stub.parts(), (153, 368));
+        // Regular periods: exactly 1/2 each.
+        let regular = dc.year_fraction(ymd(2003, Month::Jan, 15), ymd(2003, Month::Jul, 15));
+        assert_eq!(regular.parts(), (1, 2));
+        // Whole instrument life: stub + two regular periods.
+        let whole = dc.year_fraction(ymd(2002, Month::Aug, 15), ymd(2004, Month::Jan, 15));
+        assert_eq!(whole.parts(), (521, 368)); // 153/368 + 1
+        // Mid-period accrual inside a regular period is proportional.
+        let partial = dc.year_fraction(ymd(2003, Month::Jan, 15), ymd(2003, Month::Apr, 15));
+        assert_eq!(partial.parts(), (45, 181)); // 90/(2×181)
+    }
+
+    /// Short-back-stub schedule via forward generation.
+    #[test]
+    fn bound_icma_back_stub_schedule() {
+        let schedule = unadjusted_schedule(
+            ymd(2003, Month::Jan, 15),
+            ymd(2004, Month::Jun, 30),
+            crate::DateGenerationRule::Forward,
+        );
+        assert_eq!(
+            schedule.dates(),
+            &[
+                ymd(2003, Month::Jan, 15),
+                ymd(2003, Month::Jul, 15),
+                ymd(2004, Month::Jan, 15),
+                ymd(2004, Month::Jun, 30),
+            ],
+        );
+        let dc = ActActICMA::new(Frequency::Semiannual)
+            .bind(&schedule)
+            .unwrap();
+        // The back stub accrues against its notional period
+        // Jan 15 2004 → Jul 15 2004 (182 days): 167/(2×182).
+        let stub = dc.year_fraction(ymd(2004, Month::Jan, 15), ymd(2004, Month::Jun, 30));
+        assert_eq!(stub.parts(), (167, 364));
+        // Regular front periods stay exact halves.
+        let regular = dc.year_fraction(ymd(2003, Month::Jan, 15), ymd(2003, Month::Jul, 15));
+        assert_eq!(regular.parts(), (1, 2));
+    }
+
+    /// Dates outside the schedule's span accrue nothing — deliberate
+    /// clamping semantics.
+    /// A *long* stub is longer than one coupon period, so its accrual
+    /// reaches past the schedule's named reference period into
+    /// adjacent notional ones, which is why the lattice supplies
+    /// windows beyond the one a schedule names.
+    #[test]
+    fn bound_icma_long_stub_spans_several_notional_periods() {
+        // Issued 2002-01-10 with the first coupon at 2003-01-15: a
+        // 12-month front stub on a semiannual bond.
+        let schedule = crate::ScheduleBuilder::new(
+            ymd(2002, Month::Jan, 10),
+            ymd(2004, Month::Jan, 15),
+            Period::Months(6),
+            crate::calendars::NULL_CALENDAR,
+        )
+        .backwards()
+        .with_first_date(ymd(2003, Month::Jan, 15))
+        .with_convention(crate::BusinessDayConvention::Unadjusted)
+        .with_termination_convention(crate::BusinessDayConvention::Unadjusted)
+        .build()
+        .unwrap();
+        assert_eq!(schedule.dates()[0], ymd(2002, Month::Jan, 10));
+        assert_eq!(schedule.dates()[1], ymd(2003, Month::Jan, 15));
+        // The schedule names one reference period per coupon period.
+        assert_eq!(
+            schedule.reference_periods().next().unwrap(),
+            ymd(2002, Month::Jul, 15)..ymd(2003, Month::Jan, 15),
+        );
+
+        let dc = ActActICMA::new(Frequency::Semiannual)
+            .bind(&schedule)
+            .unwrap();
+        let stub = dc.year_fraction(ymd(2002, Month::Jan, 10), ymd(2003, Month::Jan, 15));
+        // Three windows: the named reference period 2002-07-15..
+        // 2003-01-15 (184 days, full), the notional 2002-01-15..
+        // 2002-07-15 (181 days, full), and 5 days of the notional
+        // 2001-07-15..2002-01-15 (184 days).
+        let expected = Fraction::new(1, 2)
+            .unwrap()
+            .checked_add(Fraction::new(1, 2).unwrap())
+            .unwrap()
+            .checked_add(Fraction::new(5, 2 * 184).unwrap())
+            .unwrap();
+        assert_eq!(stub, expected);
+        assert_eq!(stub.parts(), (373, 368));
+        // Over a full coupon of accrual — impossible from one window.
+        assert!(stub > Fraction::new(1, 1).unwrap());
+    }
+
+    /// The accrual math treats a `Range<Date>` as the half-open
+    /// interval its syntax implies.
+    #[test]
+    fn date_ranges_are_half_open() {
+        let range = ymd(2025, Month::Jan, 1)..ymd(2025, Month::Apr, 1);
+        assert_eq!(range.days(), 90);
+        assert!(range.contains(&ymd(2025, Month::Jan, 1))); // start included
+        assert!(!range.contains(&ymd(2025, Month::Apr, 1))); // end excluded
+        // Overlapping ranges intersect to their shared days.
+        assert_eq!(
+            range.intersect(&(ymd(2025, Month::Mar, 1)..ymd(2025, Month::Jun, 1))),
+            Some(ymd(2025, Month::Mar, 1)..ymd(2025, Month::Apr, 1)),
+        );
+        // Disjoint ranges, and ranges that merely touch at a boundary,
+        // share no days.
+        assert_eq!(
+            range.intersect(&(ymd(2025, Month::Jun, 1)..ymd(2025, Month::Jul, 1))),
+            None,
+        );
+        assert_eq!(
+            range.intersect(&(ymd(2025, Month::Apr, 1)..ymd(2025, Month::May, 1))),
+            None,
+        );
+        // Reversed inputs give a negative day count.
+        assert_eq!(
+            (ymd(2025, Month::Apr, 1)..ymd(2025, Month::Jan, 1)).days(),
+            -90
+        );
+    }
+
+    #[test]
+    fn bound_icma_clamps_outside_schedule_span() {
+        let schedule = unadjusted_schedule(
+            ymd(2003, Month::Jan, 15),
+            ymd(2004, Month::Jan, 15),
+            crate::DateGenerationRule::Backward,
+        );
+        let dc = ActActICMA::new(Frequency::Semiannual)
+            .bind(&schedule)
+            .unwrap();
+        // Entirely before / after the schedule: zero.
+        assert!(
+            dc.year_fraction(ymd(2002, Month::Jan, 1), ymd(2003, Month::Jan, 14))
+                .is_zero()
+        );
+        assert!(
+            dc.year_fraction(ymd(2004, Month::Feb, 1), ymd(2005, Month::Jan, 1))
+                .is_zero()
+        );
+        // Straddling the start: only the in-schedule part counts.
+        assert_eq!(
+            dc.year_fraction(ymd(2002, Month::Nov, 1), ymd(2003, Month::Jul, 15))
+                .parts(),
+            (1, 2),
+        );
+    }
+
+    #[test]
+    fn bound_icma_reversal_negates() {
+        let schedule = unadjusted_schedule(
+            ymd(2002, Month::Aug, 15),
+            ymd(2004, Month::Jan, 15),
+            crate::DateGenerationRule::Backward,
+        );
+        let dc = ActActICMA::new(Frequency::Semiannual)
+            .bind(&schedule)
+            .unwrap();
+        let a = ymd(2002, Month::Sep, 1);
+        let b = ymd(2003, Month::Oct, 1);
+        let sum = dc
+            .year_fraction(a, b)
+            .checked_add(dc.year_fraction(b, a))
+            .unwrap();
+        assert_eq!(sum, Fraction::ZERO);
+        assert!(dc.year_fraction(a, a).is_zero());
+    }
+
+    /// Bound accruals are additive across any split of the schedule
+    /// span, including splits at and across stub boundaries.
+    #[test]
+    fn bound_icma_additive_across_periods() {
+        let schedule = unadjusted_schedule(
+            ymd(2002, Month::Aug, 15),
+            ymd(2004, Month::Jan, 15),
+            crate::DateGenerationRule::Backward,
+        );
+        let dc = ActActICMA::new(Frequency::Semiannual)
+            .bind(&schedule)
+            .unwrap();
+        let a = ymd(2002, Month::Sep, 1);
+        let b = ymd(2003, Month::Mar, 1);
+        let c = ymd(2003, Month::Dec, 1);
+        let split = dc
+            .year_fraction(a, b)
+            .checked_add(dc.year_fraction(b, c))
+            .unwrap();
+        assert_eq!(split, dc.year_fraction(a, c));
+    }
+
+    #[test]
+    fn bound_icma_rejects_too_short_schedules() {
+        let single = Schedule::try_from(alloc::vec![ymd(2003, Month::Jan, 15)]).unwrap();
+        assert!(matches!(
+            ActActICMA::new(Frequency::Semiannual).bind(&single),
+            Err(TimeError::InvalidReferencePeriod),
+        ));
     }
 
     // ---- ActActISDA examples ------------------------------------------
@@ -836,11 +1635,17 @@ mod tests {
         ) {
             let a = Date::from_serial(x).unwrap();
             let b = Date::from_serial(y).unwrap();
+            let icma = ActActICMA::new(Frequency::Semiannual);
+            let isda_30e = Thirty360ISDA::new(Date::MAX);
             for dc in [
                 &Act360 as &dyn DayCount,
                 &Act365Fixed,
                 &Thirty360Bond,
+                &Thirty360US,
+                &Thirty360European,
+                &isda_30e,
                 &ActActISDA,
+                &icma,
             ] {
                 let sum = dc.year_fraction(a, b)
                     .checked_add(dc.year_fraction(b, a))
@@ -859,14 +1664,67 @@ mod tests {
         ) {
             let a = Date::from_serial(x).unwrap();
             let b = Date::from_serial(y).unwrap();
+            let icma = ActActICMA::new(Frequency::Quarterly);
+            let isda_30e = Thirty360ISDA::new(Date::MAX);
             for dc in [
                 &Act360 as &dyn DayCount,
                 &Act365Fixed,
                 &Thirty360Bond,
+                &Thirty360US,
+                &Thirty360European,
+                &isda_30e,
                 &ActActISDA,
+                &icma,
             ] {
                 prop_assert_eq!(dc.day_count(a, b), -dc.day_count(b, a));
             }
+        }
+
+        /// A full reference period under ICMA accrues exactly
+        /// `1 / frequency`, whatever its actual calendar length.
+        #[test]
+        fn act_act_icma_reference_period_is_one_over_frequency(
+            serial in 400u32..(Date::MAX.serial() - 400),
+            len in 1u32..=370,
+        ) {
+            let r1 = Date::from_serial(serial).unwrap();
+            let r2 = Date::from_serial(serial + len).unwrap();
+            for freq in [
+                Frequency::Annual,
+                Frequency::Semiannual,
+                Frequency::Quarterly,
+                Frequency::Monthly,
+                Frequency::Weekly,
+            ] {
+                let dc = ActActICMA::new(freq);
+                let yf = dc.year_fraction_with_reference(r1, r2, r1, r2).unwrap();
+                prop_assert_eq!(yf.parts(), (1, u64::from(freq.per_year())));
+            }
+        }
+
+        /// ICMA is additive across any split inside one reference
+        /// period — the chunks share a denominator.
+        #[test]
+        fn act_act_icma_additive_within_reference(
+            serial in 400u32..(Date::MAX.serial() - 400),
+            o1 in 0u32..=300,
+            o2 in 0u32..=300,
+            o3 in 0u32..=300,
+        ) {
+            let mut offsets = [o1, o2, o3];
+            offsets.sort_unstable();
+            let r1 = Date::from_serial(serial).unwrap();
+            let r2 = Date::from_serial(serial + 301).unwrap();
+            let a = Date::from_serial(serial + offsets[0]).unwrap();
+            let b = Date::from_serial(serial + offsets[1]).unwrap();
+            let c = Date::from_serial(serial + offsets[2]).unwrap();
+            let dc = ActActICMA::new(Frequency::Semiannual);
+            let split = dc
+                .year_fraction_with_reference(a, b, r1, r2).unwrap()
+                .checked_add(dc.year_fraction_with_reference(b, c, r1, r2).unwrap())
+                .expect("shared denominator");
+            let direct = dc.year_fraction_with_reference(a, c, r1, r2).unwrap();
+            prop_assert_eq!(split, direct);
         }
     }
 }
