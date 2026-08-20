@@ -11,6 +11,9 @@ use crate::{Date, Month, Year, YearRange};
 /// **first free weekday in that direction** — free meaning no other
 /// holiday and no other holiday's substitute is already there. The
 /// variants differ only in which weekend day moves, and which way.
+/// A backward substitute lands on the Friday; a forward one on the
+/// Monday, or the Tuesday when the Monday is spoken for — the UK
+/// Christmas pair. It never goes further; a longer queue is lost.
 ///
 /// Only [`Calendar`](crate::Calendar) can apply that rule, since only
 /// it can see what the other rules have taken; see

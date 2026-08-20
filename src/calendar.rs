@@ -16,12 +16,6 @@ use crate::{
     BusinessDayConvention, Date, DateRange, Period, Rule, TimeError, Weekday, Weekend, WeekendShift,
 };
 
-/// How far a substitute day can sit from its natural date, and how far
-/// `is_substitute` therefore has to look. Two adjacent holidays over a
-/// weekend need three; four leaves one day of slack. A run of holidays
-/// longer than that loses its last substitute rather than searching on.
-const SUBSTITUTE_SPAN: i32 = 4;
-
 /// A holiday calendar: a [`Weekend`] configuration plus a sequence of
 /// [`Rule`]s naming holidays' natural dates.
 ///
@@ -85,69 +79,52 @@ impl Calendar<'_> {
         self.rules.iter().any(|r| r.is_holiday(date))
     }
 
-    /// `true` iff `date` is the substitute day for a weekend holiday
-    /// nearby.
+    /// `true` iff `date` is the substitute day for a weekend holiday.
     ///
-    /// Substitutes are assigned in natural-date order, so the answer
-    /// does not depend on the order the rules happen to be listed in,
-    /// and each one skips whatever the earlier ones took.
+    /// A substitute can only land in three places: the Friday before a
+    /// Saturday holiday stepping back, or the Monday and Tuesday after
+    /// a weekend stepping forward — Tuesday when the Monday is a
+    /// holiday or already claimed, as with the UK Christmas pair. Any
+    /// other weekday can be dismissed outright, and a queue that would
+    /// run past Tuesday is lost rather than searched further.
     fn is_substitute(&self, date: Date) -> bool {
-        if self.is_weekend(date) || self.is_natural_holiday(date) || !self.shifts() {
+        // Weekend holidays stepping forward, by source day.
+        const OFF_SAT: &[WeekendShift] = &[WeekendShift::Forward];
+        const OFF_SUN: &[WeekendShift] = &[
+            WeekendShift::Forward,
+            WeekendShift::SunForward,
+            WeekendShift::SatBackSunForward,
+        ];
+        if self.is_weekend(date) || self.is_natural_holiday(date) {
             return false;
         }
-        let mut taken = [None; SUBSTITUTE_SPAN as usize];
-        let mut count = 0;
-        // Only a weekend within reach can be the source of a substitute.
-        let reach = date.add_days(-SUBSTITUTE_SPAN).unwrap_or(Date::MIN)
-            ..date.add_days(SUBSTITUTE_SPAN).unwrap_or(Date::MAX);
-        for natural in reach.dates().filter(|d| self.is_weekend(*d)) {
-            for rule in self.rules.iter().filter(|r| r.is_holiday(natural)) {
-                match self.first_free(natural, rule.weekend_shift(), &taken[..count]) {
-                    Some(substitute) if substitute == date => return true,
-                    Some(substitute) if count < taken.len() => {
-                        taken[count] = Some(substitute);
-                        count += 1;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        false
-    }
-
-    /// `true` iff any rule can produce a substitute at all. Calendars
-    /// that lose their weekend holidays never scan the window.
-    fn shifts(&self) -> bool {
-        self.rules
-            .iter()
-            .any(|r| r.weekend_shift() != WeekendShift::None)
-    }
-
-    /// The first weekday from `natural` in the shift's direction that no
-    /// other holiday and no earlier substitute has taken.
-    fn first_free(
-        &self,
-        natural: Date,
-        shift: WeekendShift,
-        taken: &[Option<Date>],
-    ) -> Option<Date> {
-        let step = match (shift, natural.weekday()) {
-            (WeekendShift::SatBackSunForward, Weekday::Sat) => -1,
-            (WeekendShift::Forward, Weekday::Sat | Weekday::Sun)
-            | (WeekendShift::SunForward | WeekendShift::SatBackSunForward, Weekday::Sun) => 1,
-            _ => return None,
+        let movers = |day: Result<Date, TimeError>, shifts: &[WeekendShift]| {
+            day.map_or(0, |d| {
+                self.rules
+                    .iter()
+                    .filter(|r| shifts.contains(&r.weekend_shift()))
+                    .filter(|r| r.is_holiday(d))
+                    .count()
+            })
         };
-        let mut candidate = natural;
-        for _ in 0..SUBSTITUTE_SPAN {
-            candidate = candidate.add_days(step).ok()?;
-            if !self.is_weekend(candidate)
-                && !self.is_natural_holiday(candidate)
-                && !taken.contains(&Some(candidate))
-            {
-                return Some(candidate);
+        match date.weekday() {
+            // Saturday's holiday stepping back.
+            Weekday::Fri => movers(date.add_days(1), &[WeekendShift::SatBackSunForward]) > 0,
+            // First in line after the weekend.
+            Weekday::Mon => {
+                movers(date.add_days(-2), OFF_SAT) + movers(date.add_days(-1), OFF_SUN) > 0
             }
+            // Second in line, when Monday cannot take the first.
+            Weekday::Tue => {
+                let queued =
+                    movers(date.add_days(-3), OFF_SAT) + movers(date.add_days(-2), OFF_SUN);
+                let monday_free = date
+                    .add_days(-1)
+                    .is_ok_and(|m| !self.is_weekend(m) && !self.is_natural_holiday(m));
+                queued > usize::from(monday_free)
+            }
+            _ => false,
         }
-        None
     }
 
     /// `true` iff `date` is neither a weekend nor a holiday.
