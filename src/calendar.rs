@@ -81,50 +81,79 @@ impl Calendar<'_> {
 
     /// `true` iff `date` is the substitute day for a weekend holiday.
     ///
-    /// A substitute can only land in three places: the Friday before a
-    /// Saturday holiday stepping back, or the Monday and Tuesday after
-    /// a weekend stepping forward — Tuesday when the Monday is a
-    /// holiday or already claimed, as with the UK Christmas pair. Any
-    /// other weekday can be dismissed outright, and a queue that would
-    /// run past Tuesday is lost rather than searched further.
+    /// A weekend is two days, and two rules naming one day are still
+    /// one holiday — so at most two substitutes ever queue. They take
+    /// the free weekdays past the weekend in order, which is what
+    /// bounds the search: once two free weekdays separate `date` from
+    /// the weekend, nothing queued there can still reach it.
     fn is_substitute(&self, date: Date) -> bool {
-        // Weekend holidays stepping forward, by source day.
-        const OFF_SAT: &[WeekendShift] = &[WeekendShift::Forward];
-        const OFF_SUN: &[WeekendShift] = &[
-            WeekendShift::Forward,
-            WeekendShift::SunForward,
-            WeekendShift::SatBackSunForward,
-        ];
-        if self.is_weekend(date) || self.is_natural_holiday(date) {
+        let shifts = self
+            .rules
+            .iter()
+            .any(|r| r.weekend_shift() != WeekendShift::None);
+        if !shifts || self.is_weekend(date) || self.is_natural_holiday(date) {
             return false;
         }
-        let movers = |day: Result<Date, TimeError>, shifts: &[WeekendShift]| {
-            day.map_or(0, |d| {
-                self.rules
-                    .iter()
-                    .filter(|r| shifts.contains(&r.weekend_shift()))
-                    .filter(|r| r.is_holiday(d))
-                    .count()
-            })
+        // Holidays stepping forwards onto `date`, then backwards onto it.
+        self.owed(date, 1) || self.owed(date, -1)
+    }
+
+    /// `true` iff the weekend `date` sits `step` days past owes more
+    /// substitutes than the free weekdays between them can absorb.
+    fn owed(&self, date: Date, step: i32) -> bool {
+        let Some((weekend, queued_ahead)) = self.reach_weekend(date, -step) else {
+            return false;
         };
-        match date.weekday() {
-            // Saturday's holiday stepping back.
-            Weekday::Fri => movers(date.add_days(1), &[WeekendShift::SatBackSunForward]) > 0,
-            // First in line after the weekend.
-            Weekday::Mon => {
-                movers(date.add_days(-2), OFF_SAT) + movers(date.add_days(-1), OFF_SUN) > 0
+        // One substitute per weekend day that has a holiday moving this way.
+        let owed = self
+            .weekend_run(weekend, -step)
+            .filter(|d| self.moves(*d, step))
+            .count();
+        owed > queued_ahead
+    }
+
+    /// Walks `step` at a time from `date` to the weekend it adjoins,
+    /// returning that weekend's near day and how many free weekdays lie
+    /// between. [`None`] once more than one does, since only two ever
+    /// queue.
+    fn reach_weekend(&self, date: Date, step: i32) -> Option<(Date, usize)> {
+        let mut free = 0;
+        let mut cursor = date;
+        loop {
+            cursor = cursor.add_days(step).ok()?;
+            if self.is_weekend(cursor) {
+                return Some((cursor, free));
             }
-            // Second in line, when Monday cannot take the first.
-            Weekday::Tue => {
-                let queued =
-                    movers(date.add_days(-3), OFF_SAT) + movers(date.add_days(-2), OFF_SUN);
-                let monday_free = date
-                    .add_days(-1)
-                    .is_ok_and(|m| !self.is_weekend(m) && !self.is_natural_holiday(m));
-                queued > usize::from(monday_free)
+            if !self.is_natural_holiday(cursor) {
+                free += 1;
+                if free > 1 {
+                    return None;
+                }
             }
-            _ => false,
         }
+    }
+
+    /// The weekend days from `from` going `step` at a time.
+    fn weekend_run(&self, from: Date, step: i32) -> impl Iterator<Item = Date> {
+        core::iter::successors(Some(from), move |d| d.add_days(step).ok())
+            .take_while(|d| self.is_weekend(*d))
+    }
+
+    /// `true` iff a rule puts a holiday on `day` and moves it `step`.
+    fn moves(&self, day: Date, step: i32) -> bool {
+        let shifts: &[WeekendShift] = match (day.weekday(), step) {
+            (Weekday::Sat, -1) => &[WeekendShift::SatBackSunForward],
+            (Weekday::Sat, _) => &[WeekendShift::Forward],
+            (Weekday::Sun, 1) => &[
+                WeekendShift::Forward,
+                WeekendShift::SunForward,
+                WeekendShift::SatBackSunForward,
+            ],
+            _ => return false,
+        };
+        self.rules
+            .iter()
+            .any(|r| shifts.contains(&r.weekend_shift()) && r.is_holiday(day))
     }
 
     /// `true` iff `date` is neither a weekend nor a holiday.
@@ -497,6 +526,24 @@ mod tests {
     }
 
     #[test]
+    fn two_rules_on_one_day_owe_one_substitute() {
+        // Both rules name Dec 25 — the shape `CalendarBuilder::union`
+        // produces when two calendars share a holiday. That is one
+        // holiday owed one day off, not two, so Tuesday stays open.
+        const DOUBLED: Calendar<'static> = Calendar {
+            name: "Doubled",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Dec, 25).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Dec, 25).shift(WeekendShift::Forward)),
+            ],
+        };
+        // Dec 25 2022 was a Sunday.
+        assert!(DOUBLED.is_holiday(ymd(2022, Month::Dec, 26)));
+        assert!(DOUBLED.is_business_day(ymd(2022, Month::Dec, 27)));
+    }
+
+    #[test]
     fn a_substitute_skips_a_natural_holiday() {
         // 2022: Dec 25 Sun, Dec 26 Mon. Monday is already Boxing Day,
         // so Christmas lands on the Tuesday — after Boxing Day.
@@ -513,6 +560,42 @@ mod tests {
         assert!(PAIR.is_holiday(sat));
         assert!(!PAIR.is_business_day(sat));
         assert!(PAIR.is_holiday(ymd(2021, Month::Dec, 27)));
+    }
+
+    #[test]
+    fn two_substitutes_step_past_a_monday_that_is_itself_a_holiday() {
+        // Jul 4 2026 is a Saturday, Jul 5 the Sunday, Jul 6 a Monday
+        // holiday in its own right. The weekend still owes two days
+        // off, so they land on the Tuesday and the Wednesday.
+        const BLOCKED: Calendar<'static> = Calendar {
+            name: "Blocked Monday",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Jul, 6)),
+            ],
+        };
+        assert!(BLOCKED.is_holiday(ymd(2026, Month::Jul, 7)));
+        assert!(BLOCKED.is_holiday(ymd(2026, Month::Jul, 8)));
+        // Two weekend days owe two substitutes, and no more.
+        assert!(BLOCKED.is_business_day(ymd(2026, Month::Jul, 9)));
+    }
+
+    #[test]
+    fn a_backward_substitute_steps_past_a_blocked_friday() {
+        // Jul 4 2026 (Sat) steps back, but Jul 3 is already a holiday,
+        // so it lands on Thursday Jul 2.
+        const BLOCKED: Calendar<'static> = Calendar {
+            name: "Blocked Friday",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Jul, 3)),
+                Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::SatBackSunForward)),
+            ],
+        };
+        assert!(BLOCKED.is_holiday(ymd(2026, Month::Jul, 2)));
+        assert!(BLOCKED.is_business_day(ymd(2026, Month::Jul, 1)));
     }
 
     #[test]
