@@ -15,7 +15,7 @@
 //! # Roadmap
 //!
 //! Landed today: date primitives ([`Date`], [`Year`], [`Month`],
-//! [`Weekday`], [`Ordinal`]), holiday rules ([`Rule`] and friends),
+//! [`Weekday`], [`Ordinal`], [`DateRange`]), holiday rules ([`Rule`] and friends),
 //! Easter tables ([`easter_monday`], [`easter_sunday`]), [`YearRange`],
 //! [`Calendar`] / [`CalendarBuilder`] with built-ins under [`calendars`],
 //! [`Period`] / [`Frequency`] arithmetic, [`BusinessDayConvention`] with
@@ -50,7 +50,7 @@ mod year_range;
 
 pub use business_day::BusinessDayConvention;
 pub use calendar::{Calendar, CalendarBuilder};
-pub use date::{Date, Month, Ordinal, Weekday, Year};
+pub use date::{Date, DateRange, Month, Ordinal, Weekday, Year};
 pub use daycount::{
     Act360, Act365Fixed, ActActICMA, ActActISDA, BoundActActICMA, DayCount, Thirty360Bond,
     Thirty360European, Thirty360ISDA, Thirty360US,

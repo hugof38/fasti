@@ -64,6 +64,16 @@ impl Weekend {
     }
 }
 
+impl core::ops::BitOr for Weekend {
+    type Output = Self;
+
+    /// Union of two weekend configurations — a day is a weekend if
+    /// either says so. Used when combining calendars.
+    fn bitor(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

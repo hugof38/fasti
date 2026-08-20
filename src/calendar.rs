@@ -5,10 +5,12 @@
 //! from its own owned storage.
 
 use alloc::borrow::ToOwned;
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::ops::Range;
 
-use crate::{BusinessDayConvention, Date, Period, Rule, TimeError, Weekend};
+use crate::{BusinessDayConvention, Date, DateRange, Period, Rule, TimeError, Weekend};
 
 /// A holiday calendar: a [`Weekend`] configuration plus a sequence of
 /// [`Rule`]s. A date is a holiday iff at least one rule says so.
@@ -54,6 +56,56 @@ impl Calendar<'_> {
     #[must_use]
     pub fn is_business_day(&self, date: Date) -> bool {
         !self.is_weekend(date) && !self.is_holiday(date)
+    }
+
+    /// The business days in `range`, ascending; the end bound is
+    /// excluded. Count them with `.count()`, collect them with
+    /// `.collect()`.
+    ///
+    /// ```
+    /// use fasti::{Date, Month, calendars};
+    /// // Jul 2024 has 23 weekdays.
+    /// let jul = Date::from_ymd(2024, Month::Jul, 1)?..Date::from_ymd(2024, Month::Aug, 1)?;
+    /// assert_eq!(calendars::WEEKENDS_ONLY.business_days(jul).count(), 23);
+    /// # Ok::<(), fasti::TimeError>(())
+    /// ```
+    pub fn business_days(&self, range: Range<Date>) -> impl DoubleEndedIterator<Item = Date> {
+        range.dates().filter(|d| self.is_business_day(*d))
+    }
+
+    /// The holidays in `range`, ascending. Weekends are excluded,
+    /// matching [`is_holiday`](Self::is_holiday).
+    pub fn holidays(&self, range: Range<Date>) -> impl DoubleEndedIterator<Item = Date> {
+        range.dates().filter(|d| self.is_holiday(*d))
+    }
+
+    /// The first business day of `date`'s month, or [`None`] if the
+    /// month has none.
+    ///
+    /// ```
+    /// use fasti::{Date, Month, calendars};
+    /// // Mar 2026 opens on a Sunday.
+    /// let d = Date::from_ymd(2026, Month::Mar, 18)?;
+    /// assert_eq!(
+    ///     calendars::WEEKENDS_ONLY.first_business_day_of_month(d),
+    ///     Some(Date::from_ymd(2026, Month::Mar, 2)?),
+    /// );
+    /// # Ok::<(), fasti::TimeError>(())
+    /// ```
+    #[must_use]
+    pub fn first_business_day_of_month(&self, date: Date) -> Option<Date> {
+        self.adjust(date.start_of_month(), BusinessDayConvention::Following)
+            .ok()
+            .filter(|d| d.month() == date.month())
+    }
+
+    /// The last business day of `date`'s month, or [`None`] if the
+    /// month has none.
+    #[must_use]
+    pub fn last_business_day_of_month(&self, date: Date) -> Option<Date> {
+        self.adjust(date.end_of_month(), BusinessDayConvention::Preceding)
+            .ok()
+            .filter(|d| d.month() == date.month())
     }
 
     /// The next business day strictly after `date`.
@@ -230,6 +282,28 @@ impl CalendarBuilder {
         self
     }
 
+    /// Merge `other` in: a date is a holiday if either side says so,
+    /// and the weekends union. `QuantLib`'s `JointCalendar` under
+    /// `JoinHolidays`.
+    ///
+    /// ```
+    /// use fasti::{CalendarBuilder, Date, Month, calendars};
+    ///
+    /// let joint = CalendarBuilder::from_calendar(calendars::us::SETTLEMENT)
+    ///     .union(calendars::france::SETTLEMENT);
+    /// let cal = joint.view();
+    /// assert!(cal.is_holiday(Date::from_ymd(2026, Month::Nov, 26)?)); // Thanksgiving
+    /// assert!(cal.is_holiday(Date::from_ymd(2026, Month::Jul, 14)?)); // Bastille Day
+    /// # Ok::<(), fasti::TimeError>(())
+    /// ```
+    #[must_use]
+    pub fn union(mut self, other: Calendar<'_>) -> Self {
+        self.name = format!("{} + {}", self.name, other.name);
+        self.weekend = self.weekend | other.weekend;
+        self.rules.extend_from_slice(other.rules);
+        self
+    }
+
     /// Produce a borrowed [`Calendar`] backed by this builder's storage.
     /// The view lives as long as `&self`.
     #[must_use]
@@ -323,6 +397,120 @@ mod tests {
         let cal = builder.view();
         assert_eq!(cal.name, "Test");
         assert!(cal.rules.is_empty());
+    }
+
+    // ---- ranges and month edges ----------------------------------------
+
+    #[test]
+    fn business_days_and_holidays_partition_the_weekdays() {
+        const CAL: Calendar<'static> = Calendar {
+            name: "Test",
+            weekend: Weekend::SAT_SUN,
+            rules: &[Rule::Fixed(FixedDate::new(Month::Jul, 4))],
+        };
+        // Jul 2024: 31 days, 23 weekdays, one of them the Jul 4 holiday.
+        let jul = ymd(2024, Month::Jul, 1)..ymd(2024, Month::Aug, 1);
+        assert_eq!(CAL.business_days(jul.clone()).count(), 22);
+        assert_eq!(
+            CAL.holidays(jul).collect::<Vec<_>>(),
+            [ymd(2024, Month::Jul, 4)],
+        );
+    }
+
+    #[test]
+    fn empty_and_reversed_ranges_yield_nothing() {
+        let day = ymd(2024, Month::Jul, 2);
+        assert_eq!(WEEKENDS_ONLY.business_days(day..day).count(), 0);
+        assert_eq!(
+            WEEKENDS_ONLY
+                .business_days(day..ymd(2024, Month::Jul, 1))
+                .count(),
+            0,
+        );
+    }
+
+    #[test]
+    fn month_edges_skip_weekends_and_holidays() {
+        const CAL: Calendar<'static> = Calendar {
+            name: "Test",
+            weekend: Weekend::SAT_SUN,
+            rules: &[Rule::Fixed(FixedDate::new(Month::Jul, 1))],
+        };
+        // Jul 2024 opens Mon Jul 1 (a holiday here) and closes Wed Jul 31.
+        let mid = ymd(2024, Month::Jul, 15);
+        assert_eq!(
+            CAL.first_business_day_of_month(mid),
+            Some(ymd(2024, Month::Jul, 2)),
+        );
+        assert_eq!(
+            CAL.last_business_day_of_month(mid),
+            Some(ymd(2024, Month::Jul, 31)),
+        );
+        // Mar 2026 opens Sun Mar 1 and closes Tue Mar 31.
+        let mar = ymd(2026, Month::Mar, 18);
+        assert_eq!(
+            WEEKENDS_ONLY.first_business_day_of_month(mar),
+            Some(ymd(2026, Month::Mar, 2)),
+        );
+        // Aug 2026 closes Mon Aug 31; May 2026 closes Sun May 31 → Fri May 29.
+        assert_eq!(
+            WEEKENDS_ONLY.last_business_day_of_month(ymd(2026, Month::May, 4)),
+            Some(ymd(2026, Month::May, 29)),
+        );
+    }
+
+    #[test]
+    fn month_edges_agree_with_scanning_the_range() {
+        for month in 1u8..=12 {
+            let m = Month::try_from_u8(month).unwrap();
+            let anchor = ymd(2026, m, 1);
+            let range = anchor..anchor.end_of_month().add_days(1).unwrap();
+            let mut days = WEEKENDS_ONLY.business_days(range);
+            let (first, last) = (days.next(), days.next_back());
+            assert_eq!(WEEKENDS_ONLY.first_business_day_of_month(anchor), first);
+            assert_eq!(WEEKENDS_ONLY.last_business_day_of_month(anchor), last);
+        }
+    }
+
+    #[test]
+    fn month_with_no_business_day_is_none() {
+        // A rule that blacks out every day of the month.
+        const ALL_HOLIDAYS: Calendar<'static> = Calendar {
+            name: "Closed",
+            weekend: Weekend::SAT_SUN,
+            rules: &[Rule::Custom(|d| d.month().get() == 7)],
+        };
+        assert_eq!(
+            ALL_HOLIDAYS.first_business_day_of_month(ymd(2024, Month::Jul, 15)),
+            None,
+        );
+        assert_eq!(
+            ALL_HOLIDAYS.last_business_day_of_month(ymd(2024, Month::Jul, 15)),
+            None,
+        );
+    }
+
+    #[test]
+    fn union_joins_holidays_and_weekends() {
+        const A: Calendar<'static> = Calendar {
+            name: "A",
+            weekend: Weekend::SAT_SUN,
+            rules: &[Rule::Fixed(FixedDate::new(Month::Jul, 4))],
+        };
+        const B: Calendar<'static> = Calendar {
+            name: "B",
+            weekend: Weekend::FRI_SAT,
+            rules: &[Rule::Fixed(FixedDate::new(Month::Jul, 14))],
+        };
+        let joint = CalendarBuilder::from_calendar(A).union(B);
+        let cal = joint.view();
+        assert_eq!(cal.name, "A + B");
+        assert!(cal.is_holiday(ymd(2024, Month::Jul, 4)));
+        assert!(cal.is_holiday(ymd(2024, Month::Jul, 14)));
+        // Fri, Sat and Sun are all weekend under the union.
+        assert!(cal.is_weekend(ymd(2024, Month::Jul, 5)));
+        assert!(cal.is_weekend(ymd(2024, Month::Jul, 6)));
+        assert!(cal.is_weekend(ymd(2024, Month::Jul, 7)));
     }
 
     // ---- adjust ---------------------------------------------------------
