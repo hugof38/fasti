@@ -7,25 +7,29 @@ use crate::{Date, Month, Year, YearRange};
 /// Which way a fixed-date holiday moves when its natural date falls on
 /// a Saturday or Sunday.
 ///
-/// The shift names a *direction*, not a destination: the substitute is
-/// the first weekday that way which is not already a holiday or another
-/// holiday's substitute. Resolving that is
-/// [`Calendar`](crate::Calendar)'s job, because only the calendar can
-/// see what the other rules have taken.
+/// There is one rule for every variant: the holiday is observed on the
+/// **first free weekday in that direction** — free meaning no other
+/// holiday and no other holiday's substitute is already there. The
+/// variants differ only in which weekend day moves, and which way.
+///
+/// Only [`Calendar`](crate::Calendar) can apply that rule, since only
+/// it can see what the other rules have taken; see
+/// [`Calendar::is_holiday`](crate::Calendar::is_holiday).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum WeekendShift {
-    /// No substitute; a weekend holiday is simply lost.
+    /// Neither day moves; a weekend holiday is simply lost. France and
+    /// TARGET.
     #[default]
     None,
-    /// US federal convention: Saturday backwards, Sunday forwards.
-    SatBackSunForward,
-    /// Sunday forwards; a Saturday holiday is lost. The Fed and SIFMA
+    /// Both days move forwards — the UK and Commonwealth substitute day.
+    Forward,
+    /// Sunday moves forwards, Saturday does not — the Fed and SIFMA
     /// convention.
     SunForward,
-    /// Both Saturday and Sunday forwards — the UK and Commonwealth
-    /// substitute day.
-    NextWeekday,
+    /// Saturday moves backwards, Sunday forwards — the US federal
+    /// convention.
+    SatBackSunForward,
 }
 
 /// A fixed-date holiday rule.
@@ -138,7 +142,7 @@ mod tests {
             WeekendShift::None,
             WeekendShift::SatBackSunForward,
             WeekendShift::SunForward,
-            WeekendShift::NextWeekday,
+            WeekendShift::Forward,
         ] {
             let rule = FixedDate::new(Month::Jul, 4).shift(shift);
             assert!(rule.is_holiday(ymd(2024, Month::Jul, 4)), "{shift:?}");
