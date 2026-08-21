@@ -11,10 +11,11 @@ use crate::error::err;
 /// holiday is observed instead is the calendar's decision, driven by the
 /// rule's `shift`.
 ///
+/// >>> from datetime import date
 /// >>> from fasti import Rule, Calendar
 /// >>> juneteenth = Rule.fixed("Jun", 19, shift="us", from_year=2022)
 /// >>> cal = Calendar.custom("Acme", rules=[juneteenth])
-/// >>> cal.is_holiday("2027-06-18")  # 2027-06-19 is a Saturday
+/// >>> cal.is_holiday(date(2027, 6, 18))  # 2027-06-19 is a Saturday
 /// True
 #[pyclass(module = "fasti", from_py_object, frozen, str)]
 #[derive(Debug, Clone)]
@@ -211,7 +212,14 @@ impl Rule {
     /// a company blackout day.
     #[staticmethod]
     fn one_off(date: DateArg) -> Self {
-        let description = format!("Rule.one_off('{}')", date.0);
+        // Spelled as the call that would rebuild it, which now means a
+        // date constructor rather than a string.
+        let (year, month, day) = date.0.to_ymd();
+        let description = format!(
+            "Rule.one_off(datetime.date({}, {}, {day}))",
+            year.get(),
+            month.get()
+        );
         Self::new(fasti::Rule::OneOff(fasti::OneOff::new(date.0)), description)
     }
 

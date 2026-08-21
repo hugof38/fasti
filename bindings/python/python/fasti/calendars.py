@@ -4,8 +4,9 @@ Every name here is also reachable through :func:`load`, which is what
 ``Calendar(name)`` does — the module attributes exist so that editors and
 type checkers can see them.
 
+>>> from datetime import date
 >>> from fasti import calendars
->>> calendars.US_SETTLEMENT.is_holiday("2026-07-03")   # Jul 4 falls on a Saturday
+>>> calendars.US_SETTLEMENT.is_holiday(date(2026, 7, 3))   # Jul 4 is a Saturday
 True
 """
 

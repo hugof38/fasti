@@ -118,13 +118,14 @@ impl Calendar {
     /// `rules`, and any number of one-off `holidays`.
     ///
     /// >>> import fasti
+    /// >>> from datetime import date
     /// >>> cal = fasti.Calendar.custom(
     /// ...     "Acme",
     /// ...     weekend=["sat", "sun"],
     /// ...     rules=[fasti.Rule.fixed("Jan", 1, shift="forward")],
-    /// ...     holidays=["2026-08-15"],
+    /// ...     holidays=[date(2026, 8, 15)],
     /// ... )
-    /// >>> cal.is_holiday("2026-08-15")
+    /// >>> cal.is_holiday(date(2026, 8, 15))
     /// True
     #[staticmethod]
     #[pyo3(signature = (name, *, weekend=None, rules=None, holidays=None))]

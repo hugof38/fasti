@@ -129,19 +129,23 @@ pip install fasti-py   # the import is `fasti`
 ```
 
 ```python
+from datetime import date
+
 import fasti
 from fasti import calendars
 
-calendars.US_NYSE.is_business_day("2026-07-03")             # False — July 4 observed
-fasti.year_fraction("2025-01-01", "2025-07-01", "ACT/360")  # Fraction(181, 360)
+calendars.US_NYSE.is_business_day(date(2026, 7, 3))     # False — July 4 observed
+fasti.year_fraction(date(2025, 1, 1), date(2025, 7, 1), "ACT/360")
+# Fraction(181, 360)
 ```
 
-Dates in are `datetime.date` (or `datetime.datetime`, or an ISO
-`YYYY-MM-DD` string) and dates out are `datetime.date`; year fractions
-come back as `fractions.Fraction`, so the crate's float-free arithmetic
-survives the boundary exactly. Conventions, tenors and weekdays are
-named with plain strings or typed enums, whichever reads better where
-you are.
+Dates in are `datetime.date` (or a `datetime.datetime`, whose time is
+dropped) and dates out are `datetime.date` — nothing else, so a
+date-shaped string stays your program's business to parse. Year
+fractions come back as `fractions.Fraction`, so the crate's float-free
+arithmetic survives the boundary exactly. Conventions, tenors and
+weekdays are named with plain strings or typed enums, whichever reads
+better where you are.
 
 The bindings are a [PyO3] extension in
 [`bindings/python`](./bindings/python) — its own cargo workspace, so

@@ -16,7 +16,8 @@ use crate::period::{Period, PeriodArg};
 /// count (ACT/ACT ICMA) accrues against.
 ///
 /// >>> import fasti
-/// >>> s = fasti.Schedule("2025-01-15", "2027-01-15", "6M",
+/// >>> from datetime import date
+/// >>> s = fasti.Schedule(date(2025, 1, 15), date(2027, 1, 15), "6M",
 /// ...                    fasti.calendars.US_SETTLEMENT)
 /// >>> len(s)
 /// 5

@@ -47,9 +47,10 @@ enum Kind {
 /// | `30E/360 ISDA` | `30/360 German` — needs `termination=` |
 ///
 /// >>> import fasti
-/// >>> fasti.DayCount("ACT/360").year_fraction("2025-01-01", "2025-04-01")
+/// >>> from datetime import date
+/// >>> fasti.DayCount("ACT/360").year_fraction(date(2025, 1, 1), date(2025, 4, 1))
 /// Fraction(1, 4)
-/// >>> float(fasti.DayCount("ACT/365F").year_fraction("2025-01-01", "2026-01-01"))
+/// >>> float(fasti.DayCount("ACT/365F").year_fraction(date(2025, 1, 1), date(2026, 1, 1)))
 /// 1.0
 #[pyclass(module = "fasti", from_py_object, frozen, eq)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,7 +117,7 @@ impl DayCount {
                 let termination = termination.ok_or_else(|| {
                     invalid(
                         "30E/360 ISDA needs the instrument's maturity, e.g. \
-                         DayCount('30E/360 ISDA', termination='2030-01-15')",
+                         DayCount('30E/360 ISDA', termination=date(2030, 1, 15))",
                     )
                 })?;
                 Kind::Thirty360ISDA {

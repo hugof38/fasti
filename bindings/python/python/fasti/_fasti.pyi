@@ -14,10 +14,10 @@ MIN_DATE: datetime.date
 #: The latest date fasti can represent.
 MAX_DATE: datetime.date
 
-#: Anything accepted where a date is wanted: a ``datetime.date``, a
-#: ``datetime.datetime`` (the time is dropped), or an ISO ``YYYY-MM-DD``
-#: string.
-DateLike: TypeAlias = datetime.date | str
+#: Anything accepted where a date is wanted: a ``datetime.date``, or a
+#: ``datetime.datetime`` (whose time component is dropped, and which is
+#: a ``datetime.date`` as far as the type system is concerned).
+DateLike: TypeAlias = datetime.date
 #: A period, a period string such as ``"6M"``, a frequency, or a
 #: whole-day ``timedelta``.
 PeriodLike: TypeAlias = "Period | Frequency | str | datetime.timedelta"

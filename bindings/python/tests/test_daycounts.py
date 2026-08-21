@@ -1,5 +1,6 @@
 """Day-count conventions, as exact fractions."""
 
+from datetime import date
 from fractions import Fraction
 
 import pytest
@@ -9,33 +10,33 @@ from fasti import DayCount
 
 
 def test_act_360_and_365_over_a_leap_year():
-    assert DayCount("ACT/360").year_fraction("2024-01-01", "2025-01-01") == Fraction(366, 360)
-    assert DayCount("ACT/365F").year_fraction("2024-01-01", "2025-01-01") == Fraction(366, 365)
-    assert DayCount("ACT/ACT ISDA").year_fraction("2024-01-01", "2025-01-01") == 1
+    assert DayCount("ACT/360").year_fraction(date(2024, 1, 1), date(2025, 1, 1)) == Fraction(366, 360)
+    assert DayCount("ACT/365F").year_fraction(date(2024, 1, 1), date(2025, 1, 1)) == Fraction(366, 365)
+    assert DayCount("ACT/ACT ISDA").year_fraction(date(2024, 1, 1), date(2025, 1, 1)) == 1
 
 
 def test_direction_is_signed_and_equal_dates_are_zero():
     dc = DayCount("ACT/360")
-    assert dc.year_fraction("2025-07-01", "2025-01-01") == -dc.year_fraction(
-        "2025-01-01", "2025-07-01"
+    assert dc.year_fraction(date(2025, 7, 1), date(2025, 1, 1)) == -dc.year_fraction(
+        date(2025, 1, 1), date(2025, 7, 1)
     )
-    assert dc.year_fraction("2025-01-01", "2025-01-01") == 0
+    assert dc.year_fraction(date(2025, 1, 1), date(2025, 1, 1)) == 0
 
 
 def test_act_family_is_additive_across_a_split():
     dc = DayCount("ACT/ACT ISDA")
-    whole = dc.year_fraction("2023-11-01", "2024-05-01")
-    parts = dc.year_fraction("2023-11-01", "2024-01-01") + dc.year_fraction(
-        "2024-01-01", "2024-05-01"
+    whole = dc.year_fraction(date(2023, 11, 1), date(2024, 5, 1))
+    parts = dc.year_fraction(date(2023, 11, 1), date(2024, 1, 1)) + dc.year_fraction(
+        date(2024, 1, 1), date(2024, 5, 1)
     )
     assert whole == parts
 
 
 def test_thirty_360_counts_its_own_days():
-    assert DayCount("30/360").day_count("2025-01-31", "2025-02-28") == 28
-    assert DayCount("30E/360").day_count("2025-01-31", "2025-02-28") == 28
-    assert DayCount("ACT/360").day_count("2025-01-31", "2025-02-28") == 28
-    assert DayCount("30/360").year_fraction("2025-01-01", "2025-07-01") == Fraction(1, 2)
+    assert DayCount("30/360").day_count(date(2025, 1, 31), date(2025, 2, 28)) == 28
+    assert DayCount("30E/360").day_count(date(2025, 1, 31), date(2025, 2, 28)) == 28
+    assert DayCount("ACT/360").day_count(date(2025, 1, 31), date(2025, 2, 28)) == 28
+    assert DayCount("30/360").year_fraction(date(2025, 1, 1), date(2025, 7, 1)) == Fraction(1, 2)
 
 
 @pytest.mark.parametrize(
@@ -63,8 +64,8 @@ def test_unknown_convention_raises():
 def test_thirty_e_360_isda_needs_a_termination_date():
     with pytest.raises(fasti.FastiError, match="termination"):
         DayCount("30E/360 ISDA")
-    dc = DayCount("30E/360 ISDA", termination="2030-02-28")
-    assert dc.year_fraction("2025-01-01", "2025-07-01") == Fraction(1, 2)
+    dc = DayCount("30E/360 ISDA", termination=date(2030, 2, 28))
+    assert dc.year_fraction(date(2025, 1, 1), date(2025, 7, 1)) == Fraction(1, 2)
 
 
 def test_act_act_icma_needs_a_frequency():
@@ -73,11 +74,11 @@ def test_act_act_icma_needs_a_frequency():
     dc = DayCount("ACT/ACT ICMA", frequency="semiannual")
     assert dc.frequency == fasti.Frequency.SEMIANNUAL
     # Unbound, an accrual counts as one whole coupon period.
-    assert dc.year_fraction("2025-01-15", "2025-07-15") == Fraction(1, 2)
+    assert dc.year_fraction(date(2025, 1, 15), date(2025, 7, 15)) == Fraction(1, 2)
 
 
 def test_act_act_icma_bound_to_a_schedule_accrues_by_reference_period():
-    schedule = fasti.Schedule("2025-01-15", "2027-01-15", "6M")
+    schedule = fasti.Schedule(date(2025, 1, 15), date(2027, 1, 15), "6M")
     dc = DayCount("ACT/ACT ICMA", schedule=schedule)
     assert dc.frequency == fasti.Frequency.SEMIANNUAL
     assert [dc.year_fraction(a, b) for a, b in schedule.periods()] == [Fraction(1, 2)] * 4
@@ -85,20 +86,20 @@ def test_act_act_icma_bound_to_a_schedule_accrues_by_reference_period():
 
 
 def test_bind_attaches_a_schedule_after_the_fact():
-    schedule = fasti.Schedule("2025-01-15", "2026-01-15", "6M")
+    schedule = fasti.Schedule(date(2025, 1, 15), date(2026, 1, 15), "6M")
     bound = DayCount("ACT/ACT ICMA", frequency="semiannual").bind(schedule)
     # 90 days into a 181-day semiannual coupon: 90 / (2 * 181).
-    assert bound.year_fraction("2025-01-15", "2025-04-15") == Fraction(45, 181)
+    assert bound.year_fraction(date(2025, 1, 15), date(2025, 4, 15)) == Fraction(45, 181)
 
 
 def test_module_level_helpers_match_the_class():
-    assert fasti.year_fraction("2025-01-01", "2025-07-01", "ACT/360") == DayCount(
+    assert fasti.year_fraction(date(2025, 1, 1), date(2025, 7, 1), "ACT/360") == DayCount(
         "ACT/360"
-    ).year_fraction("2025-01-01", "2025-07-01")
-    assert fasti.day_count("2025-01-31", "2025-02-28", "30/360") == 28
+    ).year_fraction(date(2025, 1, 1), date(2025, 7, 1))
+    assert fasti.day_count(date(2025, 1, 31), date(2025, 2, 28), "30/360") == 28
     assert fasti.year_fraction(
-        "2025-01-01", "2025-07-01", DayCount("ACT/360")
+        date(2025, 1, 1), date(2025, 7, 1), DayCount("ACT/360")
     ) == Fraction(181, 360)
     assert fasti.year_fraction(
-        "2025-01-15", "2025-07-15", "ACT/ACT ICMA", frequency="semiannual"
+        date(2025, 1, 15), date(2025, 7, 15), "ACT/ACT ICMA", frequency="semiannual"
     ) == Fraction(1, 2)

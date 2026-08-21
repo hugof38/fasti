@@ -3,8 +3,9 @@
 //! for financial code.
 //!
 //! The boundary is Python's own `datetime.date`: every date argument
-//! accepts one (or a `datetime.datetime`, or an ISO `YYYY-MM-DD`
-//! string), and every date result is one. Year fractions come back as
+//! takes one (or a `datetime.datetime`, whose time is dropped), and
+//! every date result is one. Nothing else is accepted — a date-shaped
+//! string is a string. Year fractions come back as
 //! `fractions.Fraction`, matching the core crate's float-free
 //! arithmetic exactly.
 
@@ -48,7 +49,8 @@ fn resolve_day_count(
 /// `fractions.Fraction`.
 ///
 /// >>> import fasti
-/// >>> fasti.year_fraction("2025-01-01", "2025-07-01", "ACT/360")
+/// >>> from datetime import date
+/// >>> fasti.year_fraction(date(2025, 1, 1), date(2025, 7, 1), "ACT/360")
 /// Fraction(181, 360)
 #[pyfunction]
 #[pyo3(signature = (start, end, convention, *, frequency=None, schedule=None, termination=None))]
@@ -68,7 +70,8 @@ fn year_fraction<'py>(
 /// direction.
 ///
 /// >>> import fasti
-/// >>> fasti.day_count("2025-01-31", "2025-02-28", "30/360")
+/// >>> from datetime import date
+/// >>> fasti.day_count(date(2025, 1, 31), date(2025, 2, 28), "30/360")
 /// 28
 #[pyfunction]
 #[pyo3(signature = (start, end, convention, *, frequency=None, schedule=None, termination=None))]

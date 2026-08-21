@@ -1,6 +1,6 @@
 """Period parsing, arithmetic, and the frequency vocabulary."""
 
-import datetime
+from datetime import date, timedelta
 
 import pytest
 
@@ -37,12 +37,12 @@ def test_keyword_construction_matches_string_construction():
 
 
 def test_period_from_timedelta():
-    assert Period(datetime.timedelta(days=10)) == Period.days(10)
+    assert Period(timedelta(days=10)) == Period.days(10)
 
 
 def test_timedelta_with_a_time_component_is_refused():
     with pytest.raises(fasti.FastiError, match="whole number of days"):
-        Period(datetime.timedelta(days=1, hours=6))
+        Period(timedelta(days=1, hours=6))
 
 
 def test_period_needs_exactly_one_source():
@@ -90,6 +90,6 @@ def test_frequency_round_trip():
 
 def test_periods_are_accepted_wherever_a_tenor_is_wanted():
     cal = fasti.calendars.NULL
-    assert cal.advance("2026-01-31", Period("1M")) == datetime.date(2026, 2, 28)
-    assert cal.advance("2026-01-31", "1M") == datetime.date(2026, 2, 28)
-    assert cal.advance("2026-01-31", Frequency.MONTHLY) == datetime.date(2026, 2, 28)
+    assert cal.advance(date(2026, 1, 31), Period("1M")) == date(2026, 2, 28)
+    assert cal.advance(date(2026, 1, 31), "1M") == date(2026, 2, 28)
+    assert cal.advance(date(2026, 1, 31), Frequency.MONTHLY) == date(2026, 2, 28)

@@ -21,25 +21,35 @@ The distribution is `fasti-py` — the name `fasti` was taken on PyPI by
 an unrelated project — but the import is plain `fasti`:
 
 ```python
-import datetime
+from datetime import date
+
 import fasti
 from fasti import calendars
 
 nyse = calendars.US_NYSE
-nyse.is_business_day(datetime.date(2026, 7, 3))   # False — July 4 observed
-nyse.next_business_day("2026-07-03")              # datetime.date(2026, 7, 6)
+nyse.is_business_day(date(2026, 7, 3))   # False — July 4 observed
+nyse.next_business_day(date(2026, 7, 3)) # datetime.date(2026, 7, 6)
 
-schedule = fasti.Schedule("2025-01-15", "2030-01-15", "6M", calendars.US_SETTLEMENT)
+schedule = fasti.Schedule(
+    date(2025, 1, 15), date(2030, 1, 15), "6M", calendars.US_SETTLEMENT
+)
 for start, end in schedule.periods():
     print(start, end, fasti.year_fraction(start, end, "ACT/ACT ISDA"))
 ```
 
 ## It speaks datetime
 
-Dates in are `datetime.date` — or a `datetime.datetime` (the time is
-dropped), or an ISO `YYYY-MM-DD` string. Dates out are always
-`datetime.date`. There is no date class of ours to learn, convert
-through, or serialize.
+Dates in are `datetime.date` — or a `datetime.datetime`, whose time
+component is dropped. Dates out are always `datetime.date`. There is no
+date class of ours to learn, convert through, or serialize.
+
+Nothing else is accepted, `"2026-07-04"` included. A date-shaped string
+is a string: `datetime.date.fromisoformat` parses one, and it belongs at
+the edge of *your* program, where you know which format arrived. Taking
+strings here would mean this library owning a second date grammar, its
+locale arguments, and its ambiguities — and it would let a typo through
+as a `ValueError` from four calls deep instead of a `TypeError` where it
+was written.
 
 Year fractions come back as `fractions.Fraction`, because that is what
 they are. `fasti` computes day-count fractions as reduced integer
@@ -47,11 +57,12 @@ rationals and never touches a float, so scaling a notional by an accrual
 fraction stays exact:
 
 ```python
->>> fasti.year_fraction("2025-01-01", "2025-07-01", "ACT/360")
+>>> from datetime import date
+>>> fasti.year_fraction(date(2025, 1, 1), date(2025, 7, 1), "ACT/360")
 Fraction(181, 360)
->>> 10_000_000 * fasti.year_fraction("2025-01-01", "2025-07-01", "ACT/360")
+>>> 10_000_000 * fasti.year_fraction(date(2025, 1, 1), date(2025, 7, 1), "ACT/360")
 Fraction(45250000, 9)
->>> float(fasti.year_fraction("2025-01-01", "2025-07-01", "ACT/360"))
+>>> float(fasti.year_fraction(date(2025, 1, 1), date(2025, 7, 1), "ACT/360"))
 0.5027777777777778
 ```
 
@@ -79,11 +90,12 @@ everywhere a string is, and are what the library hands back.
 ### Calendars
 
 ```python
+>>> from datetime import date
 >>> from fasti import calendars
->>> calendars.UK_SETTLEMENT.is_holiday("2021-12-28")   # Boxing Day's substitute
+>>> calendars.UK_SETTLEMENT.is_holiday(date(2021, 12, 28))  # Boxing Day's substitute
 True
 >>> joint = calendars.US_SETTLEMENT.union(calendars.FRANCE_SETTLEMENT)
->>> joint.is_holiday("2026-07-14"), joint.is_holiday("2026-11-26")
+>>> joint.is_holiday(date(2026, 7, 14)), joint.is_holiday(date(2026, 11, 26))
 (True, True)
 >>> calendars.names()
 ['TARGET', 'US.SETTLEMENT', 'US.NYSE', ...]
@@ -96,13 +108,14 @@ Day's substitute to the Tuesday.
 
 ```python
 >>> import fasti
+>>> from datetime import date
 >>> acme = fasti.Calendar.custom(
 ...     "Acme",
 ...     weekend=["sat", "sun"],
 ...     rules=[fasti.Rule.fixed("Jun", 19, shift="us", from_year=2022)],
-...     holidays=["2026-08-14"],
+...     holidays=[date(2026, 8, 14)],
 ... )
->>> acme.is_holiday("2027-06-18")   # Juneteenth 2027 falls on a Saturday
+>>> acme.is_holiday(date(2027, 6, 18))   # Juneteenth 2027 falls on a Saturday
 True
 ```
 
@@ -110,9 +123,10 @@ True
 
 ```python
 >>> import fasti
+>>> from datetime import date
 >>> from fasti import calendars
 >>> schedule = fasti.Schedule(
-...     "2025-01-15", "2027-01-15", "6M", calendars.US_SETTLEMENT,
+...     date(2025, 1, 15), date(2027, 1, 15), "6M", calendars.US_SETTLEMENT,
 ...     convention="modified_following",
 ...     termination_convention="unadjusted",
 ... )

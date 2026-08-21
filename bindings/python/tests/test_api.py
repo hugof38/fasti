@@ -1,6 +1,6 @@
 """The shape of the package: exports, typing marker, versions, enums."""
 
-import datetime
+from datetime import date
 import importlib.metadata
 
 import pytest
@@ -36,7 +36,7 @@ def test_calendar_module_attributes_match_the_registry():
 
 
 def test_weekday_numbering_matches_datetime():
-    day = datetime.date(2026, 7, 6)  # a Monday
+    day = date(2026, 7, 6)  # a Monday
     assert fasti.Weekday.MON.isoweekday == day.isoweekday()
     assert fasti.Weekday.MON.weekday == day.weekday()
     assert int(fasti.Weekday.SUN) == 7
@@ -55,7 +55,7 @@ def test_enum_members_parse_from_strings():
 
 def test_unknown_names_say_what_was_expected():
     with pytest.raises(fasti.FastiError, match="expected one of"):
-        fasti.calendars.NULL.adjust("2026-01-01", "sideways")
+        fasti.calendars.NULL.adjust(date(2026, 1, 1), "sideways")
 
 
 def test_objects_are_immutable():
@@ -72,8 +72,8 @@ def test_readme_quickstart_runs():
     from fasti import calendars
 
     nyse = calendars.US_NYSE
-    assert nyse.is_business_day("2026-07-06")
-    schedule = fasti.Schedule("2025-01-15", "2030-01-15", "6M", calendars.US_SETTLEMENT)
+    assert nyse.is_business_day(date(2026, 7, 6))
+    schedule = fasti.Schedule(date(2025, 1, 15), date(2030, 1, 15), "6M", calendars.US_SETTLEMENT)
     accrued = sum(
         fasti.year_fraction(start, end, "ACT/ACT ISDA") for start, end in schedule.periods()
     )

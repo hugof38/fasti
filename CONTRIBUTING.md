@@ -96,10 +96,13 @@ cargo clippy --locked --all-targets -- -D warnings
 
 Ground rules on top of the crate's own:
 
-- The boundary types are Python's. Dates in are `datetime.date`,
-  `datetime.datetime`, or an ISO `YYYY-MM-DD` string; dates out are
-  `datetime.date`. Year fractions are `fractions.Fraction` — never a
-  float, for the same reason the crate has none.
+- The boundary types are Python's. Dates in are `datetime.date` (a
+  `datetime.datetime` is one, and loses its time); dates out are
+  `datetime.date`. Nothing else is a date — parsing strings is
+  `datetime.date.fromisoformat`'s job, and a second date grammar here
+  would be ours to maintain and to get wrong. Year fractions are
+  `fractions.Fraction` — never a float, for the same reason the crate
+  has none.
 - Every name a Python user can reach belongs in
   `python/fasti/_fasti.pyi`. Tests fail on drift in either direction.
 - Doc comments on `#[pyclass]` and `#[pyfunction]` items become Python

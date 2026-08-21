@@ -14,7 +14,7 @@ use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyString, PyType};
 use pyo3::{Borrowed, exceptions::PyTypeError, intern};
 
-use crate::error::{err, invalid};
+use crate::error::invalid;
 
 /// `datetime.date(1901, 1, 1).toordinal()` — the ordinal of `fasti`
 /// serial 0. Checked against Python in `tests/test_dates.py`.
@@ -46,9 +46,12 @@ fn from_ordinal(ordinal: i64) -> Option<Date> {
         .and_then(|serial| Date::from_serial(serial).ok())
 }
 
-/// Coerce a Python object to a [`Date`]: a `datetime.date`, anything
-/// deriving from it (`datetime.datetime`, `pandas.Timestamp` — the time
-/// component is dropped), or an ISO `YYYY-MM-DD` string.
+/// Coerce a Python object to a [`Date`]. The only thing accepted is a
+/// `datetime.date` — including anything deriving from it
+/// (`datetime.datetime`, `pandas.Timestamp`), whose time component is
+/// dropped. A date-shaped string is not a date: parsing one is
+/// `datetime.date.fromisoformat`'s job, and doing it here would mean
+/// this library owning a second date grammar and its failure modes.
 pub fn to_date(ob: &Bound<'_, PyAny>) -> PyResult<Date> {
     let py = ob.py();
     if ob.is_instance(date_type(py)?)? {
@@ -64,12 +67,18 @@ pub fn to_date(ob: &Bound<'_, PyAny>) -> PyResult<Date> {
             ))
         });
     }
-    if let Ok(s) = ob.cast::<PyString>() {
-        let text = s.to_cow()?;
-        return text.parse::<Date>().map_err(err);
+    // A string is the mistake worth naming, since it is the one people
+    // reach for and the fix is a single call.
+    if let Ok(text) = ob.cast::<PyString>() {
+        return Err(PyTypeError::new_err(format!(
+            "expected a datetime.date, got a str; parse it first, e.g. \
+             datetime.date.fromisoformat({})",
+            text.repr()
+                .map_or_else(|_| "'...'".to_owned(), |r| r.to_string())
+        )));
     }
     Err(PyTypeError::new_err(format!(
-        "expected a datetime.date, datetime.datetime, or an ISO 'YYYY-MM-DD' string, got {}",
+        "expected a datetime.date (or a datetime.datetime, whose time is dropped), got {}",
         type_name(ob)
     )))
 }
@@ -93,7 +102,7 @@ pub fn type_name(ob: &Bound<'_, PyAny>) -> String {
         .map_or_else(|_| "<unknown>".to_owned(), |n| n.to_string())
 }
 
-/// A date-valued argument. Accepts everything [`to_date`] accepts.
+/// A date-valued argument: a `datetime.date`, and nothing else.
 #[derive(Debug, Clone, Copy)]
 pub struct DateArg(pub Date);
 
