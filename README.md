@@ -125,7 +125,7 @@ cargo run --example treasury_schedule
 The same library on PyPI, speaking `datetime`:
 
 ```console
-pip install fasti
+pip install fasti-py   # the import is `fasti`
 ```
 
 ```python

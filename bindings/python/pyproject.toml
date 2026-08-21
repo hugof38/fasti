@@ -3,7 +3,7 @@ requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "fasti"
+name = "fasti-py"
 description = "Dates, calendars, business-day conventions and day-count fractions for financial code, in Rust, speaking datetime."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,6 +31,8 @@ Issues = "https://github.com/hugof38/fasti/issues"
 Changelog = "https://github.com/hugof38/fasti/blob/main/CHANGELOG.md"
 
 [tool.maturin]
+# The distribution is `fasti-py` because `fasti` was taken on PyPI by
+# an unrelated project; the import name is, and stays, `fasti`.
 module-name = "fasti._fasti"
 python-source = "python"
 features = ["pyo3/extension-module"]

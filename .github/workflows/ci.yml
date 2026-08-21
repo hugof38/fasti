@@ -208,5 +208,5 @@ jobs:
       # `pip install fasti` fails for anyone without a wheel. Build it and
       # install from it rather than from the working tree.
       - run: maturin sdist --out dist
-      - run: pip install dist/fasti-*.tar.gz
+      - run: pip install dist/*.tar.gz
       - run: pytest tests -q

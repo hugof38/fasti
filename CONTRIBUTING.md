@@ -79,7 +79,7 @@ design constraints. The short version:
 ## Python bindings
 
 `bindings/python` is a PyO3 extension module published to PyPI as
-`fasti`. It is a separate cargo workspace with its own `Cargo.lock`, on
+`fasti-py` and imported as `fasti`. It is a separate cargo workspace with its own `Cargo.lock`, on
 purpose: pyo3 and a C toolchain have no business in the core crate's
 MSRV job, lockfile, or `cargo deny` run.
 

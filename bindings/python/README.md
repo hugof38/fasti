@@ -1,6 +1,6 @@
 # fasti
 
-[![PyPI](https://img.shields.io/pypi/v/fasti.svg)](https://pypi.org/project/fasti/)
+[![PyPI](https://img.shields.io/pypi/v/fasti-py.svg)](https://pypi.org/project/fasti-py/)
 [![CI](https://github.com/hugof38/fasti/actions/workflows/ci.yml/badge.svg)](https://github.com/hugof38/fasti/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](#license)
 
@@ -14,8 +14,11 @@ fasti* — the days on which business could lawfully be conducted.
 [QuantLib]: https://github.com/lballabio/QuantLib
 
 ```console
-pip install fasti
+pip install fasti-py
 ```
+
+The distribution is `fasti-py` — the name `fasti` was taken on PyPI by
+an unrelated project — but the import is plain `fasti`:
 
 ```python
 import datetime

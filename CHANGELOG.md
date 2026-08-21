@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Python bindings (`bindings/python`), published to PyPI as `fasti`: a
-  PyO3 extension exposing calendars, business-day conventions, day
+- Python bindings (`bindings/python`), published to PyPI as `fasti-py` and
+  imported as `fasti`: a PyO3 extension exposing calendars, business-day conventions, day
   counts, schedules and holiday rules to Python. Dates cross the
   boundary as `datetime.date` (accepting `datetime.datetime` and ISO
   `YYYY-MM-DD` strings on the way in) and year fractions as

@@ -14,7 +14,8 @@ def test_everything_in_all_is_importable():
 
 
 def test_version_matches_the_installed_distribution():
-    assert fasti.__version__ == importlib.metadata.version("fasti")
+    """The distribution is `fasti-py`; the import name is `fasti`."""
+    assert fasti.__version__ == importlib.metadata.version("fasti-py")
 
 
 def test_package_ships_a_typing_marker():
