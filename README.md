@@ -28,14 +28,18 @@ same capability surface with:
   by an accrual fraction stays exact.
 - **`no_std` + `alloc`.** No I/O, no clock, no timezone database, no
   runtime dependencies beyond `thiserror`. The library has no concept
-  of "now" — you tell it the dates.
+  of "now" — you tell it the dates. CI compiles it for a bare-metal
+  target (`thumbv7em-none-eabihf`), so the claim is checked, not
+  asserted.
 - **Const-first.** Every primitive constructor is `const fn`, and every
   built-in calendar is a `pub const` — zero allocation, zero setup.
 - **No panics in library code.** Fallible operations return
   `Result<_, TimeError>`. `unwrap`/`expect`/`panic` are clippy-walled.
 - **Property-tested invariants.** Conservation laws (ACT-family
   additivity, adjust idempotence, schedule monotonicity) are proptest
-  suites, not comments.
+  suites, not comments. A separate integration test compiles against
+  the crate from outside, so the public API is exercised the way a
+  dependent sees it.
 
 ## What's in the box
 
@@ -61,6 +65,11 @@ fasti = "0.1"
 #            chrono::Weekday, and chrono::Month
 fasti = { version = "0.1", features = ["serde", "chrono"] }
 ```
+
+The minimum supported Rust version is **1.90** (edition 2024). CI
+tests against it on every change, using a committed lockfile pinned to
+a dependency resolution known to build there. Raising the MSRV is a
+minor-version bump, never a patch.
 
 Coming from `chrono`? Enable the `chrono` feature and convert at the
 boundary — `let d: fasti::Date = naive_date.try_into()?;` (fallible
@@ -113,10 +122,9 @@ cargo run --example treasury_schedule
 
 ## Design notes
 
-See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the design constraints
-(serial dates, the rule-based calendar model, why `Fraction` instead of
-floats, the supported 1901..=2199 date range) and
-[`CONTRIBUTING.md`](./CONTRIBUTING.md) for the development workflow.
+See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the design constraints:
+serial dates, the rule-based calendar model, why `Fraction` instead of
+floats, and the supported 1901..=2199 date range.
 
 QuantLib's `ql/time` is the design reference; ported holiday tables and
 lookup data are attributed in the module docs and in
@@ -129,6 +137,21 @@ implementations, so they are reproducible from first principles.
 Pre-1.0. The public surface is small and deliberate but may still move.
 Planned next: CDS/IMM schedule generation rules and the long-tail day
 counts (Business/252, ACT/365 Canadian, NASD 30/360).
+
+## Contributing
+
+Issues and pull requests are welcome. [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+covers the development workflow and the ground rules;
+[`ARCHITECTURE.md`](./ARCHITECTURE.md) covers the constraints behind
+them. Participation is under the
+[Code of Conduct](./CODE_OF_CONDUCT.md).
+
+Calendar and day-count data bugs are the most useful thing you can
+report. The issue template for them asks for the published source the
+fix will be checked against, because that is what makes such a bug
+fixable in one pass. For anything that looks like a vulnerability, read
+[`SECURITY.md`](./SECURITY.md) first — it also explains why wrong
+holiday data deliberately is not one.
 
 ## License
 
