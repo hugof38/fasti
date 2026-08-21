@@ -1,0 +1,94 @@
+name: Release
+
+# Publishes to crates.io when a v* tag is pushed. The tag is the trigger,
+# but the version of record is the one in Cargo.toml — the first job
+# refuses to publish if they disagree, which is the failure mode that
+# otherwise produces an unreclaimable wrong version number on crates.io.
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  verify:
+    name: verify tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - id: check
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::tag v$tag does not match Cargo.toml version $manifest"
+            exit 1
+          fi
+          grep -q "\[$manifest\]" CHANGELOG.md \
+            || { echo "::error::CHANGELOG.md has no section for $manifest"; exit 1; }
+          echo "version=$manifest" >> "$GITHUB_OUTPUT"
+
+  gates:
+    name: gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --all-features --all-targets -- -D warnings
+      - run: cargo test --locked --all-features --all-targets
+      - run: cargo test --locked --all-features --doc
+      - run: cargo package --locked
+
+  publish:
+    name: publish to crates.io
+    needs: [verify, gates]
+    runs-on: ubuntu-latest
+    # Gate the token behind a GitHub environment so publishing needs the
+    # protection rules configured there, not just push access to a tag.
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Alternative to the token below: crates.io Trusted Publishing,
+      # which mints a short-lived token from this workflow's OIDC identity
+      # and removes the stored secret entirely. Requires configuring the
+      # publisher on crates.io first.
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  github-release:
+    name: github release
+    needs: [verify, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create release from the changelog section
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - "$VERSION" > body.md <<'PY'
+          import re, sys
+          version = sys.argv[1]
+          text = open("CHANGELOG.md").read()
+          m = re.search(
+              rf"^## \[{re.escape(version)}\].*?$(.*?)(?=^## \[|\Z)",
+              text, re.M | re.S)
+          sys.stdout.write(m.group(1).strip() if m else "")
+          PY
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file body.md
