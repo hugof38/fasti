@@ -1,22 +1,36 @@
 # Contributing to fasti
 
-Thanks for your interest! Issues and pull requests are welcome.
+Thanks for your interest! Issues and pull requests are welcome. By
+participating you agree to the
+[Code of Conduct](./CODE_OF_CONDUCT.md); to report a suspected
+vulnerability, follow [SECURITY.md](./SECURITY.md) rather than opening
+an issue.
 
 ## Development workflow
 
-The crate is a single standard Cargo library. All four of these must
-pass before a change is considered green (CI enforces them):
+The crate is a single standard Cargo library. All of these must pass
+before a change is considered green (CI enforces them):
 
 ```bash
-cargo test --all-features --all-targets
-cargo clippy --all-features --all-targets -- -D warnings
+cargo test --locked --all-features --all-targets
+cargo test --locked --all-features --doc
+cargo clippy --locked --all-features --all-targets -- -D warnings
 cargo fmt --all --check
-RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --all-features --no-deps
+cargo deny check          # licenses, advisories, banned dependencies
 ```
 
-Doctests run as part of `cargo test`. The minimum supported Rust
-version is pinned in `Cargo.toml` (`rust-version`); CI builds against
-both stable and the MSRV.
+Doctests do not run under `--all-targets`, which is why they get their
+own line. The minimum supported Rust version is pinned in `Cargo.toml`
+(`rust-version`); CI builds against both stable and the MSRV.
+
+`Cargo.lock` is committed even though this is a library. It does not
+affect what downstream users resolve — it exists so that the MSRV job
+tests a dependency set known to build on that toolchain, instead of
+turning red when an unrelated crate raises its own MSRV. A separate CI
+job runs `cargo update` first, so the declared version requirements
+stay honest and the lockfile never becomes load-bearing. Regenerate it
+with `cargo update` when you change a dependency; never hand-edit it.
 
 ## Ground rules
 
@@ -45,6 +59,10 @@ design constraints. The short version:
   style.
 - Calendar data must be checkable against public sources; cite the
   source in a comment when it is not obvious.
+- `tests/public_api.rs` compiles as a separate crate against the
+  published surface only. Anything reachable in-crate but not
+  re-exported from the root fails there rather than in a downstream
+  build, so a new `pub` type belongs in that file's import list.
 
 ## Adding a calendar
 
@@ -62,3 +80,23 @@ design constraints. The short version:
 
 Small commits that each leave the workspace green. Write commit
 messages that explain *why*, not just *what*.
+
+## AI-assisted contributions
+
+They are welcome, on one condition: you have read the diff you are
+submitting and can defend it in review. Review effort is the scarce
+resource here, and a patch its author cannot explain spends more of it
+than it saves.
+
+Two things matter more than usual in this crate, and generated code is
+unreliable at both:
+
+- **Calendar data must trace to a published source**, not to a model's
+  recollection of one. Cite the source in a comment; a plausible-looking
+  holiday table with no citation will be asked for one.
+- **Ported logic must match its stated upstream.** If a change claims
+  QuantLib parity, that claim gets checked against the upstream file.
+
+You do not need to disclose tool use, and there is no sign-off
+requirement. Submitting a patch means you have the right to contribute
+it under the dual license above.
