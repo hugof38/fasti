@@ -2,7 +2,7 @@
 //! year (e.g. July 4), optionally rolled to a nearby business day when
 //! the natural date lands on a weekend.
 
-use crate::{Date, Month, Year, YearRange};
+use crate::{Date, Month, Weekday, Year, YearRange};
 
 /// Which way a fixed-date holiday moves when its natural date falls on
 /// a Saturday or Sunday.
@@ -32,6 +32,20 @@ pub enum WeekendShift {
     /// Saturday moves backwards, Sunday forwards — the US federal
     /// convention.
     SatBackSunForward,
+}
+
+impl WeekendShift {
+    /// Which way a holiday falling on `day` steps, if it steps at all —
+    /// the whole table, and the only thing the variants differ by.
+    pub(crate) fn direction(self, day: Weekday) -> Option<i32> {
+        match (self, day) {
+            (Self::None, _) => None,
+            (_, Weekday::Sun) | (Self::Forward, Weekday::Sat) => Some(1),
+            (Self::SatBackSunForward, Weekday::Sat) => Some(-1),
+            // SunForward leaves Saturday alone; weekdays never move.
+            _ => None,
+        }
+    }
 }
 
 /// A fixed-date holiday rule.
