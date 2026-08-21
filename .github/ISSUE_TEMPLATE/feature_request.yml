@@ -1,0 +1,33 @@
+name: Feature request
+description: A convention, calendar, or API that fasti should cover and does not
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read [ARCHITECTURE.md](../blob/main/ARCHITECTURE.md) first. Several
+        things are ruled out by design rather than by omission: floating-point
+        arithmetic, external date crates in the core, a `HolidayRule` trait,
+        and widening the 1901..=2199 date range.
+  - type: textarea
+    id: what
+    attributes:
+      label: What is missing
+      description: The convention, calendar, or operation, named precisely.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: What you are trying to do
+      description: The calculation this blocks. Concrete beats general.
+    validations:
+      required: true
+  - type: input
+    id: reference
+    attributes:
+      label: Reference definition
+      description: Where the semantics are specified — an ISDA definition, a QuantLib class, an exchange rulebook.
+      placeholder: QuantLib ql/time/daycounters/business252.hpp
+    validations:
+      required: false

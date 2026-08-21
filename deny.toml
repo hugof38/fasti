@@ -1,0 +1,47 @@
+# cargo-deny configuration. Run locally with `cargo deny check`.
+#
+# fasti's required dependency set is deliberately one crate deep
+# (thiserror), so this is less about pruning a large graph than about
+# two things downstream users in regulated environments will ask about:
+# that no dependency carries a copyleft or unknown license, and that
+# advisories are checked on every change rather than at release time.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+# Permissive only, and deliberately no copyleft entry: fasti ships as
+# Apache-2.0 OR MIT and downstream users in regulated environments need
+# that to stay true of the whole graph.
+#
+# The QuantLib-derived Easter tables are vendored source, not a
+# dependency, so their modified-BSD terms are not visible to cargo-deny
+# at all — they are recorded in THIRD-PARTY-NOTICES instead.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Adding a runtime dependency is a design-review item (ARCHITECTURE.md),
+# not a convenience choice. Anything that pulls in a clock, a timezone
+# database, or another date library contradicts the crate's premise.
+deny = [
+    { name = "chrono", wrappers = ["fasti"] },
+    { name = "time" },
+    { name = "jiff" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -1,7 +1,5 @@
 # Rust build artifacts
 /target
-# Library crate — the lockfile is not committed.
-Cargo.lock
 **/*.rs.bk
 
 # macOS

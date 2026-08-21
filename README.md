@@ -143,3 +143,15 @@ Unless you explicitly state otherwise, any contribution intentionally
 submitted for inclusion in the work by you, as defined in the
 Apache-2.0 license, shall be dual licensed as above, without any
 additional terms or conditions.
+
+### Third-party material
+
+The Easter-Monday lookup tables in `src/easter.rs` are ported from
+QuantLib, which is distributed under a permissive modified-BSD
+(3-clause) license. That license permits the redistribution above; its
+full text and copyright notice are reproduced in
+[`THIRD-PARTY-NOTICES`](./THIRD-PARTY-NOTICES), which ships inside the
+published crate. If your license tooling flags fasti for third-party
+content, this is what it has found — there is no copyleft anywhere in
+the dependency graph, and `cargo deny check` enforces that on every
+commit.

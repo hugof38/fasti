@@ -22,10 +22,12 @@ Initial release.
   `OneOff`, and the `Rule::Custom` fn-pointer escape hatch.
 - Easter-Monday lookup tables for 1901..=2199, validated in tests
   against independent Gregorian and Julian computus implementations.
-- Calendars: `Calendar` / `CalendarBuilder`; built-ins for US
-  Settlement, NYSE, Federal Reserve, Government Bond, SOFR, NERC,
-  France Settlement and Exchange, plus the `WEEKENDS_ONLY` and
-  `NULL_CALENDAR` baselines.
+- Calendars: `Calendar` / `CalendarBuilder`; built-ins for TARGET, UK
+  Settlement, US Settlement, NYSE, Federal Reserve, Government Bond,
+  SOFR, NERC, France Settlement and Exchange, plus the
+  `WEEKENDS_ONLY` and `NULL_CALENDAR` baselines. Business-day and
+  holiday enumeration over a date range, month edges, and joint
+  calendars via `CalendarBuilder::union`.
 - Business-day conventions (Following, ModifiedFollowing, Preceding,
   ModifiedPreceding, Unadjusted) with `Calendar::adjust` and
   `Calendar::advance`.
