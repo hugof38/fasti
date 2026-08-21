@@ -27,7 +27,7 @@ pub enum Rule {
     NthWeekday(NthWeekday),
     /// A [`LastWeekday`] rule — last weekday in a month.
     LastWeekday(LastWeekday),
-    /// An [`EasterOffset`] rule — a fixed offset from Easter Monday.
+    /// An [`EasterOffset`] rule — a fixed offset from Easter Sunday.
     Easter(EasterOffset),
     /// A [`OneOff`] rule — a single specific date.
     OneOff(OneOff),

@@ -76,6 +76,41 @@ design constraints. The short version:
 5. If ported from QuantLib, attribute the upstream file in the module
    docs and document any deliberate deviation.
 
+## Python bindings
+
+`bindings/python` is a PyO3 extension module published to PyPI as
+`fasti`. It is a separate cargo workspace with its own `Cargo.lock`, on
+purpose: pyo3 and a C toolchain have no business in the core crate's
+MSRV job, lockfile, or `cargo deny` run.
+
+```bash
+cd bindings/python
+python -m venv .venv && . .venv/bin/activate
+pip install maturin pytest mypy
+maturin develop           # build and install into the venv
+pytest tests -q           # includes every >>> example in the package
+mypy python/fasti         # the stubs are part of the surface
+cargo fmt --all --check
+cargo clippy --locked --all-targets -- -D warnings
+```
+
+Ground rules on top of the crate's own:
+
+- The boundary types are Python's. Dates in are `datetime.date`,
+  `datetime.datetime`, or an ISO `YYYY-MM-DD` string; dates out are
+  `datetime.date`. Year fractions are `fractions.Fraction` — never a
+  float, for the same reason the crate has none.
+- Every name a Python user can reach belongs in
+  `python/fasti/_fasti.pyi`. Tests fail on drift in either direction.
+- Doc comments on `#[pyclass]` and `#[pyfunction]` items become Python
+  docstrings, and their `>>>` examples run under pytest. Write them as
+  doctests, without markdown fences.
+- A new convention/calendar/rule name needs the alias spellings a caller
+  is likely to type; matching ignores case and punctuation.
+- The version in `bindings/python/Cargo.toml` is the PyPI version, and
+  the `py-v*` release tag has to match it. Keep it in step with the
+  crate version unless a binding-only fix needs to ship alone.
+
 ## Commit hygiene
 
 Small commits that each leave the workspace green. Write commit

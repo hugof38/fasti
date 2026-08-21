@@ -12,3 +12,14 @@
 .idea/
 .vscode/
 *.iml
+
+# Python build artifacts
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+/bindings/python/dist/
+/bindings/python/target/
+.pytest_cache/
+.mypy_cache/
+.venv/

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Python bindings (`bindings/python`), published to PyPI as `fasti`: a
+  PyO3 extension exposing calendars, business-day conventions, day
+  counts, schedules and holiday rules to Python. Dates cross the
+  boundary as `datetime.date` (accepting `datetime.datetime` and ISO
+  `YYYY-MM-DD` strings on the way in) and year fractions as
+  `fractions.Fraction`, so the crate's float-free arithmetic is
+  preserved. Ships type stubs, `abi3` wheels for CPython 3.10+, and its
+  own release workflow on `py-v*` tags.
+
+### Fixed
+
+- `Rule::Easter`'s doc comment named Easter Monday as the anchor its
+  offsets are measured from; `EasterOffset` documents and implements
+  Easter Sunday.
+
 ## [0.1.0] - 2026-08-21
 
 Initial release.

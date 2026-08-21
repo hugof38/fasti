@@ -1,0 +1,48 @@
+[package]
+name = "fasti-python"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+description = "Python bindings for the fasti date/calendar library"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/hugof38/fasti"
+publish = false
+
+# Its own workspace: the binding pulls in pyo3 and a C toolchain, neither of
+# which should touch the core crate's lockfile, MSRV job, or `cargo deny` run.
+[workspace]
+
+[lib]
+name = "_fasti"
+crate-type = ["cdylib"]
+
+[dependencies]
+fasti = { path = "../.." }
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py310"] }
+
+# The same walls the core crate is written behind: no unsafe, no
+# panicking constructs, pedantic clippy. The float ban is not repeated —
+# there is no arithmetic here, only conversion.
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+# `#[pymethods]` fixes the receiver as `&self`, and pyo3 hands arguments
+# over as owned `PyRef`/`Bound` values; both trip lints written for
+# ordinary Rust signatures we do not get to choose.
+trivially_copy_pass_by_ref = "allow"
+needless_pass_by_value = "allow"
+# The doc comments here become Python docstrings, so they quote Python.
+doc_link_with_quotes = "allow"

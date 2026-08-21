@@ -137,3 +137,76 @@ jobs:
           for f in LICENSE-APACHE LICENSE-MIT THIRD-PARTY-NOTICES; do
             echo "$list" | grep -qx "$f" || { echo "::error::$f missing from packaged crate"; exit 1; }
           done
+
+  # ---- Python bindings -------------------------------------------------
+  #
+  # `bindings/python` is its own cargo workspace, so none of the jobs
+  # above see it: pyo3 must not reach the core crate's lockfile, MSRV
+  # job, or `cargo deny` run.
+
+  python-lint:
+    name: python bindings (rustfmt + clippy)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bindings/python
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bindings/python
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+
+  python:
+    name: python bindings (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: bindings/python
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bindings/python
+      - uses: actions/setup-python@v5
+        with:
+          # The abi3 floor. A wheel built against it runs on every later
+          # CPython, so this is the version that has to work.
+          python-version: "3.10"
+      - run: pip install . pytest mypy
+      # Import from the installed wheel, not the source tree, so the
+      # tests exercise what a user gets.
+      - run: pytest tests -q
+      - run: mypy python/fasti
+
+  python-sdist:
+    name: python bindings (from sdist)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bindings/python
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bindings/python
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: pip install maturin pytest
+      # The sdist has to carry the core crate as well as the binding, or
+      # `pip install fasti` fails for anyone without a wheel. Build it and
+      # install from it rather than from the working tree.
+      - run: maturin sdist --out dist
+      - run: pip install dist/fasti-*.tar.gz
+      - run: pytest tests -q

@@ -14,6 +14,16 @@ updates:
     commit-message:
       prefix: "deps"
 
+  # The Python bindings are a separate workspace with their own
+  # lockfile; pyo3 releases often enough to be worth tracking.
+  - package-ecosystem: cargo
+    directory: "/bindings/python"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+
   - package-ecosystem: github-actions
     directory: "/"
     schedule:

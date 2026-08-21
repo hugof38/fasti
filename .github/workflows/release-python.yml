@@ -1,0 +1,104 @@
+name: Release (Python)
+
+# Publishes the Python bindings to PyPI when a py-v* tag is pushed.
+# Separate from the crates.io release so a binding-only fix can ship
+# without re-releasing the crate; the version of record is the one in
+# bindings/python/Cargo.toml, and the first job refuses to publish if the
+# tag disagrees with it.
+on:
+  push:
+    tags: ["py-v*"]
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: verify tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: check
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#py-v}"
+          manifest=$(python3 -c "import tomllib; print(tomllib.load(open('bindings/python/Cargo.toml','rb'))['package']['version'])")
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::tag py-v$tag does not match bindings/python/Cargo.toml version $manifest"
+            exit 1
+          fi
+          echo "version=$manifest" >> "$GITHUB_OUTPUT"
+
+  wheels:
+    name: wheel (${{ matrix.os }}/${{ matrix.target }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64 }
+          - { os: ubuntu-latest, target: aarch64 }
+          - { os: macos-latest, target: x86_64 }
+          - { os: macos-latest, target: aarch64 }
+          - { os: windows-latest, target: x64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      # One wheel per platform covers every CPython from the abi3 floor
+      # up, so there is no Python version matrix here.
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/python
+          target: ${{ matrix.target }}
+          args: --release --out dist
+          manylinux: auto
+          sccache: true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.target }}
+          path: bindings/python/dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    name: sdist
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/python
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: bindings/python/dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: publish to PyPI
+    needs: [verify, wheels, sdist]
+    runs-on: ubuntu-latest
+    # Trusted publishing: PyPI mints a short-lived token from this
+    # workflow's OIDC identity, so there is no stored API token. Configure
+    # the publisher on PyPI for this repository and workflow first, and
+    # gate it behind the environment's protection rules.
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

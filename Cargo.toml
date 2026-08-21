@@ -10,6 +10,10 @@ readme = "README.md"
 keywords = ["date", "calendar", "business-day", "day-count", "no-std"]
 categories = ["date-and-time", "finance", "no-std"]
 authors = ["fasti contributors"]
+# The Python bindings live in the same repository but ship on PyPI, not
+# inside the crate. They are their own cargo workspace; see
+# bindings/python.
+exclude = ["/bindings"]
 
 [features]
 default = []

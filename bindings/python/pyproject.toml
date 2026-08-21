@@ -1,0 +1,41 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "fasti"
+description = "Dates, calendars, business-day conventions and day-count fractions for financial code, in Rust, speaking datetime."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0 OR MIT"
+authors = [{ name = "fasti contributors" }]
+keywords = ["date", "calendar", "business-day", "day-count", "holidays", "finance", "quant"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Financial and Insurance Industry",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Rust",
+  "Topic :: Office/Business :: Financial",
+  "Topic :: Software Development :: Libraries",
+  "Typing :: Typed",
+]
+license-files = ["licenses/LICENSE-APACHE", "licenses/LICENSE-MIT"]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/hugof38/fasti"
+Repository = "https://github.com/hugof38/fasti"
+Issues = "https://github.com/hugof38/fasti/issues"
+Changelog = "https://github.com/hugof38/fasti/blob/main/CHANGELOG.md"
+
+[tool.maturin]
+module-name = "fasti._fasti"
+python-source = "python"
+features = ["pyo3/extension-module"]
+strip = true
+exclude = ["**/__pycache__/**"]
+
+[dependency-groups]
+dev = ["pytest>=8", "mypy>=1.11", "maturin>=1.7,<2.0"]
