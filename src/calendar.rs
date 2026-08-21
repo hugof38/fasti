@@ -81,20 +81,22 @@ impl Calendar<'_> {
 
     /// `true` iff `date` is the substitute day for a weekend holiday.
     ///
-    /// There are only three places one can land, so they are checked
-    /// rather than searched for. A weekend is two days, so it owes at
-    /// most two days off, and they take the Monday and the Tuesday.
-    /// Backwards only Saturday moves, onto the Friday.
+    /// A weekend owes at most two days off, so there are three places
+    /// one can land — the Monday and Tuesday going forwards, the
+    /// Friday going back — and they are checked rather than searched
+    /// for. `QuantLib` hardcodes the same three across its US, UK and
+    /// Canadian calendars.
     ///
-    /// The Tuesday is reached only when the Monday is taken, which a
+    /// The Tuesday is reached whenever the Monday is taken, which a
     /// holiday of the Monday's own does as readily as the weekend's
-    /// first day off — Christmas on a Sunday lands there while Boxing
-    /// Day keeps the Monday. Reading it as "both weekend days moved"
-    /// would miss that.
+    /// first day off: Christmas on a Sunday lands there while Boxing
+    /// Day keeps the Monday.
     ///
-    /// A day off that would need the Wednesday is not granted. That
-    /// takes three consecutive holidays across one weekend, which no
-    /// calendar has.
+    /// A substitute needing the Wednesday is not granted. Japan's
+    /// Golden Week is the one convention that gets there — `QuantLib`
+    /// spells it `d == 6 && m == May && (w == Monday || w == Tuesday
+    /// || w == Wednesday)` — because its substitute chains through
+    /// three consecutive holidays. No [`WeekendShift`] models that.
     fn is_substitute(&self, date: Date) -> bool {
         let shifts = |r: &Rule| !matches!(r.weekend_shift(), WeekendShift::None);
         if self.is_weekend(date) || !self.rules.iter().any(shifts) {
@@ -564,8 +566,8 @@ mod tests {
         };
         assert!(BLOCKED.is_holiday(ymd(2026, Month::Jul, 7)));
         // The second would need the Wednesday, and is not granted.
-        // Reaching it takes three consecutive holidays across one
-        // weekend; no calendar has that, so the queue stops here.
+        // Only Japan's Golden Week reaches that, by chaining through
+        // three consecutive holidays; no `WeekendShift` models it.
         assert!(BLOCKED.is_business_day(ymd(2026, Month::Jul, 8)));
     }
 
