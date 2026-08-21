@@ -19,7 +19,7 @@ jobs:
     outputs:
       version: ${{ steps.check.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - id: check
         run: |
@@ -39,7 +39,7 @@ jobs:
     name: gates
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -58,7 +58,7 @@ jobs:
     # protection rules configured there, not just push access to a tag.
     environment: crates-io
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       # Alternative to the token below: crates.io Trusted Publishing,
       # which mints a short-lived token from this workflow's OIDC identity
@@ -75,7 +75,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Create release from the changelog section
         env:
           GH_TOKEN: ${{ github.token }}
