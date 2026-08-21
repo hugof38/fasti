@@ -93,10 +93,12 @@ impl Calendar<'_> {
     /// Day keeps the Monday.
     ///
     /// A substitute needing the Wednesday is not granted. Japan's
-    /// Golden Week is the one convention that gets there — `QuantLib`
-    /// spells it `d == 6 && m == May && (w == Monday || w == Tuesday
-    /// || w == Wednesday)` — because its substitute chains through
-    /// three consecutive holidays. No [`WeekendShift`] models that.
+    /// Golden Week is the one convention that gets there, chaining
+    /// through three consecutive holidays. No [`WeekendShift`] names a
+    /// chain, and one pinned to a single date is data rather than a
+    /// policy: it belongs in a [`Rule::Custom`] naming the observed day
+    /// outright, as `QuantLib` does with `d == 6 && m == May && (w ==
+    /// Monday || w == Tuesday || w == Wednesday)`.
     fn is_substitute(&self, date: Date) -> bool {
         let shifts = |r: &Rule| !matches!(r.weekend_shift(), WeekendShift::None);
         if self.is_weekend(date) || !self.rules.iter().any(shifts) {
@@ -566,8 +568,8 @@ mod tests {
         };
         assert!(BLOCKED.is_holiday(ymd(2026, Month::Jul, 7)));
         // The second would need the Wednesday, and is not granted.
-        // Only Japan's Golden Week reaches that, by chaining through
-        // three consecutive holidays; no `WeekendShift` models it.
+        // Only Japan's Golden Week reaches that, and a chain that
+        // specific belongs in a `Rule::Custom`, not a `WeekendShift`.
         assert!(BLOCKED.is_business_day(ymd(2026, Month::Jul, 8)));
     }
 
