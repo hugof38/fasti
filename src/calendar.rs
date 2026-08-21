@@ -85,49 +85,53 @@ impl Calendar<'_> {
 
     /// `true` iff `date` is the substitute day for a weekend holiday.
     ///
-    /// A weekend is two days, and two rules naming one day are still
-    /// one holiday — so at most two substitutes ever queue. They take
-    /// the free weekdays past the weekend in order, which is what
-    /// bounds the search: once two free weekdays separate `date` from
-    /// the weekend, nothing queued there can still reach it.
+    /// Only [`is_holiday`](Self::is_holiday) calls this, and only once
+    /// the natural rules have said no, so it does not ask them again.
     fn is_substitute(&self, date: Date) -> bool {
-        let shifts = self
-            .rules
-            .iter()
-            .any(|r| r.weekend_shift() != WeekendShift::None);
-        if !shifts || self.is_weekend(date) || self.is_natural_holiday(date) {
+        let shifts = |r: &Rule| !matches!(r.weekend_shift(), WeekendShift::None);
+        if self.is_weekend(date) || !self.rules.iter().any(shifts) {
             return false;
         }
         // Holidays stepping forwards onto `date`, then backwards onto it.
         self.owed(date, 1) || self.owed(date, -1)
     }
 
-    /// `true` iff `date` is one of the substitutes owed by the weekend
-    /// it adjoins, `step` days back.
+    /// `true` iff the weekend `date` adjoins, `step` days back, owes a
+    /// substitute that reaches it.
     ///
-    /// A weekend is two days, and two rules naming one day are still
-    /// one holiday, so at most two substitutes ever queue. Pairing the
-    /// weekend days that move against the free weekdays past them, in
-    /// claim order, *is* the assignment — and the pairing pulls only as
-    /// many free weekdays as there are movers, so a third can never be
-    /// reached.
+    /// A weekend is two days, so it owes at most two substitutes — the
+    /// array below is those two days — and they fill the free weekdays
+    /// past it in order. So `date` gets one only if more are owed than
+    /// the free weekdays ahead of it in that queue. No separate bound
+    /// is needed: past the second free weekday, two can no longer
+    /// exceed it.
     fn owed(&self, date: Date, step: i32) -> bool {
-        let nearby = |from: Date, dir: i32| {
-            (1..=DAYS_PER_WEEK).filter_map(move |i| from.add_days(dir * i).ok())
-        };
-        let Some(near) = nearby(date, -step).find(|d| self.is_weekend(*d)) else {
+        // Reaching the weekend costs nothing but weekday tests.
+        let Some(near) = Self::nearby(date, -step).find(|d| self.is_weekend(*d)) else {
             return false;
         };
-        let free =
-            nearby(near, step).filter(|d| !self.is_weekend(*d) && !self.is_natural_holiday(*d));
-        // The far weekend day claims first — Saturday before Sunday,
-        // going forwards.
-        [near.add_days(-step).ok(), Some(near)]
+        let owed = [near.add_days(-step).ok(), Some(near)]
             .into_iter()
             .flatten()
             .filter(|d| self.moves(*d, step))
-            .zip(free)
-            .any(|(_, substitute)| substitute == date)
+            .count();
+        // Only something owed makes it worth placing `date` in the queue.
+        owed > 0 && owed > self.queued_ahead_of(date, near, step)
+    }
+
+    /// The free weekdays between the weekend day `near` and `date`,
+    /// which claim their substitutes before `date` can have one.
+    fn queued_ahead_of(&self, date: Date, near: Date, step: i32) -> usize {
+        Self::nearby(near, step)
+            .take_while(|d| *d != date)
+            .filter(|d| !self.is_weekend(*d) && !self.is_natural_holiday(*d))
+            .count()
+    }
+
+    /// The dates within a week of `from`, going `step` at a time — a
+    /// weekend recurs weekly, so anything relevant is inside that.
+    fn nearby(from: Date, step: i32) -> impl Iterator<Item = Date> {
+        (1..=DAYS_PER_WEEK).filter_map(move |i| from.add_days(step * i).ok())
     }
 
     /// `true` iff `day` is a weekend day carrying a holiday that steps
