@@ -6,8 +6,8 @@
 [![license](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](#license)
 
 Dates, calendars, business-day conventions, and day-count fractions for
-financial code — a `no_std` Rust successor to [QuantLib]'s `ql/time`
-module.
+financial code — a native Rust library, `no_std` and free of
+floating-point arithmetic, designed after [QuantLib]'s `ql/time`.
 
 Named for the *fasti*, the ancient Roman calendar that marked the *dies
 fasti* — the days on which business could lawfully be conducted.

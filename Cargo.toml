@@ -1,6 +1,6 @@
 [package]
 name = "fasti"
-description = "Dates, calendars, business-day conventions, and day-count fractions for financial code. A no_std Rust successor to QuantLib's ql/time."
+description = "Dates, calendars, business-day conventions and day-count fractions for financial code. Native Rust, no_std, float-free; designed after QuantLib's ql/time."
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
