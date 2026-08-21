@@ -105,6 +105,11 @@ Ground rules on top of the crate's own:
   has none.
 - Every name a Python user can reach belongs in
   `python/fasti/_fasti.pyi`. Tests fail on drift in either direction.
+- A date position is annotated `datetime.date` outright, never behind an
+  alias. The `*Like` aliases stand for genuine unions (`"6M"` really is
+  a `Period`); a date is not one, and spelling it out is what makes the
+  type error read `expected "date"` at the call site.
+  `tests/test_typing.py` runs mypy over the stubs to hold that.
 - Doc comments on `#[pyclass]` and `#[pyfunction]` items become Python
   docstrings, and their `>>>` examples run under pytest. Write them as
   doctests, without markdown fences.
