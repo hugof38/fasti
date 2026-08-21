@@ -1,0 +1,56 @@
+name: Bug report
+description: A panic, a wrong result, a compile failure, or an API that misbehaves
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a wrong holiday date or day-count fraction, use the
+        "Calendar or day-count data" template instead — it asks for the
+        source citation those fixes need.
+
+        For anything that looks like a soundness or availability problem,
+        read [SECURITY.md](../blob/main/SECURITY.md) first.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproducer
+      description: The smallest program that shows it. Rendered as Rust.
+      render: rust
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: fasti version
+      placeholder: 0.1.0 (or a git SHA)
+    validations:
+      required: true
+  - type: input
+    id: rustc
+    attributes:
+      label: rustc version
+      description: Output of `rustc --version`
+      placeholder: rustc 1.90.0 (1159e78c4 2025-09-14)
+    validations:
+      required: true
+  - type: checkboxes
+    id: features
+    attributes:
+      label: Features enabled
+      options:
+        - label: "`serde`"
+        - label: "`chrono`"
+        - label: "built as `no_std` (no default features on a bare-metal target)"

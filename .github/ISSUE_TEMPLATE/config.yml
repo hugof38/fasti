@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/hugof38/fasti/security/advisories/new
+    about: Report privately instead of opening an issue. See SECURITY.md for what is in scope.
+  - name: Question about usage
+    url: https://github.com/hugof38/fasti/issues
+    about: Open a blank issue. There is no separate forum yet.

@@ -1,0 +1,45 @@
+name: Calendar or day-count data
+description: A holiday date, business-day adjustment, or day-count fraction that fasti gets wrong
+labels: ["bug", "calendar-data"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Data bugs need an independently checkable source — a published
+        exchange holiday list, a central bank calendar, an ISDA paper. A
+        report anchored to a source can be fixed and regression-tested in
+        one pass; one without a source cannot.
+  - type: input
+    id: calendar
+    attributes:
+      label: Calendar or convention
+      description: e.g. `calendars::us::NYSE`, `ActActICMA`, `Thirty360US`
+      placeholder: calendars::uk::SETTLEMENT
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What fasti returns, and what it should return
+      description: Give the dates involved. Exact values, not a description of them.
+      placeholder: |
+        Date::from_ymd(2027, Month::Dec, 28) is reported as a business day;
+        it is the substitute Boxing Day bank holiday and should be a holiday.
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Source
+      description: Link to or cite the published list this is checked against.
+      placeholder: https://www.gov.uk/bank-holidays
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproducer
+      description: A short snippet, if you have one. Rendered as Rust, no backticks needed.
+      render: rust
+    validations:
+      required: false
