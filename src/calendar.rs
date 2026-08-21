@@ -101,12 +101,11 @@ impl Calendar<'_> {
     ///
     /// A weekend is two days, so it owes at most two substitutes — the
     /// array below is those two days — and they fill the free weekdays
-    /// past it in order. So `date` gets one only if more are owed than
-    /// the free weekdays ahead of it in that queue. No separate bound
-    /// is needed: past the second free weekday, two can no longer
-    /// exceed it.
+    /// past it in order. `date` is reached only if fewer than that many
+    /// come first, which is why no more than two free weekdays are ever
+    /// examined. Going backwards it is one: only Saturday moves that
+    /// way, so a single free weekday has already taken it.
     fn owed(&self, date: Date, step: i32) -> bool {
-        // Reaching the weekend costs nothing but weekday tests.
         let Some(near) = Self::nearby(date, -step).find(|d| self.is_weekend(*d)) else {
             return false;
         };
@@ -115,17 +114,16 @@ impl Calendar<'_> {
             .flatten()
             .filter(|d| self.moves(*d, step))
             .count();
-        // Only something owed makes it worth placing `date` in the queue.
-        owed > 0 && owed > self.queued_ahead_of(date, near, step)
+        owed.checked_sub(1)
+            .is_some_and(|filled| self.free_weekdays(near, date, step).nth(filled).is_none())
     }
 
     /// The free weekdays between the weekend day `near` and `date`,
-    /// which claim their substitutes before `date` can have one.
-    fn queued_ahead_of(&self, date: Date, near: Date, step: i32) -> usize {
+    /// each of which claims a substitute before `date` can.
+    fn free_weekdays(&self, near: Date, date: Date, step: i32) -> impl Iterator<Item = Date> {
         Self::nearby(near, step)
-            .take_while(|d| *d != date)
+            .take_while(move |d| *d != date)
             .filter(|d| !self.is_weekend(*d) && !self.is_natural_holiday(*d))
-            .count()
     }
 
     /// The dates within a week of `from`, going `step` at a time — a
