@@ -16,10 +16,6 @@ use crate::{
     BusinessDayConvention, Date, DateRange, Period, Rule, TimeError, Weekend, WeekendShift,
 };
 
-/// A weekend recurs weekly, so a substitute's weekend — and the free
-/// weekday it lands on — are both within this reach or nowhere.
-const DAYS_PER_WEEK: i32 = 7;
-
 /// A holiday calendar: a [`Weekend`] configuration plus a sequence of
 /// [`Rule`]s naming holidays' natural dates.
 ///
@@ -85,28 +81,29 @@ impl Calendar<'_> {
 
     /// `true` iff `date` is the substitute day for a weekend holiday.
     ///
-    /// Only [`is_holiday`](Self::is_holiday) calls this, and only once
-    /// the natural rules have said no, so it does not ask them again.
+    /// Shifts are defined on Saturday and Sunday, so there is nothing
+    /// to search for: forward substitutes queue off the weekend just
+    /// behind `date`, a backward one off the Saturday just ahead, and
+    /// both anchors are weekday arithmetic.
     fn is_substitute(&self, date: Date) -> bool {
         let shifts = |r: &Rule| !matches!(r.weekend_shift(), WeekendShift::None);
         if self.is_weekend(date) || !self.rules.iter().any(shifts) {
             return false;
         }
-        // Holidays stepping forwards onto `date`, then backwards onto it.
-        self.owed(date, 1) || self.owed(date, -1)
+        // ISO weekday: Mon = 1 ..= Sun = 7.
+        let w = i32::from(date.weekday().get());
+        self.owed(date, -w, 1) || self.owed(date, 6 - w, -1)
     }
 
-    /// `true` iff the weekend `date` adjoins, `step` days back, owes a
-    /// substitute that reaches it.
+    /// `true` iff the weekend day `offset` days from `date` — with its
+    /// neighbour one step further out — owes more substitutes than the
+    /// free weekdays between them and `date` can absorb.
     ///
-    /// A weekend is two days, so it owes at most two substitutes — the
-    /// array below is those two days — and they fill the free weekdays
-    /// past it in order. `date` is reached only if fewer than that many
-    /// come first, which is why no more than two free weekdays are ever
-    /// examined. Going backwards it is one: only Saturday moves that
-    /// way, so a single free weekday has already taken it.
-    fn owed(&self, date: Date, step: i32) -> bool {
-        let Some(near) = Self::nearby(date, -step).find(|d| self.is_weekend(*d)) else {
+    /// A weekend is two days — the array below — so at most two
+    /// substitutes queue, and `nth` never examines more free weekdays
+    /// than are owed.
+    fn owed(&self, date: Date, offset: i32, step: i32) -> bool {
+        let Ok(near) = date.add_days(offset) else {
             return false;
         };
         let owed = [near.add_days(-step).ok(), Some(near)]
@@ -114,22 +111,15 @@ impl Calendar<'_> {
             .flatten()
             .filter(|d| self.moves(*d, step))
             .count();
-        owed.checked_sub(1)
-            .is_some_and(|filled| self.free_weekdays(near, date, step).nth(filled).is_none())
-    }
-
-    /// The free weekdays between the weekend day `near` and `date`,
-    /// each of which claims a substitute before `date` can.
-    fn free_weekdays(&self, near: Date, date: Date, step: i32) -> impl Iterator<Item = Date> {
-        Self::nearby(near, step)
-            .take_while(move |d| *d != date)
-            .filter(|d| !self.is_weekend(*d) && !self.is_natural_holiday(*d))
-    }
-
-    /// The dates within a week of `from`, going `step` at a time — a
-    /// weekend recurs weekly, so anything relevant is inside that.
-    fn nearby(from: Date, step: i32) -> impl Iterator<Item = Date> {
-        (1..=DAYS_PER_WEEK).filter_map(move |i| from.add_days(step * i).ok())
+        // `date` is served iff the movers outnumber the free weekdays
+        // ahead of it in the queue.
+        owed.checked_sub(1).is_some_and(|filled| {
+            (1..offset.abs())
+                .filter_map(|i| near.add_days(step * i).ok())
+                .filter(|d| !self.is_weekend(*d) && !self.is_natural_holiday(*d))
+                .nth(filled)
+                .is_none()
+        })
     }
 
     /// `true` iff `day` is a weekend day carrying a holiday that steps
