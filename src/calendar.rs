@@ -16,9 +16,9 @@ use crate::{
     BusinessDayConvention, Date, DateRange, Period, Rule, TimeError, Weekend, WeekendShift,
 };
 
-/// A weekend recurs weekly, so looking further than this for one means
-/// the calendar has none.
-const DAYS_PER_WEEK: usize = 7;
+/// A weekend recurs weekly, so a substitute's weekend — and the free
+/// weekday it lands on — are both within this reach or nowhere.
+const DAYS_PER_WEEK: i32 = 7;
 
 /// A holiday calendar: a [`Weekend`] configuration plus a sequence of
 /// [`Rule`]s naming holidays' natural dates.
@@ -112,14 +112,14 @@ impl Calendar<'_> {
     /// many free weekdays as there are movers, so a third can never be
     /// reached.
     fn owed(&self, date: Date, step: i32) -> bool {
-        let Some(near) = Self::walk(date, -step)
-            .take(DAYS_PER_WEEK)
-            .find(|d| self.is_weekend(*d))
-        else {
+        let nearby = |from: Date, dir: i32| {
+            (1..=DAYS_PER_WEEK).filter_map(move |i| from.add_days(dir * i).ok())
+        };
+        let Some(near) = nearby(date, -step).find(|d| self.is_weekend(*d)) else {
             return false;
         };
         let free =
-            Self::walk(near, step).filter(|d| !self.is_weekend(*d) && !self.is_natural_holiday(*d));
+            nearby(near, step).filter(|d| !self.is_weekend(*d) && !self.is_natural_holiday(*d));
         // The far weekend day claims first — Saturday before Sunday,
         // going forwards.
         [near.add_days(-step).ok(), Some(near)]
@@ -128,11 +128,6 @@ impl Calendar<'_> {
             .filter(|d| self.moves(*d, step))
             .zip(free)
             .any(|(_, substitute)| substitute == date)
-    }
-
-    /// The dates after `from`, going `step` at a time.
-    fn walk(from: Date, step: i32) -> impl Iterator<Item = Date> {
-        core::iter::successors(from.add_days(step).ok(), move |d| d.add_days(step).ok())
     }
 
     /// `true` iff `day` is a weekend day carrying a holiday that steps
