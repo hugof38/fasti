@@ -16,6 +16,10 @@ use crate::{
     BusinessDayConvention, Date, DateRange, Period, Rule, TimeError, Weekend, WeekendShift,
 };
 
+/// A weekend recurs weekly, so looking further than this for one means
+/// the calendar has none.
+const DAYS_PER_WEEK: usize = 7;
+
 /// A holiday calendar: a [`Weekend`] configuration plus a sequence of
 /// [`Rule`]s naming holidays' natural dates.
 ///
@@ -98,32 +102,37 @@ impl Calendar<'_> {
         self.owed(date, 1) || self.owed(date, -1)
     }
 
-    /// `true` iff the weekend `date` adjoins, `step` days back, owes
-    /// more substitutes than the free weekdays in between can absorb.
+    /// `true` iff `date` is one of the substitutes owed by the weekend
+    /// it adjoins, `step` days back.
+    ///
+    /// A weekend is two days, and two rules naming one day are still
+    /// one holiday, so at most two substitutes ever queue. Pairing the
+    /// weekend days that move against the free weekdays past them, in
+    /// claim order, *is* the assignment — and the pairing pulls only as
+    /// many free weekdays as there are movers, so a third can never be
+    /// reached.
     fn owed(&self, date: Date, step: i32) -> bool {
-        let mut absorbed = 0;
-        let mut cursor = date;
-        loop {
-            let Ok(prev) = cursor.add_days(-step) else {
-                return false;
-            };
-            if self.is_weekend(prev) {
-                // A weekend is two days, so at most two substitutes queue.
-                let far = prev.add_days(-step);
-                return usize::from(self.moves(prev, step))
-                    + usize::from(far.is_ok_and(|d| self.moves(d, step)))
-                    > absorbed;
-            }
-            // Each free weekday takes the head of the queue; past two,
-            // nothing left on the weekend can still reach `date`.
-            if !self.is_natural_holiday(prev) {
-                absorbed += 1;
-                if absorbed > 1 {
-                    return false;
-                }
-            }
-            cursor = prev;
-        }
+        let Some(near) = Self::walk(date, -step)
+            .take(DAYS_PER_WEEK)
+            .find(|d| self.is_weekend(*d))
+        else {
+            return false;
+        };
+        let free =
+            Self::walk(near, step).filter(|d| !self.is_weekend(*d) && !self.is_natural_holiday(*d));
+        // The far weekend day claims first — Saturday before Sunday,
+        // going forwards.
+        [near.add_days(-step).ok(), Some(near)]
+            .into_iter()
+            .flatten()
+            .filter(|d| self.moves(*d, step))
+            .zip(free)
+            .any(|(_, substitute)| substitute == date)
+    }
+
+    /// The dates after `from`, going `step` at a time.
+    fn walk(from: Date, step: i32) -> impl Iterator<Item = Date> {
+        core::iter::successors(from.add_days(step).ok(), move |d| d.add_days(step).ok())
     }
 
     /// `true` iff `day` is a weekend day carrying a holiday that steps
