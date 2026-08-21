@@ -149,7 +149,8 @@ mod tests {
     #[test]
     fn federal_reserve_legacy_washington_uses_sat_back() {
         assert!(FEDERAL_RESERVE.is_holiday(ymd(1970, Month::Feb, 23))); // observed
-        assert!(!FEDERAL_RESERVE.is_holiday(ymd(1970, Month::Feb, 22))); // natural Sun
+        // The natural Sunday stays a holiday; the Monday is its substitute.
+        assert!(FEDERAL_RESERVE.is_holiday(ymd(1970, Month::Feb, 22)));
         // 1969 Feb 22 (Sat) → observed Friday Feb 21 under the legacy rule.
         assert!(FEDERAL_RESERVE.is_holiday(ymd(1969, Month::Feb, 21)));
     }

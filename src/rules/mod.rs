@@ -16,7 +16,7 @@ pub use one_off::OneOff;
 
 use crate::Date;
 
-/// A holiday rule; a date is a holiday iff at least one rule matches.
+/// A holiday rule matching a holiday's natural date.
 /// [`Rule::Custom`] holds a plain `fn` pointer to stay `const`-constructible,
 /// which is why `Rule` implements neither serde traits nor `PartialEq`.
 #[derive(Debug, Clone, Copy)]
@@ -36,6 +36,16 @@ pub enum Rule {
 }
 
 impl Rule {
+    /// The rule's weekend-shift direction. Only [`FixedDate`] carries
+    /// one; nth/last-weekday rules never land on a weekend, and Easter
+    /// offsets and one-offs name an exact observed date already.
+    pub(crate) fn weekend_shift(&self) -> WeekendShift {
+        match self {
+            Self::Fixed(r) => r.weekend_shift(),
+            _ => WeekendShift::None,
+        }
+    }
+
     /// `true` iff any underlying rule marks `date` as a holiday.
     #[must_use]
     pub fn is_holiday(&self, date: Date) -> bool {

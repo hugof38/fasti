@@ -25,7 +25,7 @@
 //!
 //! Planned:
 //!
-//! - Further built-in calendars (`TARGET`, `UK_BANK`)
+//! - CDS/IMM schedule rules and the long-tail day counts
 
 #![no_std]
 #![forbid(unsafe_code)]

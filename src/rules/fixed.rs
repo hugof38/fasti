@@ -4,33 +4,67 @@
 
 use crate::{Date, Month, Weekday, Year, YearRange};
 
-/// Policy for observing a fixed-date holiday when its natural date falls
-/// on a Saturday or Sunday.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Which way a fixed-date holiday moves when its natural date falls on
+/// a Saturday or Sunday.
+///
+/// There is one rule for every variant: the holiday is observed on the
+/// **first free weekday in that direction** — free meaning no other
+/// holiday and no other holiday's substitute is already there. The
+/// variants differ only in which weekend day moves, and which way.
+/// A weekend is two days, and two rules naming one day are still one
+/// holiday, so at most two substitutes ever queue.
+///
+/// Only [`Calendar`](crate::Calendar) can apply that rule, since only
+/// it can see what the other rules have taken; see
+/// [`Calendar::is_holiday`](crate::Calendar::is_holiday).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum WeekendShift {
-    /// Do not shift; a weekend holiday is simply lost.
+    /// Neither day moves; a weekend holiday is simply lost. France and
+    /// TARGET.
+    #[default]
     None,
-    /// US federal convention: Saturday → Friday, Sunday → Monday.
-    SatBackSunForward,
-    /// UK convention: Sunday → Monday; Saturday unchanged.
+    /// Both days move forwards — the UK and Commonwealth substitute day.
+    Forward,
+    /// Sunday moves forwards, Saturday does not — the Fed and SIFMA
+    /// convention.
     SunForward,
+    /// Saturday moves backwards, Sunday forwards — the US federal
+    /// convention.
+    SatBackSunForward,
+}
+
+impl WeekendShift {
+    /// Which way a holiday falling on `day` steps, if it steps at all —
+    /// the whole table, and the only thing the variants differ by.
+    pub(crate) fn direction(self, day: Weekday) -> Option<i32> {
+        match (self, day) {
+            (Self::None, _) => None,
+            (_, Weekday::Sun) | (Self::Forward, Weekday::Sat) => Some(1),
+            (Self::SatBackSunForward, Weekday::Sat) => Some(-1),
+            // SunForward leaves Saturday alone; weekdays never move.
+            _ => None,
+        }
+    }
 }
 
 /// A fixed-date holiday rule.
 ///
+/// A rule matches its holiday's *natural* date only. The substitute
+/// day, if the shift grants one, is resolved by the calendar — see
+/// [`Calendar::is_holiday`](crate::Calendar::is_holiday).
+///
 /// ```
 /// use fasti::{Date, FixedDate, Month, WeekendShift};
 ///
-/// // US Independence Day: July 4 with federal weekend shift.
+/// // US Independence Day: July 4 with the federal weekend shift.
 /// let rule = FixedDate::new(Month::Jul, 4).shift(WeekendShift::SatBackSunForward);
-///
-/// // 2024: July 4 is a Thursday — observed on the natural date.
 /// assert!(rule.is_holiday(Date::from_ymd(2024, Month::Jul, 4)?));
 ///
-/// // 2026: July 4 is a Saturday — observed back on Friday July 3.
-/// assert!(rule.is_holiday(Date::from_ymd(2026, Month::Jul, 3)?));
-/// assert!(!rule.is_holiday(Date::from_ymd(2026, Month::Jul, 4)?));
+/// // 2026: July 4 is a Saturday. The rule still matches the natural
+/// // date; the observed Friday comes from the calendar.
+/// assert!(rule.is_holiday(Date::from_ymd(2026, Month::Jul, 4)?));
+/// assert!(!rule.is_holiday(Date::from_ymd(2026, Month::Jul, 3)?));
 /// # Ok::<(), fasti::TimeError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,52 +134,10 @@ impl FixedDate {
         self.years
     }
 
-    /// `true` iff `date` is observed as this holiday. Shifts crossing a
-    /// year boundary (e.g. Jan 1 → Dec 31) are handled.
+    /// `true` iff `date` is this holiday's natural date.
     #[must_use]
     pub fn is_holiday(&self, date: Date) -> bool {
-        // A shift can cross a year boundary; check a ±1-year window.
-        let mid = date.year().get();
-        let candidates = [
-            mid.saturating_sub(1),
-            mid,
-            mid.saturating_add(1).min(Year::MAX.get()),
-        ];
-        for cand_year in candidates {
-            let Ok(y) = Year::new(cand_year) else {
-                continue;
-            };
-            if !self.years.contains(y) {
-                continue;
-            }
-            let Ok(natural) = Date::from_ymd(y.get(), self.month, self.day) else {
-                continue;
-            };
-            let Some(observed) = self.apply_shift(natural) else {
-                continue;
-            };
-            if observed == date {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Observed date under the shift policy, or [`None`] if it would
-    /// leave the supported date range.
-    fn apply_shift(self, natural: Date) -> Option<Date> {
-        match self.shift {
-            WeekendShift::None => Some(natural),
-            WeekendShift::SatBackSunForward => match natural.weekday() {
-                Weekday::Sat => natural.add_days(-1).ok(),
-                Weekday::Sun => natural.add_days(1).ok(),
-                _ => Some(natural),
-            },
-            WeekendShift::SunForward => match natural.weekday() {
-                Weekday::Sun => natural.add_days(1).ok(),
-                _ => Some(natural),
-            },
-        }
+        self.years.contains(date.year()) && date.month() == self.month && date.day() == self.day
     }
 }
 
@@ -159,62 +151,63 @@ mod tests {
     }
 
     #[test]
-    fn natural_no_shift() {
+    fn matches_the_natural_date_whatever_the_shift() {
+        // The shift is a hint for the calendar; it never moves what the
+        // rule itself matches.
+        for shift in [
+            WeekendShift::None,
+            WeekendShift::SatBackSunForward,
+            WeekendShift::SunForward,
+            WeekendShift::Forward,
+        ] {
+            let rule = FixedDate::new(Month::Jul, 4).shift(shift);
+            assert!(rule.is_holiday(ymd(2024, Month::Jul, 4)), "{shift:?}");
+            // 2026-07-04 is a Saturday.
+            assert!(rule.is_holiday(ymd(2026, Month::Jul, 4)), "{shift:?}");
+            assert!(!rule.is_holiday(ymd(2026, Month::Jul, 3)), "{shift:?}");
+            assert_eq!(rule.weekend_shift(), shift);
+        }
+    }
+
+    #[test]
+    fn does_not_match_another_month_or_day() {
         let rule = FixedDate::new(Month::Jul, 4);
-        assert!(rule.is_holiday(ymd(2024, Month::Jul, 4)));
-        // 2026-07-04 is a Saturday — still the holiday with no shift.
-        assert!(rule.is_holiday(ymd(2026, Month::Jul, 4)));
-        assert!(!rule.is_holiday(ymd(2026, Month::Jul, 3)));
+        assert!(!rule.is_holiday(ymd(2024, Month::Aug, 4)));
+        assert!(!rule.is_holiday(ymd(2024, Month::Jul, 5)));
     }
 
     #[test]
-    fn sat_back_sun_forward() {
-        let rule = FixedDate::new(Month::Jul, 4).shift(WeekendShift::SatBackSunForward);
-        // 2024-07-04 = Thursday → natural.
-        assert!(rule.is_holiday(ymd(2024, Month::Jul, 4)));
-        // 2026-07-04 = Saturday → observed Friday 2026-07-03.
-        assert!(rule.is_holiday(ymd(2026, Month::Jul, 3)));
-        assert!(!rule.is_holiday(ymd(2026, Month::Jul, 4)));
-        // 2021-07-04 = Sunday → observed Monday 2021-07-05.
-        assert!(rule.is_holiday(ymd(2021, Month::Jul, 5)));
-        assert!(!rule.is_holiday(ymd(2021, Month::Jul, 4)));
-    }
-
-    #[test]
-    fn sun_forward_only() {
-        // Boxing Day, UK style: Sat stays, Sun shifts to Mon.
-        let rule = FixedDate::new(Month::Dec, 26).shift(WeekendShift::SunForward);
-        // 2021-12-26 = Sun → observed Mon 2021-12-27.
-        assert!(rule.is_holiday(ymd(2021, Month::Dec, 27)));
-        assert!(!rule.is_holiday(ymd(2021, Month::Dec, 26)));
-        // 2020-12-26 = Sat → unchanged under SunForward.
-        assert!(rule.is_holiday(ymd(2020, Month::Dec, 26)));
-    }
-
-    #[test]
-    fn cross_year_shift() {
-        // Jan 1 2022 = Saturday → observed Fri Dec 31 2021 under SatBack.
-        let rule = FixedDate::new(Month::Jan, 1).shift(WeekendShift::SatBackSunForward);
-        assert!(rule.is_holiday(ymd(2021, Month::Dec, 31)));
-        assert!(!rule.is_holiday(ymd(2022, Month::Jan, 1)));
+    fn leap_day_rule_matches_only_in_leap_years() {
+        let rule = FixedDate::new(Month::Feb, 29);
+        assert!(rule.is_holiday(ymd(2024, Month::Feb, 29)));
+        assert!(!rule.is_holiday(ymd(2025, Month::Feb, 28)));
     }
 
     #[test]
     fn year_range_filter() {
         // Juneteenth from 2021 onwards.
-        let rule = FixedDate::new(Month::Jun, 19)
-            .shift(WeekendShift::SatBackSunForward)
-            .from_year(Year::new(2021).unwrap());
+        let rule = FixedDate::new(Month::Jun, 19).from_year(Year::new(2021).unwrap());
         assert!(!rule.is_holiday(ymd(2020, Month::Jun, 19)));
-        assert!(rule.is_holiday(ymd(2021, Month::Jun, 18))); // 2021-06-19 was Saturday
-        assert!(rule.is_holiday(ymd(2024, Month::Jun, 19))); // Wednesday
+        assert!(rule.is_holiday(ymd(2021, Month::Jun, 19)));
+        assert!(rule.is_holiday(ymd(2030, Month::Jun, 19)));
+        assert_eq!(
+            rule.year_range(),
+            YearRange::from_year(Year::new(2021).unwrap())
+        );
     }
 
     #[test]
-    fn leap_day_rule_falls_off_in_non_leap_years() {
-        // Fictitious "leap day holiday" — Feb 29.
-        let rule = FixedDate::new(Month::Feb, 29);
-        assert!(rule.is_holiday(ymd(2024, Month::Feb, 29)));
-        assert!(!rule.is_holiday(ymd(2025, Month::Mar, 1))); // no shift
+    fn bounded_year_range() {
+        let rule = FixedDate::new(Month::Feb, 22).years(YearRange::literal_through(1970));
+        assert!(rule.is_holiday(ymd(1970, Month::Feb, 22)));
+        assert!(!rule.is_holiday(ymd(1971, Month::Feb, 22)));
+    }
+
+    #[test]
+    fn accessors_round_trip() {
+        let rule = FixedDate::new(Month::Dec, 25);
+        assert_eq!(rule.month(), Month::Dec);
+        assert_eq!(rule.day(), 25);
+        assert_eq!(rule.weekend_shift(), WeekendShift::None);
     }
 }

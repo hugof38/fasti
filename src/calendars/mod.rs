@@ -8,11 +8,16 @@
 //! ```
 //!
 //! Market-neutral baselines: [`WEEKENDS_ONLY`] and [`NULL_CALENDAR`].
+//! [`TARGET`] is currency-wide rather than national, so it sits here too.
 
 use crate::{Calendar, Weekend};
 
 pub mod france;
+mod target;
+pub mod uk;
 pub mod us;
+
+pub use target::TARGET;
 
 /// Saturday/Sunday weekend, no holidays — the default when no market
 /// holiday set applies.
