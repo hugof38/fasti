@@ -86,10 +86,11 @@ impl Calendar<'_> {
     /// most two days off, and they take the Monday and the Tuesday.
     /// Backwards only Saturday moves, onto the Friday.
     ///
-    /// The Tuesday is not simply "when both weekend days moved": one
-    /// mover reaches it whenever the Monday is a holiday in its own
-    /// right, which is how Christmas on a Sunday lands there while
-    /// Boxing Day keeps the Monday.
+    /// The Tuesday is reached only when the Monday is taken, which a
+    /// holiday of the Monday's own does as readily as the weekend's
+    /// first day off — Christmas on a Sunday lands there while Boxing
+    /// Day keeps the Monday. Reading it as "both weekend days moved"
+    /// would miss that.
     ///
     /// A day off that would need the Wednesday is not granted. That
     /// takes three consecutive holidays across one weekend, which no
@@ -104,19 +105,17 @@ impl Calendar<'_> {
             Weekday::Fri => date.add_days(1).is_ok_and(|sat| self.moves(sat, -1)),
             // The first day off the weekend just gone owes.
             Weekday::Mon => self.owed_by_weekend(date.add_days(-2)) >= 1,
-            // Reached only when the Monday is taken, which happens
-            // either way round.
+            // Only reached when the Monday is taken.
             Weekday::Tue => {
-                let monday_taken = date
+                let monday_already_a_holiday = date
                     .add_days(-1)
                     .is_ok_and(|mon| self.is_natural_holiday(mon));
                 match self.owed_by_weekend(date.add_days(-3)) {
                     0 => false,
-                    // One day off owed, and the Monday is a holiday in
-                    // its own right, so it lands here instead.
-                    1 => monday_taken,
-                    // Two owed: the Monday took the first, this is the
-                    // second.
+                    // Taken by a holiday of its own, so the one day
+                    // owed comes here instead.
+                    1 => monday_already_a_holiday,
+                    // Taken by the first day off; this is the second.
                     _ => true,
                 }
             }
