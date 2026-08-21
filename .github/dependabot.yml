@@ -1,0 +1,23 @@
+version: 2
+updates:
+  # The runtime dependency set is deliberately tiny (thiserror, plus the
+  # two optional feature deps), so this is mostly about dev-dependencies
+  # and security advisories rather than churn.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      dev-dependencies:
+        dependency-type: development
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
