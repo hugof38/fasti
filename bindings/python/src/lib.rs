@@ -17,6 +17,7 @@ mod daycount;
 mod enums;
 mod error;
 mod period;
+mod pickle;
 mod rules;
 mod schedule;
 
@@ -129,6 +130,10 @@ fn easter_monday(
     easter(py, year, method, 1)
 }
 
+/// Dates, calendars, business-day conventions and day-count fractions.
+///
+/// The compiled core. Import the names from `fasti`, which re-exports
+/// everything here and adds the `fasti.calendars` registry.
 #[pymodule]
 #[pyo3(name = "_fasti")]
 fn fasti_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -152,6 +157,7 @@ fn fasti_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(day_count, m)?)?;
     m.add_function(wrap_pyfunction!(easter_sunday, m)?)?;
     m.add_function(wrap_pyfunction!(easter_monday, m)?)?;
+    pickle::register(m)?;
 
     // The supported range, as dates rather than as prose.
     m.add("MIN_DATE", from_date(py, fasti::Date::MIN)?)?;

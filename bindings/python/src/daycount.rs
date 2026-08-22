@@ -4,7 +4,7 @@
 use fasti::DayCount as _;
 use pyo3::prelude::*;
 
-use crate::convert::{DateArg, from_fraction, normalize};
+use crate::convert::{DateArg, DateOut, from_fraction, normalize};
 use crate::enums::FrequencyArg;
 use crate::error::{err, invalid};
 use crate::schedule::Schedule;
@@ -16,7 +16,7 @@ enum Kind {
     ActActISDA,
     ActActICMA {
         frequency: fasti::Frequency,
-        schedule: Option<fasti::Schedule>,
+        schedule: Option<Schedule>,
     },
     Thirty360Bond,
     Thirty360US,
@@ -75,7 +75,7 @@ impl DayCount {
         schedule: Option<PyRef<'_, Schedule>>,
         termination: Option<DateArg>,
     ) -> PyResult<Self> {
-        let schedule = schedule.map(|s| s.0.clone());
+        let schedule: Option<Schedule> = schedule.map(|s| s.clone());
         let kind = match normalize(name).as_str() {
             "act360" | "actual360" | "a360" => Kind::Act360,
             "act365f" | "act365" | "actual365" | "actual365fixed" | "a365f" | "a365" => {
@@ -86,6 +86,7 @@ impl DayCount {
                 let frequency = match (frequency, schedule.as_ref()) {
                     (Some(f), _) => f.0,
                     (None, Some(s)) => s
+                        .inner
                         .generation()
                         .and_then(|g| fasti::Frequency::try_from(g.tenor).ok())
                         .ok_or_else(|| {
@@ -189,7 +190,7 @@ impl DayCount {
                 let convention = fasti::ActActICMA::new(*frequency);
                 match schedule {
                     Some(s) => convention
-                        .bind(s)
+                        .bind(&s.inner)
                         .map_err(err)?
                         .year_fraction(start.0, end.0),
                     None => convention.year_fraction(start.0, end.0),
@@ -221,11 +222,27 @@ impl DayCount {
             Kind::ActActICMA { frequency, .. } => Self {
                 kind: Kind::ActActICMA {
                     frequency: *frequency,
-                    schedule: Some(schedule.0.clone()),
+                    schedule: Some(schedule.clone()),
                 },
             },
             _ => self.clone(),
         }
+    }
+
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::pickle::Reduced<'py>> {
+        let (frequency, schedule, termination) = match &self.kind {
+            Kind::ActActICMA {
+                frequency,
+                schedule,
+            } => (Some(frequency.to_string()), schedule.clone(), None),
+            Kind::Thirty360ISDA { termination } => (None, None, Some(DateOut(*termination))),
+            _ => (None, None, None),
+        };
+        crate::pickle::reduce(
+            py,
+            "_rebuild_daycount",
+            (self.name(), frequency, schedule, termination),
+        )
     }
 
     fn __repr__(&self) -> String {

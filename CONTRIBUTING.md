@@ -115,6 +115,14 @@ Ground rules on top of the crate's own:
   doctests, without markdown fences.
 - A new convention/calendar/rule name needs the alias spellings a caller
   is likely to type; matching ignores case and punctuation.
+- Every type stays immutable (`#[pyclass(frozen)]`) and picklable. A
+  new type needs a `__reduce__` that names a `_rebuild_*` function and
+  the arguments to replay — not a serialized copy of its internals —
+  and a round-trip test that checks the rebuilt value *behaves* the
+  same, not merely that it compares equal.
+- Anything that can run long without touching Python — walking a date
+  range, say — belongs inside `Python::detach`, so a thread waiting on
+  the interpreter is not waiting on us.
 - The version in `bindings/python/Cargo.toml` is the PyPI version, and
   the `py-v*` release tag has to match it. Keep it in step with the
   crate version unless a binding-only fix needs to ship alone.

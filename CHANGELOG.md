@@ -16,7 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is one, and loses its time), and year fractions as
   `fractions.Fraction`, so the crate's float-free arithmetic is
   preserved. Ships type stubs, `abi3` wheels for CPython 3.10+, and its
-  own release workflow on `py-v*` tags.
+  own release workflow on `py-v*` tags. Every type is picklable — a
+  value rebuilds by replaying the constructor calls that made it, so
+  calendars and schedules can cross a process boundary intact — and the
+  extension is free-thread-safe, with wheels for free-threaded CPython
+  3.14 alongside the `abi3` ones.
 
 ### Fixed
 

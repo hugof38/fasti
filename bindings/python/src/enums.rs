@@ -65,6 +65,10 @@ impl Weekday {
     fn __int__(&self) -> u8 {
         self.inner().get()
     }
+
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::pickle::Reduced<'py>> {
+        crate::pickle::reduce(py, "_rebuild_weekday", (self.inner().get(),))
+    }
 }
 
 impl Weekday {
@@ -225,8 +229,12 @@ impl BusinessDayConvention {
         Self::wrap(value.0)
     }
 
-    fn __str__(&self) -> String {
+    pub fn __str__(&self) -> String {
         self.inner().to_string()
+    }
+
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::pickle::Reduced<'py>> {
+        crate::pickle::reduce(py, "_rebuild_convention", (self.inner().to_string(),))
     }
 }
 
@@ -312,6 +320,18 @@ impl DateGenerationRule {
     #[staticmethod]
     fn parse(value: GenerationArg) -> Self {
         Self::wrap(value.0)
+    }
+
+    pub fn __str__(&self) -> &'static str {
+        match self {
+            Self::Forward => "forward",
+            Self::Backward => "backward",
+            Self::Zero => "zero",
+        }
+    }
+
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::pickle::Reduced<'py>> {
+        crate::pickle::reduce(py, "_rebuild_generation", (self.__str__(),))
     }
 }
 
@@ -418,6 +438,10 @@ impl Frequency {
 
     fn __str__(&self) -> String {
         self.inner().to_string()
+    }
+
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::pickle::Reduced<'py>> {
+        crate::pickle::reduce(py, "_rebuild_frequency", (self.inner().to_string(),))
     }
 }
 
@@ -526,6 +550,14 @@ impl WeekendShift {
     #[staticmethod]
     fn parse(value: ShiftArg) -> Self {
         Self::wrap(value.0)
+    }
+
+    fn __str__(&self) -> &'static str {
+        shift_repr(self.inner())
+    }
+
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::pickle::Reduced<'py>> {
+        crate::pickle::reduce(py, "_rebuild_shift", (shift_repr(self.inner()),))
     }
 }
 

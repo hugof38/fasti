@@ -61,7 +61,7 @@ impl Period {
 
     /// Parse a period string: `"6M"`, `"-3d"`, `"1 year"`, `"quarterly"`.
     #[staticmethod]
-    fn parse(text: &str) -> PyResult<Self> {
+    pub fn parse(text: &str) -> PyResult<Self> {
         parse_period_str(text).map(Self)
     }
 
@@ -145,6 +145,10 @@ impl Period {
 
     fn __repr__(&self) -> String {
         format!("Period('{}')", self.0)
+    }
+
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::pickle::Reduced<'py>> {
+        crate::pickle::reduce(py, "_rebuild_period", (self.0.to_string(),))
     }
 }
 

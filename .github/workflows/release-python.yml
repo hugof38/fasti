@@ -5,6 +5,12 @@ name: Release (Python)
 # without re-releasing the crate; the version of record is the one in
 # bindings/python/Cargo.toml, and the first job refuses to publish if the
 # tag disagrees with it.
+#
+# The wheel matrix follows `maturin generate-ci github`, trimmed to the
+# platforms this library plausibly runs on. Each platform gets two
+# wheels: an abi3 one covering CPython 3.10 and up, and a version-specific
+# one for free-threaded 3.14 — the stable ABI does not cover
+# free-threaded builds until abi3t (PEP 803, CPython 3.15).
 on:
   push:
     tags: ["py-v*"]
@@ -34,37 +40,88 @@ jobs:
           echo "version=$manifest" >> "$GITHUB_OUTPUT"
 
   wheels:
-    name: wheel (${{ matrix.os }}/${{ matrix.target }})
+    name: wheel (${{ matrix.platform.label }})
     needs: verify
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { label: manylinux-x86_64, runner: ubuntu-latest, target: x86_64, manylinux: auto }
+          - { label: manylinux-aarch64, runner: ubuntu-latest, target: aarch64, manylinux: auto }
+          - { label: musllinux-x86_64, runner: ubuntu-latest, target: x86_64, manylinux: musllinux_1_2 }
+          - { label: musllinux-aarch64, runner: ubuntu-latest, target: aarch64, manylinux: musllinux_1_2 }
+          - { label: macos-x86_64, runner: macos-15-intel, target: x86_64 }
+          - { label: macos-aarch64, runner: macos-latest, target: aarch64 }
+          - { label: windows-x64, runner: windows-latest, target: x64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          # The abi3 floor: build against the oldest Python supported.
+          python-version: "3.10"
+      - name: Build abi3 wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/python
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist
+          manylinux: ${{ matrix.platform.manylinux }}
+          # A release build should not come out of a shared cache.
+          sccache: false
+      # The manylinux/musllinux containers ship their own interpreters;
+      # macOS and Windows need the free-threaded one installed here.
+      - uses: actions/setup-python@v6
+        if: ${{ !startsWith(matrix.platform.runner, 'ubuntu') }}
+        with:
+          python-version: "3.14t"
+      - name: Build free-threaded wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/python
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist -i python3.14t
+          manylinux: ${{ matrix.platform.manylinux }}
+          sccache: false
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-${{ matrix.platform.label }}
+          path: bindings/python/dist/*.whl
+          if-no-files-found: error
+
+  # Install the freshly built wheel on a native runner and run the suite
+  # against it, so what ships is what was tested.
+  test-wheels:
+    name: test wheel (${{ matrix.runner }})
+    needs: wheels
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, target: x86_64 }
-          - { os: ubuntu-latest, target: aarch64 }
-          - { os: macos-latest, target: x86_64 }
-          - { os: macos-latest, target: aarch64 }
-          - { os: windows-latest, target: x64 }
+          - { runner: ubuntu-latest, artifact: wheels-manylinux-x86_64 }
+          - { runner: macos-latest, artifact: wheels-macos-aarch64 }
+          - { runner: windows-latest, artifact: wheels-windows-x64 }
+    defaults:
+      run:
+        working-directory: bindings/python
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.10"
-      # One wheel per platform covers every CPython from the abi3 floor
-      # up, so there is no Python version matrix here.
-      - uses: PyO3/maturin-action@v1
+      - uses: actions/download-artifact@v8
         with:
-          working-directory: bindings/python
-          target: ${{ matrix.target }}
-          args: --release --out dist
-          manylinux: auto
-          sccache: true
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-${{ matrix.os }}-${{ matrix.target }}
-          path: bindings/python/dist/*.whl
-          if-no-files-found: error
+          name: ${{ matrix.artifact }}
+          path: bindings/python/dist
+      - name: Install the abi3 wheel and run the tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install --no-index --find-links dist fasti-py
+          python -m pip install pytest
+          python -m pytest tests -q
 
   sdist:
     name: sdist
@@ -77,7 +134,7 @@ jobs:
           working-directory: bindings/python
           command: sdist
           args: --out dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sdist
           path: bindings/python/dist/*.tar.gz
@@ -85,20 +142,30 @@ jobs:
 
   publish:
     name: publish to PyPI
-    needs: [verify, wheels, sdist]
+    needs: [verify, wheels, test-wheels, sdist]
     runs-on: ubuntu-latest
     # Trusted publishing: PyPI mints a short-lived token from this
-    # workflow's OIDC identity, so there is no stored API token. Configure
+    # workflow's OIDC identity, so there is no stored API token, and the
+    # same identity signs a PEP 740 attestation for every file. Configure
     # the publisher on PyPI for this repository and workflow first, and
     # gate it behind the environment's protection rules.
     environment: pypi
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
+      # An abi3 tag is a promise, not a checked fact: nothing at install
+      # time verifies that the extension only touches the stable ABI.
+      # This checks it before the wheels are public.
+      - name: Audit the abi3 wheels
+        run: pipx run abi3audit --strict --verbose dist/*abi3*.whl
+      # Catches metadata PyPI would reject, or a README it would refuse
+      # to render, before the upload rather than after.
+      - name: Check the distribution metadata
+        run: pipx run twine check --strict dist/*
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist

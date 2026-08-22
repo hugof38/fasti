@@ -46,7 +46,9 @@ const ALIASES: &[(&str, &str)] = &[
 ];
 
 /// Look a built-in calendar up by name, ignoring case and punctuation.
-fn builtin(name: &str) -> Option<fasti::Calendar<'static>> {
+/// Returns the canonical name alongside it, which is what a pickled
+/// calendar records.
+fn builtin(name: &str) -> Option<(&'static str, fasti::Calendar<'static>)> {
     let key = normalize(name);
     let canonical = ALIASES
         .iter()
@@ -55,7 +57,90 @@ fn builtin(name: &str) -> Option<fasti::Calendar<'static>> {
     BUILTINS
         .iter()
         .find(|(n, _)| normalize(n) == canonical)
-        .map(|(_, cal)| *cal)
+        .map(|(n, cal)| (*n, *cal))
+}
+
+/// How a calendar was arrived at, so that pickling can arrive at it
+/// again. Built-ins carry `Rule::Custom` predicates — fn pointers with
+/// no data to serialize — so a built-in is recorded by name and rebuilt
+/// from the registry, never rule by rule.
+#[derive(Debug, Clone)]
+pub enum Origin {
+    /// A registry calendar, by canonical name.
+    Builtin(&'static str),
+    /// Built from scratch by `Calendar.custom`.
+    Custom {
+        name: String,
+        weekend: fasti::Weekend,
+        rules: Vec<Rule>,
+    },
+    /// `renamed`, `with_weekend`, `union`, and the rule-adding methods,
+    /// each recorded against what they were applied to.
+    Renamed(Box<Origin>, String),
+    Weekend(Box<Origin>, fasti::Weekend),
+    Union(Box<Origin>, Box<Origin>),
+    Rules(Box<Origin>, Vec<Rule>),
+}
+
+impl Origin {
+    /// Encode as nested tuples of picklable values. Rules and dates
+    /// inside pickle themselves.
+    pub fn encode<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let weekend = |w: fasti::Weekend| {
+            weekend_days(w)
+                .into_iter()
+                .map(|d| d.inner().get())
+                .collect::<Vec<_>>()
+        };
+        let object = match self {
+            Self::Builtin(name) => ("builtin", *name).into_pyobject(py)?.into_any(),
+            Self::Custom {
+                name,
+                weekend: w,
+                rules,
+            } => ("custom", name, weekend(*w), rules.clone())
+                .into_pyobject(py)?
+                .into_any(),
+            Self::Renamed(inner, name) => ("renamed", inner.encode(py)?, name)
+                .into_pyobject(py)?
+                .into_any(),
+            Self::Weekend(inner, w) => ("weekend", inner.encode(py)?, weekend(*w))
+                .into_pyobject(py)?
+                .into_any(),
+            Self::Union(left, right) => ("union", left.encode(py)?, right.encode(py)?)
+                .into_pyobject(py)?
+                .into_any(),
+            Self::Rules(inner, rules) => ("rules", inner.encode(py)?, rules.clone())
+                .into_pyobject(py)?
+                .into_any(),
+        };
+        Ok(object)
+    }
+}
+
+/// Rebuild a calendar from what [`Origin::encode`] produced, by
+/// replaying the same public constructors.
+pub fn rebuild(spec: &Bound<'_, PyAny>) -> PyResult<Calendar> {
+    let tag: String = spec.get_item(0)?.extract()?;
+    let weekend = |item: Bound<'_, PyAny>| -> PyResult<WeekendArg> { item.extract() };
+    match tag.as_str() {
+        "builtin" => Calendar::py_new(&spec.get_item(1)?.extract::<String>()?),
+        "custom" => Ok(Calendar::custom(
+            &spec.get_item(1)?.extract::<String>()?,
+            Some(weekend(spec.get_item(2)?)?),
+            Some(spec.get_item(3)?.extract::<Vec<Rule>>()?),
+            None,
+        )),
+        "renamed" => {
+            Ok(rebuild(&spec.get_item(1)?)?.renamed(&spec.get_item(2)?.extract::<String>()?))
+        }
+        "weekend" => Ok(rebuild(&spec.get_item(1)?)?.with_weekend(weekend(spec.get_item(2)?)?)),
+        "union" => Ok(rebuild(&spec.get_item(1)?)?.union(&rebuild(&spec.get_item(2)?)?)),
+        "rules" => {
+            Ok(rebuild(&spec.get_item(1)?)?.with_rules(spec.get_item(2)?.extract::<Vec<Rule>>()?))
+        }
+        _ => Err(invalid(format!("unknown calendar spec: {tag:?}"))),
+    }
 }
 
 /// A holiday calendar: which weekdays are the weekend, and which days
@@ -73,6 +158,7 @@ fn builtin(name: &str) -> Option<fasti::Calendar<'static>> {
 #[pyclass(module = "fasti", frozen)]
 pub struct Calendar {
     builder: fasti::CalendarBuilder,
+    origin: Origin,
 }
 
 impl Calendar {
@@ -80,12 +166,14 @@ impl Calendar {
         self.builder.view()
     }
 
-    fn from_builder(builder: fasti::CalendarBuilder) -> Self {
-        Self { builder }
+    fn from_builder(builder: fasti::CalendarBuilder, origin: Origin) -> Self {
+        Self { builder, origin }
     }
 
-    pub fn wrap(cal: fasti::Calendar<'_>) -> Self {
-        Self::from_builder(fasti::CalendarBuilder::from_calendar(cal))
+    /// How this calendar was arrived at — what a pickled schedule
+    /// records so it can rebuild the calendar it was generated against.
+    pub fn origin(&self) -> Origin {
+        self.origin.clone()
     }
 }
 
@@ -94,12 +182,19 @@ impl Calendar {
     /// Load a built-in calendar by name, e.g. `"US.SETTLEMENT"`,
     /// `"TARGET"`, `"nyse"`. Matching ignores case and punctuation.
     #[new]
-    fn py_new(name: &str) -> PyResult<Self> {
-        builtin(name).map(Self::wrap).ok_or_else(|| {
-            invalid(format!(
-                "unknown calendar {name:?}; Calendar.names() lists the built-ins"
-            ))
-        })
+    pub fn py_new(name: &str) -> PyResult<Self> {
+        builtin(name)
+            .map(|(canonical, cal)| {
+                Self::from_builder(
+                    fasti::CalendarBuilder::from_calendar(cal),
+                    Origin::Builtin(canonical),
+                )
+            })
+            .ok_or_else(|| {
+                invalid(format!(
+                    "unknown calendar {name:?}; Calendar.names() lists the built-ins"
+                ))
+            })
     }
 
     /// Load a built-in calendar by name — the same as `Calendar(name)`.
@@ -129,21 +224,37 @@ impl Calendar {
     /// True
     #[staticmethod]
     #[pyo3(signature = (name, *, weekend=None, rules=None, holidays=None))]
-    fn custom(
+    pub fn custom(
         name: &str,
         weekend: Option<WeekendArg>,
-        rules: Option<Vec<PyRef<'_, Rule>>>,
+        rules: Option<Vec<Rule>>,
         holidays: Option<Vec<DateArg>>,
     ) -> Self {
         let weekend = weekend.map_or(fasti::Weekend::SAT_SUN, |w| w.0);
+        // One-off holidays are rules; folding them in here keeps a
+        // calendar's provenance a single list.
+        let rules: Vec<Rule> = rules
+            .into_iter()
+            .flatten()
+            .chain(
+                holidays
+                    .into_iter()
+                    .flatten()
+                    .map(|date| Rule::one_off_rule(date.0)),
+            )
+            .collect();
         let mut builder = fasti::CalendarBuilder::new(name, weekend);
-        for rule in rules.into_iter().flatten() {
+        for rule in &rules {
             builder = builder.with_rule(rule.inner);
         }
-        for date in holidays.into_iter().flatten() {
-            builder = builder.with_rule(fasti::Rule::OneOff(fasti::OneOff::new(date.0)));
-        }
-        Self::from_builder(builder)
+        Self::from_builder(
+            builder,
+            Origin::Custom {
+                name: name.to_owned(),
+                weekend,
+                rules,
+            },
+        )
     }
 
     /// The calendar's name.
@@ -177,22 +288,29 @@ impl Calendar {
 
     /// The business days in `[start, end)`, ascending. The end bound is
     /// excluded, as in `range()` and slicing.
-    fn business_days(&self, start: DateArg, end: DateArg) -> Vec<DateOut> {
-        self.view()
-            .business_days(start.0..end.0)
-            .map(DateOut)
-            .collect()
+    ///
+    /// Walking a range is the one thing here that can take long enough
+    /// to matter — a century of NYSE is tens of milliseconds of rule
+    /// evaluation — so the interpreter is detached for it and other
+    /// Python threads keep running.
+    fn business_days(&self, py: Python<'_>, start: DateArg, end: DateArg) -> Vec<DateOut> {
+        py.detach(|| {
+            self.view()
+                .business_days(start.0..end.0)
+                .map(DateOut)
+                .collect()
+        })
     }
 
     /// How many business days are in `[start, end)`.
-    fn count_business_days(&self, start: DateArg, end: DateArg) -> usize {
-        self.view().business_days(start.0..end.0).count()
+    fn count_business_days(&self, py: Python<'_>, start: DateArg, end: DateArg) -> usize {
+        py.detach(|| self.view().business_days(start.0..end.0).count())
     }
 
     /// The holidays in `[start, end)`, ascending. Weekends are not
     /// included; substitute days are.
-    fn holidays(&self, start: DateArg, end: DateArg) -> Vec<DateOut> {
-        self.view().holidays(start.0..end.0).map(DateOut).collect()
+    fn holidays(&self, py: Python<'_>, start: DateArg, end: DateArg) -> Vec<DateOut> {
+        py.detach(|| self.view().holidays(start.0..end.0).map(DateOut).collect())
     }
 
     /// The next business day strictly after `date`, or `None` past
@@ -252,36 +370,53 @@ impl Calendar {
 
     /// A calendar closed when either this one or `other` is, with the
     /// weekends unioned — `QuantLib`'s `JointCalendar`.
-    fn union(&self, other: &Self) -> Self {
-        Self::from_builder(self.builder.clone().union(other.view()))
+    pub fn union(&self, other: &Self) -> Self {
+        Self::from_builder(
+            self.builder.clone().union(other.view()),
+            Origin::Union(
+                Box::new(self.origin.clone()),
+                Box::new(other.origin.clone()),
+            ),
+        )
     }
 
     /// This calendar plus extra one-off holidays.
     fn with_holidays(&self, holidays: Vec<DateArg>) -> Self {
-        let mut builder = self.builder.clone();
-        for date in holidays {
-            builder = builder.with_rule(fasti::Rule::OneOff(fasti::OneOff::new(date.0)));
-        }
-        Self::from_builder(builder)
+        self.with_rules(
+            holidays
+                .into_iter()
+                .map(|date| Rule::one_off_rule(date.0))
+                .collect(),
+        )
     }
 
     /// This calendar plus extra holiday rules.
-    fn with_rules(&self, rules: Vec<PyRef<'_, Rule>>) -> Self {
+    pub fn with_rules(&self, rules: Vec<Rule>) -> Self {
         let mut builder = self.builder.clone();
-        for rule in rules {
+        for rule in &rules {
             builder = builder.with_rule(rule.inner);
         }
-        Self::from_builder(builder)
+        Self::from_builder(builder, Origin::Rules(Box::new(self.origin.clone()), rules))
     }
 
     /// This calendar under a different name.
-    fn renamed(&self, name: &str) -> Self {
-        Self::from_builder(self.builder.clone().name(name))
+    pub fn renamed(&self, name: &str) -> Self {
+        Self::from_builder(
+            self.builder.clone().name(name),
+            Origin::Renamed(Box::new(self.origin.clone()), name.to_owned()),
+        )
     }
 
     /// This calendar with a different weekend.
-    fn with_weekend(&self, weekend: WeekendArg) -> Self {
-        Self::from_builder(self.builder.clone().with_weekend(weekend.0))
+    pub fn with_weekend(&self, weekend: WeekendArg) -> Self {
+        Self::from_builder(
+            self.builder.clone().with_weekend(weekend.0),
+            Origin::Weekend(Box::new(self.origin.clone()), weekend.0),
+        )
+    }
+
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::pickle::Reduced<'py>> {
+        crate::pickle::reduce(py, "_rebuild_calendar", (self.origin.encode(py)?,))
     }
 
     fn __repr__(&self) -> String {

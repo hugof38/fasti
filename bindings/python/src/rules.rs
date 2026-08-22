@@ -2,10 +2,58 @@
 //! from: fixed dates, nth/last weekdays, Easter offsets, and one-offs.
 
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
-use crate::convert::DateArg;
-use crate::enums::{MonthArg, ShiftArg, WeekdayArg};
-use crate::error::err;
+use crate::convert::{DateArg, DateOut};
+use crate::enums::{EasterMethodArg, MonthArg, ShiftArg, WeekdayArg, shift_repr};
+use crate::error::{err, invalid};
+use crate::pickle::{Reduced, reduce};
+
+/// What a rule was built from: enough to print it, and enough to build
+/// it again. Holding the arguments rather than a rendered string keeps
+/// `repr` and `__reduce__` from drifting apart, and keeps both honest
+/// about what the rule actually is.
+#[derive(Debug, Clone, Copy)]
+enum Spec {
+    Fixed {
+        month: fasti::Month,
+        day: u8,
+        shift: fasti::WeekendShift,
+    },
+    NthWeekday {
+        n: u8,
+        weekday: fasti::Weekday,
+        month: fasti::Month,
+    },
+    LastWeekday {
+        weekday: fasti::Weekday,
+        month: fasti::Month,
+    },
+    Easter {
+        offset: i16,
+        method: fasti::EasterMethod,
+    },
+    OneOff(fasti::Date),
+}
+
+impl Spec {
+    const fn kind(self) -> &'static str {
+        match self {
+            Self::Fixed { .. } => "fixed",
+            Self::NthWeekday { .. } => "nth_weekday",
+            Self::LastWeekday { .. } => "last_weekday",
+            Self::Easter { .. } => "easter",
+            Self::OneOff(_) => "one_off",
+        }
+    }
+}
+
+const fn method_name(method: fasti::EasterMethod) -> &'static str {
+    match method {
+        fasti::EasterMethod::Western => "western",
+        fasti::EasterMethod::Orthodox => "orthodox",
+    }
+}
 
 /// A holiday rule, naming a holiday's *natural* date. Where a weekend
 /// holiday is observed instead is the calendar's decision, driven by the
@@ -21,13 +69,9 @@ use crate::error::err;
 #[derive(Debug, Clone)]
 pub struct Rule {
     pub inner: fasti::Rule,
-    description: String,
-}
-
-impl Rule {
-    fn new(inner: fasti::Rule, description: String) -> Self {
-        Self { inner, description }
-    }
+    spec: Spec,
+    from_year: Option<u16>,
+    to_year: Option<u16>,
 }
 
 /// Build the optional year range a rule is active over.
@@ -41,13 +85,35 @@ fn years(from_year: Option<u16>, to_year: Option<u16>) -> PyResult<Option<fasti:
     })
 }
 
-/// Render a year range for a rule's `repr`.
-fn years_repr(from_year: Option<u16>, to_year: Option<u16>) -> String {
-    match (from_year, to_year) {
-        (None, None) => String::new(),
-        (Some(f), None) => format!(", from_year={f}"),
-        (None, Some(t)) => format!(", to_year={t}"),
-        (Some(f), Some(t)) => format!(", from_year={f}, to_year={t}"),
+impl Rule {
+    /// A one-off rule, for callers inside the crate that have a
+    /// [`fasti::Date`] rather than a Python object.
+    pub fn one_off_rule(date: fasti::Date) -> Self {
+        Self::new(
+            fasti::Rule::OneOff(fasti::OneOff::new(date)),
+            Spec::OneOff(date),
+            None,
+            None,
+        )
+    }
+
+    fn new(inner: fasti::Rule, spec: Spec, from_year: Option<u16>, to_year: Option<u16>) -> Self {
+        Self {
+            inner,
+            spec,
+            from_year,
+            to_year,
+        }
+    }
+
+    /// The year-range keywords, as they would be typed.
+    fn years_repr(&self) -> String {
+        match (self.from_year, self.to_year) {
+            (None, None) => String::new(),
+            (Some(f), None) => format!(", from_year={f}"),
+            (None, Some(t)) => format!(", to_year={t}"),
+            (Some(f), Some(t)) => format!(", from_year={f}, to_year={t}"),
+        }
     }
 }
 
@@ -72,7 +138,7 @@ impl Rule {
         // never matches, which is a typo, not a calendar.
         let longest = month.0.length(fasti::Year::literal(2024));
         if day == 0 || day > longest {
-            return Err(crate::error::invalid(format!(
+            return Err(invalid(format!(
                 "{} has no day {day}: expected 1..={longest}",
                 month.0
             )));
@@ -82,16 +148,16 @@ impl Rule {
         if let Some(range) = years(from_year, to_year)? {
             rule = rule.years(range);
         }
-        let shift_repr = match shift {
-            fasti::WeekendShift::None => String::new(),
-            other => format!(", shift='{}'", crate::enums::shift_repr(other)),
-        };
-        let description = format!(
-            "Rule.fixed('{}', {day}{shift_repr}{})",
-            month.0,
-            years_repr(from_year, to_year)
-        );
-        Ok(Self::new(fasti::Rule::Fixed(rule), description))
+        Ok(Self::new(
+            fasti::Rule::Fixed(rule),
+            Spec::Fixed {
+                month: month.0,
+                day,
+                shift,
+            },
+            from_year,
+            to_year,
+        ))
     }
 
     /// The nth occurrence of a weekday in a month — `n` is 1..=5, e.g.
@@ -106,17 +172,21 @@ impl Rule {
         to_year: Option<u16>,
     ) -> PyResult<Self> {
         let ordinal = fasti::Ordinal::try_from_u8(n).map_err(err)?;
-        let mut rule = fasti::NthWeekday::new(ordinal, weekday.0.inner(), month.0);
+        let weekday = weekday.0.inner();
+        let mut rule = fasti::NthWeekday::new(ordinal, weekday, month.0);
         if let Some(range) = years(from_year, to_year)? {
             rule = rule.years(range);
         }
-        let description = format!(
-            "Rule.nth_weekday({n}, '{}', '{}'{})",
-            weekday.0.inner(),
-            month.0,
-            years_repr(from_year, to_year)
-        );
-        Ok(Self::new(fasti::Rule::NthWeekday(rule), description))
+        Ok(Self::new(
+            fasti::Rule::NthWeekday(rule),
+            Spec::NthWeekday {
+                n,
+                weekday,
+                month: month.0,
+            },
+            from_year,
+            to_year,
+        ))
     }
 
     /// The last occurrence of a weekday in a month, e.g.
@@ -129,17 +199,20 @@ impl Rule {
         from_year: Option<u16>,
         to_year: Option<u16>,
     ) -> PyResult<Self> {
-        let mut rule = fasti::LastWeekday::new(weekday.0.inner(), month.0);
+        let weekday = weekday.0.inner();
+        let mut rule = fasti::LastWeekday::new(weekday, month.0);
         if let Some(range) = years(from_year, to_year)? {
             rule = rule.years(range);
         }
-        let description = format!(
-            "Rule.last_weekday('{}', '{}'{})",
-            weekday.0.inner(),
-            month.0,
-            years_repr(from_year, to_year)
-        );
-        Ok(Self::new(fasti::Rule::LastWeekday(rule), description))
+        Ok(Self::new(
+            fasti::Rule::LastWeekday(rule),
+            Spec::LastWeekday {
+                weekday,
+                month: month.0,
+            },
+            from_year,
+            to_year,
+        ))
     }
 
     /// A holiday a fixed number of days from Easter Sunday: `0` is
@@ -148,7 +221,7 @@ impl Rule {
     #[pyo3(signature = (offset, *, method=None, from_year=None, to_year=None))]
     fn easter(
         offset: i16,
-        method: Option<crate::enums::EasterMethodArg>,
+        method: Option<EasterMethodArg>,
         from_year: Option<u16>,
         to_year: Option<u16>,
     ) -> PyResult<Self> {
@@ -162,49 +235,46 @@ impl Rule {
         if let Some(range) = years(from_year, to_year)? {
             rule = rule.years(range);
         }
-        let method_name = match method {
-            fasti::EasterMethod::Western => "western",
-            fasti::EasterMethod::Orthodox => "orthodox",
-        };
-        let description = format!(
-            "Rule.easter({offset}, method='{method_name}'{})",
-            years_repr(from_year, to_year)
-        );
-        Ok(Self::new(fasti::Rule::Easter(rule), description))
+        Ok(Self::new(
+            fasti::Rule::Easter(rule),
+            Spec::Easter { offset, method },
+            from_year,
+            to_year,
+        ))
     }
 
     /// Good Friday — two days before Easter Sunday.
     #[staticmethod]
     #[pyo3(signature = (*, method=None))]
-    fn good_friday(method: Option<crate::enums::EasterMethodArg>) -> PyResult<Self> {
+    fn good_friday(method: Option<EasterMethodArg>) -> PyResult<Self> {
         Self::easter(-2, method, None, None)
     }
 
     /// Easter Monday — the day after Easter Sunday.
     #[staticmethod]
     #[pyo3(signature = (*, method=None))]
-    fn easter_monday(method: Option<crate::enums::EasterMethodArg>) -> PyResult<Self> {
+    fn easter_monday(method: Option<EasterMethodArg>) -> PyResult<Self> {
         Self::easter(1, method, None, None)
     }
 
     /// Ascension Day — 39 days after Easter Sunday.
     #[staticmethod]
     #[pyo3(signature = (*, method=None))]
-    fn ascension(method: Option<crate::enums::EasterMethodArg>) -> PyResult<Self> {
+    fn ascension(method: Option<EasterMethodArg>) -> PyResult<Self> {
         Self::easter(39, method, None, None)
     }
 
     /// Whit Monday — 50 days after Easter Sunday.
     #[staticmethod]
     #[pyo3(signature = (*, method=None))]
-    fn whit_monday(method: Option<crate::enums::EasterMethodArg>) -> PyResult<Self> {
+    fn whit_monday(method: Option<EasterMethodArg>) -> PyResult<Self> {
         Self::easter(50, method, None, None)
     }
 
     /// Corpus Christi — 60 days after Easter Sunday.
     #[staticmethod]
     #[pyo3(signature = (*, method=None))]
-    fn corpus_christi(method: Option<crate::enums::EasterMethodArg>) -> PyResult<Self> {
+    fn corpus_christi(method: Option<EasterMethodArg>) -> PyResult<Self> {
         Self::easter(60, method, None, None)
     }
 
@@ -212,15 +282,7 @@ impl Rule {
     /// a company blackout day.
     #[staticmethod]
     fn one_off(date: DateArg) -> Self {
-        // Spelled as the call that would rebuild it, which now means a
-        // date constructor rather than a string.
-        let (year, month, day) = date.0.to_ymd();
-        let description = format!(
-            "Rule.one_off(datetime.date({}, {}, {day}))",
-            year.get(),
-            month.get()
-        );
-        Self::new(fasti::Rule::OneOff(fasti::OneOff::new(date.0)), description)
+        Self::one_off_rule(date.0)
     }
 
     /// `True` iff this rule names `date` as a holiday's natural date.
@@ -231,12 +293,114 @@ impl Rule {
     }
 
     fn __repr__(&self) -> String {
-        self.description.clone()
+        let years = self.years_repr();
+        match self.spec {
+            Spec::Fixed { month, day, shift } => {
+                let shift = match shift {
+                    fasti::WeekendShift::None => String::new(),
+                    other => format!(", shift='{}'", shift_repr(other)),
+                };
+                format!("Rule.fixed('{month}', {day}{shift}{years})")
+            }
+            Spec::NthWeekday { n, weekday, month } => {
+                format!("Rule.nth_weekday({n}, '{weekday}', '{month}'{years})")
+            }
+            Spec::LastWeekday { weekday, month } => {
+                format!("Rule.last_weekday('{weekday}', '{month}'{years})")
+            }
+            Spec::Easter { offset, method } => {
+                format!(
+                    "Rule.easter({offset}, method='{}'{years})",
+                    method_name(method)
+                )
+            }
+            Spec::OneOff(date) => {
+                let (year, month, day) = date.to_ymd();
+                format!(
+                    "Rule.one_off(datetime.date({}, {}, {day}))",
+                    year.get(),
+                    month.get()
+                )
+            }
+        }
+    }
+
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<Reduced<'py>> {
+        let payload = PyDict::new(py);
+        match self.spec {
+            Spec::Fixed { month, day, shift } => {
+                payload.set_item("month", month.get())?;
+                payload.set_item("day", day)?;
+                payload.set_item("shift", shift_repr(shift))?;
+            }
+            Spec::NthWeekday { n, weekday, month } => {
+                payload.set_item("n", n)?;
+                payload.set_item("weekday", weekday.get())?;
+                payload.set_item("month", month.get())?;
+            }
+            Spec::LastWeekday { weekday, month } => {
+                payload.set_item("weekday", weekday.get())?;
+                payload.set_item("month", month.get())?;
+            }
+            Spec::Easter { offset, method } => {
+                payload.set_item("offset", offset)?;
+                payload.set_item("method", method_name(method))?;
+            }
+            Spec::OneOff(date) => payload.set_item("date", DateOut(date))?,
+        }
+        if let Some(from_year) = self.from_year {
+            payload.set_item("from_year", from_year)?;
+        }
+        if let Some(to_year) = self.to_year {
+            payload.set_item("to_year", to_year)?;
+        }
+        reduce(py, "_rebuild_rule", (self.spec.kind(), payload))
+    }
+}
+
+/// Rebuild a rule from the arguments its `__reduce__` recorded.
+pub fn rebuild(kind: &str, payload: &Bound<'_, PyDict>) -> PyResult<Rule> {
+    let get = |key: &str| payload.get_item(key).ok().flatten();
+    let extract =
+        |key: &str| -> PyResult<Option<u16>> { get(key).map(|v| v.extract::<u16>()).transpose() };
+    let from_year = extract("from_year")?;
+    let to_year = extract("to_year")?;
+    let required =
+        |key: &str| get(key).ok_or_else(|| invalid(format!("rule payload is missing {key:?}")));
+    match kind {
+        "fixed" => Rule::fixed(
+            required("month")?.extract()?,
+            required("day")?.extract()?,
+            Some(required("shift")?.extract()?),
+            from_year,
+            to_year,
+        ),
+        "nth_weekday" => Rule::nth_weekday(
+            required("n")?.extract()?,
+            required("weekday")?.extract()?,
+            required("month")?.extract()?,
+            from_year,
+            to_year,
+        ),
+        "last_weekday" => Rule::last_weekday(
+            required("weekday")?.extract()?,
+            required("month")?.extract()?,
+            from_year,
+            to_year,
+        ),
+        "easter" => Rule::easter(
+            required("offset")?.extract()?,
+            Some(required("method")?.extract()?),
+            from_year,
+            to_year,
+        ),
+        "one_off" => Ok(Rule::one_off(required("date")?.extract()?)),
+        _ => Err(invalid(format!("unknown rule kind: {kind:?}"))),
     }
 }
 
 impl std::fmt::Display for Rule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.description)
+        f.write_str(&self.__repr__())
     }
 }

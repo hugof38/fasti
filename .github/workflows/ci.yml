@@ -210,3 +210,55 @@ jobs:
       - run: maturin sdist --out dist
       - run: pip install dist/*.tar.gz
       - run: pytest tests -q
+
+  # One wheel per platform is supposed to serve every Python from the
+  # abi3 floor upwards. That is a claim about a build, so it gets built
+  # once and then run everywhere it claims to work — and audited, since
+  # nothing at install time checks that an abi3-tagged wheel really only
+  # touches the stable ABI.
+  python-abi3:
+    name: python bindings (one wheel, every Python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bindings/python
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bindings/python
+      - uses: astral-sh/setup-uv@v7
+      - run: uv build --wheel --out-dir dist
+      - run: uvx abi3audit --strict --verbose dist/*.whl
+      - name: Run the suite on every supported Python
+        run: |
+          set -euo pipefail
+          for version in 3.10 3.11 3.12 3.13 3.14; do
+            echo "::group::Python $version"
+            uv venv --python "$version" ".venv-$version"
+            uv pip install --python ".venv-$version" --no-index --find-links dist fasti-py
+            uv pip install --python ".venv-$version" pytest
+            ".venv-$version/bin/python" -m pytest tests -q
+            echo "::endgroup::"
+          done
+
+  # The stable ABI does not cover free-threaded builds until abi3t
+  # (PEP 803, CPython 3.15), so those get their own wheel — and their own
+  # job, since a module declared free-thread-safe should be run that way.
+  python-free-threaded:
+    name: python bindings (free-threaded 3.14t)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bindings/python
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bindings/python
+      - uses: astral-sh/setup-uv@v7
+      - run: uv venv --python 3.14t .venv-ft
+      - run: uv pip install --python .venv-ft . pytest
+      - run: .venv-ft/bin/python -m pytest tests -q

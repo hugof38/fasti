@@ -153,8 +153,22 @@ against.
 - **Holiday data is not a promise about the future.** Calendars encode
   published rules, not announcements. Rules that changed have effective
   years attached; one-off closures are one-offs.
+- **Everything pickles**, so calendars, schedules and conventions can be
+  handed to a `multiprocessing` worker, cached, or sent through `joblib`
+  or `dask` like any other value. A value rebuilds by replaying the
+  calls that made it, so a built-in calendar travels as its name and an
+  unpickled schedule keeps the reference grid its stubs accrue against.
+- **Immutable, and free-thread-safe.** Every object is frozen: methods
+  return new values rather than mutating. The test suite runs under
+  free-threaded CPython 3.14 in CI, and a range walk releases the
+  interpreter while it runs, so threads are not blocked behind a century
+  of holiday rules.
 - Wheels are built against the stable ABI (`abi3`, CPython 3.10+), so
-  one wheel per platform serves every supported Python version.
+  one wheel per platform serves every supported Python version, with
+  separate wheels for free-threaded 3.14 — the stable ABI does not cover
+  free-threaded builds until `abi3t` in CPython 3.15. Linux gets both
+  `manylinux` and `musllinux` builds; anything else falls back to the
+  sdist, which needs a Rust toolchain.
 
 ## The Rust crate
 
