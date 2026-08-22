@@ -4,10 +4,11 @@
 the market open?*, *when is the next coupon?*, *how much has accrued?* —
 in a Rust extension module that speaks Python's own types.
 
-Dates in are :class:`datetime.date` — or a :class:`datetime.datetime`,
-whose time component is dropped — and dates out are always
-:class:`datetime.date`. Nothing else is accepted; a date-shaped string is
-a string, and :meth:`datetime.date.fromisoformat` turns it into a date.
+Dates in are :class:`datetime.date`, and dates out are always
+:class:`datetime.date`. Nothing else is accepted: a date-shaped string is
+a string (:meth:`datetime.date.fromisoformat` turns it into a date), and
+a :class:`datetime.datetime` is a moment (call ``.date()`` on it, so that
+choosing which day it falls on stays your decision).
 Year fractions come back as :class:`fractions.Fraction`, because that is
 what they are: the library computes them as reduced integer rationals and
 never touches a float.

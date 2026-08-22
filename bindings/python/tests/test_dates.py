@@ -1,6 +1,6 @@
 """The datetime boundary: what goes in, what comes out, and where it stops."""
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from fractions import Fraction
 
 import pytest
@@ -21,15 +21,36 @@ def test_dates_come_back_as_datetime_dates():
     assert result == date(2026, 7, 6)
 
 
-def test_a_datetime_is_a_date():
-    """`datetime.datetime` derives from `date`, so it is accepted."""
-    cal = calendars.US_SETTLEMENT
-    assert cal.is_holiday(date(2026, 7, 3)) is cal.is_holiday(datetime(2026, 7, 3, 15, 30)) is True
+@pytest.mark.parametrize(
+    "moment",
+    [
+        datetime(2026, 7, 3, 15, 30),
+        datetime(2026, 7, 3),  # midnight is still a moment
+        datetime(2026, 7, 3, 23, 0, tzinfo=timezone.utc),
+    ],
+    ids=["afternoon", "midnight", "timezone-aware"],
+)
+def test_a_datetime_is_not_a_date(moment):
+    """Which day a moment falls on is the caller's decision, not ours."""
+    with pytest.raises(TypeError, match=r"call \.date\(\) on it"):
+        calendars.US_SETTLEMENT.is_holiday(moment)
 
 
-def test_datetime_time_component_is_dropped():
-    cal = calendars.NULL
-    assert cal.adjust(datetime(2026, 7, 3, 23, 59, 59)) == date(2026, 7, 3)
+def test_a_converted_datetime_is_accepted():
+    moment = datetime(2026, 7, 3, 15, 30)
+    assert calendars.US_SETTLEMENT.is_holiday(moment.date()) is True
+
+
+def test_a_datetime_is_refused_everywhere_a_date_is_wanted():
+    moment = datetime(2026, 7, 3, 23, 59, 59)
+    for call in (
+        lambda: calendars.NULL.adjust(moment),
+        lambda: fasti.Rule.one_off(moment),
+        lambda: fasti.Schedule.from_dates([moment, date(2026, 8, 3)]),
+        lambda: fasti.year_fraction(moment, date(2026, 8, 3), "ACT/360"),
+    ):
+        with pytest.raises(TypeError, match="datetime.date"):
+            call()
 
 
 @pytest.mark.parametrize("value", [date(1900, 12, 31), date(2200, 1, 1)])

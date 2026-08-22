@@ -16,8 +16,11 @@ MAX_DATE: datetime.date
 
 # Date positions are spelled ``datetime.date`` outright, never behind an
 # alias: the aliases below stand for real unions, and a date position is
-# not one. ``datetime.datetime`` satisfies it by subclassing, at runtime
-# and in the type checker alike.
+# not one.
+#
+# The type system cannot express the whole rule. ``datetime.datetime``
+# is a subclass of ``datetime.date``, so a checker accepts one here —
+# the runtime does not, and asks for ``.date()`` instead.
 
 #: A period, a period string such as ``"6M"``, a frequency, or a
 #: whole-day ``timedelta``.

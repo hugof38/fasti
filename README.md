@@ -139,9 +139,9 @@ fasti.year_fraction(date(2025, 1, 1), date(2025, 7, 1), "ACT/360")
 # Fraction(181, 360)
 ```
 
-Dates in are `datetime.date` (or a `datetime.datetime`, whose time is
-dropped) and dates out are `datetime.date` — nothing else, so a
-date-shaped string stays your program's business to parse. Year
+Dates in are `datetime.date` and dates out are `datetime.date` —
+nothing else, so parsing a string and deciding which day a
+`datetime.datetime` falls on both stay your program's business. Year
 fractions come back as `fractions.Fraction`, so the crate's float-free
 arithmetic survives the boundary exactly. Conventions, tenors and
 weekdays are named with plain strings or typed enums, whichever reads

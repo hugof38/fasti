@@ -25,6 +25,11 @@ fn date_type(py: Python<'_>) -> PyResult<&Bound<'_, PyType>> {
     DATE.import(py, "datetime", "date")
 }
 
+fn datetime_type(py: Python<'_>) -> PyResult<&Bound<'_, PyType>> {
+    static DATETIME: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+    DATETIME.import(py, "datetime", "datetime")
+}
+
 fn fraction_type(py: Python<'_>) -> PyResult<&Bound<'_, PyType>> {
     static FRACTION: PyOnceLock<Py<PyType>> = PyOnceLock::new();
     FRACTION.import(py, "fractions", "Fraction")
@@ -46,14 +51,26 @@ fn from_ordinal(ordinal: i64) -> Option<Date> {
         .and_then(|serial| Date::from_serial(serial).ok())
 }
 
-/// Coerce a Python object to a [`Date`]. The only thing accepted is a
-/// `datetime.date` — including anything deriving from it
-/// (`datetime.datetime`, `pandas.Timestamp`), whose time component is
-/// dropped. A date-shaped string is not a date: parsing one is
-/// `datetime.date.fromisoformat`'s job, and doing it here would mean
-/// this library owning a second date grammar and its failure modes.
+/// Coerce a Python object to a [`Date`]. A `datetime.date` is the only
+/// thing accepted.
+///
+/// Two near-misses are refused by name rather than coerced, because
+/// both hide a decision the caller should be making. A string has a
+/// format, and `datetime.date.fromisoformat` is where formats belong. A
+/// `datetime.datetime` (or a `pandas.Timestamp`, which is one) has a
+/// time, and often a timezone: which calendar day it falls on is
+/// exactly the question, and truncating it here would answer it
+/// silently — under UTC, in a library that has no concept of a zone.
 pub fn to_date(ob: &Bound<'_, PyAny>) -> PyResult<Date> {
     let py = ob.py();
+    // Checked before `date`, which `datetime` derives from.
+    if ob.is_instance(datetime_type(py)?)? {
+        return Err(PyTypeError::new_err(format!(
+            "expected a datetime.date, got a {}; call .date() on it, so that \
+             dropping the time is your decision rather than ours",
+            type_name(ob)
+        )));
+    }
     if ob.is_instance(date_type(py)?)? {
         let ordinal = ob
             .call_method0(intern!(py, "toordinal"))?
@@ -78,7 +95,7 @@ pub fn to_date(ob: &Bound<'_, PyAny>) -> PyResult<Date> {
         )));
     }
     Err(PyTypeError::new_err(format!(
-        "expected a datetime.date (or a datetime.datetime, whose time is dropped), got {}",
+        "expected a datetime.date, got {}",
         type_name(ob)
     )))
 }

@@ -3,11 +3,11 @@
 //! for financial code.
 //!
 //! The boundary is Python's own `datetime.date`: every date argument
-//! takes one (or a `datetime.datetime`, whose time is dropped), and
-//! every date result is one. Nothing else is accepted — a date-shaped
-//! string is a string. Year fractions come back as
-//! `fractions.Fraction`, matching the core crate's float-free
-//! arithmetic exactly.
+//! takes one, and every date result is one. Nothing else is accepted —
+//! a date-shaped string is a string, and a `datetime.datetime` is a
+//! moment, which becomes a date only once someone decides which day it
+//! falls on. Year fractions come back as `fractions.Fraction`, matching
+//! the core crate's float-free arithmetic exactly.
 
 use pyo3::prelude::*;
 

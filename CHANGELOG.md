@@ -12,10 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python bindings (`bindings/python`), published to PyPI as `fasti-py` and
   imported as `fasti`: a PyO3 extension exposing calendars, business-day conventions, day
   counts, schedules and holiday rules to Python. Dates cross the
-  boundary as `datetime.date` and nothing else (a `datetime.datetime`
-  is one, and loses its time), and year fractions as
-  `fractions.Fraction`, so the crate's float-free arithmetic is
-  preserved. Ships type stubs, `abi3` wheels for CPython 3.10+, and its
+  boundary as `datetime.date` and nothing else — a string or a
+  `datetime.datetime` is refused with the conversion to write — and
+  year fractions as `fractions.Fraction`, so the crate's float-free
+  arithmetic is preserved. Ships type stubs, `abi3` wheels for CPython 3.10+, and its
   own release workflow on `py-v*` tags. Every type is picklable — a
   value rebuilds by replaying the constructor calls that made it, so
   calendars and schedules can cross a process boundary intact — and the

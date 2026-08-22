@@ -39,17 +39,34 @@ for start, end in schedule.periods():
 
 ## It speaks datetime
 
-Dates in are `datetime.date` — or a `datetime.datetime`, whose time
-component is dropped. Dates out are always `datetime.date`. There is no
-date class of ours to learn, convert through, or serialize.
+Dates in are `datetime.date`. Dates out are always `datetime.date`.
+There is no date class of ours to learn, convert through, or serialize.
 
-Nothing else is accepted, `"2026-07-04"` included. A date-shaped string
-is a string: `datetime.date.fromisoformat` parses one, and it belongs at
-the edge of *your* program, where you know which format arrived. Taking
-strings here would mean this library owning a second date grammar, its
-locale arguments, and its ambiguities — and it would let a typo through
-as a `ValueError` from four calls deep instead of a `TypeError` where it
-was written.
+Nothing else is a date, and the two near-misses are refused by name
+rather than quietly converted:
+
+```python
+>>> import datetime, fasti
+>>> fasti.calendars.US_NYSE.is_holiday("2026-07-03")
+Traceback (most recent call last):
+TypeError: expected a datetime.date, got a str; parse it first, e.g.
+datetime.date.fromisoformat('2026-07-03') ...
+>>> fasti.calendars.US_NYSE.is_holiday(datetime.datetime(2026, 7, 3, 15, 30))
+Traceback (most recent call last):
+TypeError: expected a datetime.date, got a datetime; call .date() on it, ...
+```
+
+Both refusals are the same principle. A string has a format, and
+`datetime.date.fromisoformat` is where formats belong — at the edge of
+*your* program, where you know what arrived. A `datetime.datetime` has a
+time, and often a timezone, so *which day it falls on* is precisely the
+question being asked; truncating it here would answer it silently, under
+UTC, in a library that has no concept of a zone. Write `.date()` and the
+decision stays yours.
+
+One caveat worth knowing: a type checker cannot help with the second
+one. `datetime.datetime` is a subclass of `datetime.date`, so mypy sees
+a valid argument where the runtime raises.
 
 Year fractions come back as `fractions.Fraction`, because that is what
 they are. `fasti` computes day-count fractions as reduced integer
