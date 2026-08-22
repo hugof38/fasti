@@ -41,6 +41,20 @@ def test_weekend_shift_policies(shift, observed):
         assert cal.is_holiday(day) is (day == observed)
 
 
+def test_lookalike_shift_names_are_not_both_spellings():
+    """In this domain "the Fed" and "US federal" are different rules.
+
+    The Fed leaves a Saturday holiday where it is; the federal government
+    moves it to the Friday. Accepting both words would let a caller who
+    typed one meaning the other get a different set of closed days, so
+    only "fed" is a spelling.
+    """
+    assert fasti.WeekendShift.parse("fed") == fasti.WeekendShift.SUN_FORWARD
+    assert fasti.WeekendShift.parse("us") == fasti.WeekendShift.SAT_BACK_SUN_FORWARD
+    with pytest.raises(fasti.FastiError, match="sat_back_sun_forward"):
+        fasti.WeekendShift.parse("federal")
+
+
 def test_nth_and_last_weekday_rules():
     mlk = Rule.nth_weekday(3, "mon", "Jan")
     assert mlk.is_holiday(date(2026, 1, 19))

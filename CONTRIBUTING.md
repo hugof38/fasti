@@ -115,7 +115,11 @@ Ground rules on top of the crate's own:
   docstrings, and their `>>>` examples run under pytest. Write them as
   doctests, without markdown fences.
 - A new convention/calendar/rule name needs the alias spellings a caller
-  is likely to type; matching ignores case and punctuation.
+  is likely to type; matching ignores case and punctuation. Aliases are
+  a convenience, never the definition: the canonical spelling is what a
+  value prints, pickles as, and is offered in an error. Two spellings a
+  reader would take for synonyms must not mean different things — `fed`
+  and `federal` did, so `federal` is not a spelling of anything.
 - Every type stays immutable (`#[pyclass(frozen)]`) and picklable. A
   new type needs a `__reduce__` that names a `_rebuild_*` function and
   the arguments to replay — not a serialized copy of its internals —

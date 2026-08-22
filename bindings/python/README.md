@@ -128,6 +128,9 @@ Day's substitute to the Tuesday.
 >>> acme = fasti.Calendar.custom(
 ...     "Acme",
 ...     weekend=["sat", "sun"],
+...     # "us" is the US federal rule: a Saturday holiday is observed
+...     # on the Friday, a Sunday one on the Monday. Spelled in full,
+...     # shift="sat_back_sun_forward".
 ...     rules=[fasti.Rule.fixed("Jun", 19, shift="us", from_year=2022)],
 ...     holidays=[date(2026, 8, 14)],
 ... )

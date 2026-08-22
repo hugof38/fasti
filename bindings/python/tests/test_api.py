@@ -53,6 +53,28 @@ def test_enum_members_parse_from_strings():
     assert fasti.WeekendShift.parse("us") == fasti.WeekendShift.SAT_BACK_SUN_FORWARD
 
 
+VOCABULARIES = [
+    fasti.Weekday,
+    fasti.BusinessDayConvention,
+    fasti.DateGenerationRule,
+    fasti.Frequency,
+    fasti.WeekendShift,
+]
+
+
+@pytest.mark.parametrize("vocabulary", VOCABULARIES, ids=lambda v: v.__name__)
+def test_what_a_member_prints_is_a_name_it_answers_to(vocabulary):
+    """The canonical spelling is the one that survives a round trip.
+
+    It is what the member prints, what it pickles as, and what an error
+    message offers — so it had better be one the parser accepts.
+    """
+    members = [getattr(vocabulary, name) for name in vars(vocabulary) if name.isupper()]
+    assert members
+    for member in members:
+        assert vocabulary.parse(str(member)) == member, str(member)
+
+
 def test_unknown_names_say_what_was_expected():
     with pytest.raises(fasti.FastiError, match="expected one of"):
         fasti.calendars.NULL.adjust(date(2026, 1, 1), "sideways")

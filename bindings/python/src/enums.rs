@@ -350,12 +350,19 @@ named_enum! {
     arg: ShiftArg,
     rebuild: "_rebuild_shift",
     expected: "weekend shift",
+    // The short spellings are here because a market convention is
+    // easier to name than to describe. They have to stay far apart,
+    // though: "the Fed" and "US federal" are genuinely different rules
+    // in this domain — the Fed leaves a Saturday holiday where it is,
+    // the federal government moves it to the Friday — so a caller who
+    // typed "federal" meaning "fed" would silently get a different set
+    // of closed days. "federal" is therefore not a spelling of either.
     members {
         None => None, "none", ["none", "lost"];
         Forward => Forward, "forward", ["forward", "uk"];
         SunForward => SunForward, "sun_forward", ["sunforward", "fed", "sifma"];
         SatBackSunForward => SatBackSunForward, "sat_back_sun_forward",
-            ["satbacksunforward", "us", "federal"];
+            ["satbacksunforward", "us"];
     }
 }
 
