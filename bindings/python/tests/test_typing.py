@@ -6,6 +6,8 @@ runtime `TypeError` proves the boundary holds, and this proves the
 boundary is *visible*.
 """
 
+import re
+
 import pytest
 
 mypy_api = pytest.importorskip("mypy.api", reason="mypy is a development dependency")
@@ -87,7 +89,10 @@ def test_every_date_position_rejects_a_non_date(tmp_path):
     assert status != 0
 
     first_call = header.count("\n") + 1
-    flagged = {int(line.split(":")[1]) for line in out.splitlines() if ": error:" in line}
+    # `path:line: error: …`, where the path may itself contain a colon
+    # after a Windows drive letter.
+    reported = re.compile(r":(\d+):(?:\d+:)? error:")
+    flagged = {int(m.group(1)) for m in map(reported.search, out.splitlines()) if m}
     expected = set(range(first_call, first_call + len(REJECTED)))
     assert flagged == expected, out
     # The message names the type a caller has to produce.

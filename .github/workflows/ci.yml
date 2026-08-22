@@ -177,7 +177,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: bindings/python
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           # The abi3 floor. A wheel built against it runs on every later
           # CPython, so this is the version that has to work.
@@ -200,7 +200,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: bindings/python
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.10"
       - run: pip install maturin pytest
