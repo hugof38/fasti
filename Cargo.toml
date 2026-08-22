@@ -9,6 +9,10 @@ repository = "https://github.com/hugof38/fasti"
 readme = "README.md"
 keywords = ["date", "calendar", "business-day", "day-count", "no-std"]
 categories = ["date-and-time", "finance", "no-std"]
+# The Python bindings are their own cargo workspace with their own
+# lockfile, so pyo3 never reaches this crate's MSRV job, lockfile or
+# cargo-deny run — and never ships inside the .crate either.
+exclude = ["/bindings"]
 authors = ["fasti contributors"]
 
 [features]
