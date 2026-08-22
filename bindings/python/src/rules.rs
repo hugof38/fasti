@@ -199,7 +199,7 @@ impl Rule {
         to_year: Option<u16>,
     ) -> PyResult<Self> {
         let ordinal = fasti::Ordinal::try_from_u8(n).map_err(err)?;
-        let weekday = weekday.0.inner();
+        let weekday = weekday.0;
         let mut rule = fasti::NthWeekday::new(ordinal, weekday, month.0);
         if let Some(range) = years(from_year, to_year)? {
             rule = rule.years(range);
@@ -226,7 +226,7 @@ impl Rule {
         from_year: Option<u16>,
         to_year: Option<u16>,
     ) -> PyResult<Self> {
-        let weekday = weekday.0.inner();
+        let weekday = weekday.0;
         let mut rule = fasti::LastWeekday::new(weekday, month.0);
         if let Some(range) = years(from_year, to_year)? {
             rule = rule.years(range);

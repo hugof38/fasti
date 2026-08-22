@@ -1,7 +1,6 @@
 //! [`DayCount`] — the conventions that measure elapsed time between two
 //! dates, returning an exact `fractions.Fraction`.
 
-use fasti::DayCount as _;
 use pyo3::prelude::*;
 
 use crate::convert::{DateArg, DateOut, from_fraction, normalize};
@@ -56,6 +55,36 @@ enum Kind {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DayCount {
     kind: Kind,
+}
+
+impl DayCount {
+    /// Hand the core-crate convention this stands for to `f`.
+    ///
+    /// Every method that measures anything goes through here, so the
+    /// mapping from name to convention is written once. `ACT/ACT ICMA`
+    /// is the only one that can fail: binding it to a schedule checks
+    /// that the schedule's tenor matches its coupon frequency.
+    fn with<R>(&self, f: impl FnOnce(&dyn fasti::DayCount) -> R) -> PyResult<R> {
+        Ok(match &self.kind {
+            Kind::Act360 => f(&fasti::Act360),
+            Kind::Act365Fixed => f(&fasti::Act365Fixed),
+            Kind::ActActISDA => f(&fasti::ActActISDA),
+            Kind::ActActICMA {
+                frequency,
+                schedule,
+            } => {
+                let convention = fasti::ActActICMA::new(*frequency);
+                match schedule {
+                    Some(bound) => f(&convention.bind(&bound.inner).map_err(err)?),
+                    None => f(&convention),
+                }
+            }
+            Kind::Thirty360Bond => f(&fasti::Thirty360Bond),
+            Kind::Thirty360US => f(&fasti::Thirty360US),
+            Kind::Thirty360European => f(&fasti::Thirty360European),
+            Kind::Thirty360ISDA { termination } => f(&fasti::Thirty360ISDA::new(*termination)),
+        })
+    }
 }
 
 #[pymethods]
@@ -138,37 +167,24 @@ impl DayCount {
 
     /// The convention's canonical name.
     #[getter]
-    fn name(&self) -> &'static str {
+    const fn name(&self) -> &'static str {
         match &self.kind {
-            Kind::Act360 => fasti::Act360.name(),
-            Kind::Act365Fixed => fasti::Act365Fixed.name(),
-            Kind::ActActISDA => fasti::ActActISDA.name(),
+            Kind::Act360 => "Actual/360",
+            Kind::Act365Fixed => "Actual/365 (Fixed)",
+            Kind::ActActISDA => "Actual/Actual (ISDA)",
             Kind::ActActICMA { .. } => "Actual/Actual (ICMA)",
-            Kind::Thirty360Bond => fasti::Thirty360Bond.name(),
-            Kind::Thirty360US => fasti::Thirty360US.name(),
-            Kind::Thirty360European => fasti::Thirty360European.name(),
-            Kind::Thirty360ISDA { termination } => fasti::Thirty360ISDA::new(*termination).name(),
+            Kind::Thirty360Bond => "30/360 (Bond Basis)",
+            Kind::Thirty360US => "30/360 (US)",
+            Kind::Thirty360European => "30E/360",
+            Kind::Thirty360ISDA { .. } => "30E/360 (ISDA)",
         }
     }
 
     /// The convention's day count between two dates, signed by
     /// direction. Calendar days for the ACT family; the 30/360 family
     /// counts its own way.
-    pub fn day_count(&self, start: DateArg, end: DateArg) -> i64 {
-        match &self.kind {
-            Kind::Act360 => fasti::Act360.day_count(start.0, end.0),
-            Kind::Act365Fixed => fasti::Act365Fixed.day_count(start.0, end.0),
-            Kind::ActActISDA => fasti::ActActISDA.day_count(start.0, end.0),
-            Kind::ActActICMA { frequency, .. } => {
-                fasti::ActActICMA::new(*frequency).day_count(start.0, end.0)
-            }
-            Kind::Thirty360Bond => fasti::Thirty360Bond.day_count(start.0, end.0),
-            Kind::Thirty360US => fasti::Thirty360US.day_count(start.0, end.0),
-            Kind::Thirty360European => fasti::Thirty360European.day_count(start.0, end.0),
-            Kind::Thirty360ISDA { termination } => {
-                fasti::Thirty360ISDA::new(*termination).day_count(start.0, end.0)
-            }
-        }
+    pub fn day_count(&self, start: DateArg, end: DateArg) -> PyResult<i64> {
+        self.with(|convention| convention.day_count(start.0, end.0))
     }
 
     /// The year fraction between two dates as an exact
@@ -179,30 +195,7 @@ impl DayCount {
         start: DateArg,
         end: DateArg,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let fraction = match &self.kind {
-            Kind::Act360 => fasti::Act360.year_fraction(start.0, end.0),
-            Kind::Act365Fixed => fasti::Act365Fixed.year_fraction(start.0, end.0),
-            Kind::ActActISDA => fasti::ActActISDA.year_fraction(start.0, end.0),
-            Kind::ActActICMA {
-                frequency,
-                schedule,
-            } => {
-                let convention = fasti::ActActICMA::new(*frequency);
-                match schedule {
-                    Some(s) => convention
-                        .bind(&s.inner)
-                        .map_err(err)?
-                        .year_fraction(start.0, end.0),
-                    None => convention.year_fraction(start.0, end.0),
-                }
-            }
-            Kind::Thirty360Bond => fasti::Thirty360Bond.year_fraction(start.0, end.0),
-            Kind::Thirty360US => fasti::Thirty360US.year_fraction(start.0, end.0),
-            Kind::Thirty360European => fasti::Thirty360European.year_fraction(start.0, end.0),
-            Kind::Thirty360ISDA { termination } => {
-                fasti::Thirty360ISDA::new(*termination).year_fraction(start.0, end.0)
-            }
-        };
+        let fraction = self.with(|convention| convention.year_fraction(start.0, end.0))?;
         from_fraction(py, fraction)
     }
 

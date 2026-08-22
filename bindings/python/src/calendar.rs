@@ -2,7 +2,7 @@
 //! registry of built-in market calendars.
 
 use pyo3::prelude::*;
-use pyo3::types::PyType;
+use pyo3::types::{PyTuple, PyType};
 
 use crate::convert::{DateArg, DateOut, normalize};
 use crate::enums::{ConventionArg, Weekday, WeekendArg, weekend_days, weekend_repr};
@@ -85,36 +85,31 @@ pub enum Origin {
 impl Origin {
     /// Encode as nested tuples of picklable values. Rules and dates
     /// inside pickle themselves.
-    pub fn encode<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    pub fn encode<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
         let weekend = |w: fasti::Weekend| {
             weekend_days(w)
                 .into_iter()
                 .map(|d| d.inner().get())
                 .collect::<Vec<_>>()
         };
-        let object = match self {
-            Self::Builtin(name) => ("builtin", *name).into_pyobject(py)?.into_any(),
+        Ok(match self {
+            Self::Builtin(name) => ("builtin", *name).into_pyobject(py)?,
             Self::Custom {
                 name,
                 weekend: w,
                 rules,
-            } => ("custom", name, weekend(*w), rules.clone())
-                .into_pyobject(py)?
-                .into_any(),
-            Self::Renamed(inner, name) => ("renamed", inner.encode(py)?, name)
-                .into_pyobject(py)?
-                .into_any(),
-            Self::Weekend(inner, w) => ("weekend", inner.encode(py)?, weekend(*w))
-                .into_pyobject(py)?
-                .into_any(),
-            Self::Union(left, right) => ("union", left.encode(py)?, right.encode(py)?)
-                .into_pyobject(py)?
-                .into_any(),
-            Self::Rules(inner, rules) => ("rules", inner.encode(py)?, rules.clone())
-                .into_pyobject(py)?
-                .into_any(),
-        };
-        Ok(object)
+            } => ("custom", name, weekend(*w), rules.clone()).into_pyobject(py)?,
+            Self::Renamed(inner, name) => ("renamed", inner.encode(py)?, name).into_pyobject(py)?,
+            Self::Weekend(inner, w) => {
+                ("weekend", inner.encode(py)?, weekend(*w)).into_pyobject(py)?
+            }
+            Self::Union(left, right) => {
+                ("union", left.encode(py)?, right.encode(py)?).into_pyobject(py)?
+            }
+            Self::Rules(inner, rules) => {
+                ("rules", inner.encode(py)?, rules.clone()).into_pyobject(py)?
+            }
+        })
     }
 }
 

@@ -64,29 +64,28 @@ def test_rules_round_trip(rule):
         day += datetime.timedelta(days=1)
 
 
-def calendars_under_test():
-    return {
-        # NYSE and the government bond calendar carry `Rule::Custom`
-        # predicates — fn pointers, with nothing to serialize — which is
-        # why a built-in travels as its name.
-        "builtin": calendars.US_NYSE,
-        "builtin with fn-pointer rules": calendars.US_GOVERNMENT_BOND,
-        "union": calendars.US_SETTLEMENT.union(calendars.FRANCE_SETTLEMENT),
-        "custom": fasti.Calendar.custom(
-            "Acme",
-            weekend=["sat", "sun"],
-            rules=[fasti.Rule.fixed("Jun", 19, shift="us", from_year=2022)],
-            holidays=[date(2026, 8, 14)],
-        ),
-        "derived chain": (
-            calendars.UK_SETTLEMENT.with_holidays([date(2026, 8, 14)])
-            .renamed("UK plus")
-            .with_weekend(["sun"])
-        ),
-        "union of derived": calendars.TARGET.union(
-            fasti.Calendar.custom("x", holidays=[date(2026, 3, 3)])
-        ),
-    }
+# NYSE and the government bond calendar carry `Rule::Custom` predicates
+# — fn pointers, with nothing to serialize — which is why a built-in
+# travels as its name.
+CALENDARS = {
+    "builtin": calendars.US_NYSE,
+    "builtin with fn-pointer rules": calendars.US_GOVERNMENT_BOND,
+    "union": calendars.US_SETTLEMENT.union(calendars.FRANCE_SETTLEMENT),
+    "custom": fasti.Calendar.custom(
+        "Acme",
+        weekend=["sat", "sun"],
+        rules=[fasti.Rule.fixed("Jun", 19, shift="us", from_year=2022)],
+        holidays=[date(2026, 8, 14)],
+    ),
+    "derived chain": (
+        calendars.UK_SETTLEMENT.with_holidays([date(2026, 8, 14)])
+        .renamed("UK plus")
+        .with_weekend(["sun"])
+    ),
+    "union of derived": calendars.TARGET.union(
+        fasti.Calendar.custom("x", holidays=[date(2026, 3, 3)])
+    ),
+}
 
 
 def assert_same_calendar(a, b):
@@ -99,33 +98,30 @@ def assert_same_calendar(a, b):
         day += datetime.timedelta(days=1)
 
 
-@pytest.mark.parametrize("label", list(calendars_under_test()))
+@pytest.mark.parametrize("calendar", CALENDARS.values(), ids=CALENDARS.keys())
 @pytest.mark.parametrize("protocol", PROTOCOLS)
-def test_calendars_round_trip(label, protocol):
-    cal = calendars_under_test()[label]
-    assert_same_calendar(cal, round_trip(cal, protocol))
+def test_calendars_round_trip(calendar, protocol):
+    assert_same_calendar(calendar, round_trip(calendar, protocol))
 
 
-def schedules_under_test():
-    return {
-        "regular": fasti.Schedule(date(2025, 1, 15), date(2027, 1, 15), "6M", calendars.US_SETTLEMENT),
-        "front stub": fasti.Schedule(date(2025, 3, 15), date(2026, 1, 15), "6M", rule="backward"),
-        "end of month": fasti.Schedule(date(2025, 1, 31), date(2026, 1, 31), "3M", end_of_month=True),
-        "every option": fasti.Schedule(
-            date(2025, 1, 15), date(2027, 1, 15), "6M", calendars.US_NYSE,
-            convention="following", termination_convention="preceding",
-            rule="forward", first_date=date(2025, 4, 15),
-        ),
-        "from dates": fasti.Schedule.from_dates([date(2025, 1, 15), date(2025, 7, 15)]),
-        "sliced": fasti.Schedule(date(2025, 1, 15), date(2028, 1, 15), "6M")
-        .after(date(2026, 1, 15))
-        .until(date(2027, 1, 15)),
-    }
+SCHEDULES = {
+    "regular": fasti.Schedule(date(2025, 1, 15), date(2027, 1, 15), "6M", calendars.US_SETTLEMENT),
+    "front stub": fasti.Schedule(date(2025, 3, 15), date(2026, 1, 15), "6M", rule="backward"),
+    "end of month": fasti.Schedule(date(2025, 1, 31), date(2026, 1, 31), "3M", end_of_month=True),
+    "every option": fasti.Schedule(
+        date(2025, 1, 15), date(2027, 1, 15), "6M", calendars.US_NYSE,
+        convention="following", termination_convention="preceding",
+        rule="forward", first_date=date(2025, 4, 15),
+    ),
+    "from dates": fasti.Schedule.from_dates([date(2025, 1, 15), date(2025, 7, 15)]),
+    "sliced": fasti.Schedule(date(2025, 1, 15), date(2028, 1, 15), "6M")
+    .after(date(2026, 1, 15))
+    .until(date(2027, 1, 15)),
+}
 
 
-@pytest.mark.parametrize("label", list(schedules_under_test()))
-def test_schedules_round_trip_including_their_reference_grid(label):
-    schedule = schedules_under_test()[label]
+@pytest.mark.parametrize("schedule", SCHEDULES.values(), ids=SCHEDULES.keys())
+def test_schedules_round_trip_including_their_reference_grid(schedule):
     rebuilt = round_trip(schedule, pickle.HIGHEST_PROTOCOL)
     assert rebuilt == schedule
     assert rebuilt.dates == schedule.dates

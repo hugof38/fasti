@@ -3,7 +3,7 @@
 
 use pyo3::exceptions::{PyIndexError, PyTypeError};
 use pyo3::prelude::*;
-use pyo3::types::{PyList, PyType};
+use pyo3::types::{PyList, PyTuple, PyType};
 
 use crate::calendar::{Calendar, Origin};
 use crate::convert::{DateArg, DateOut};
@@ -39,8 +39,8 @@ struct Generated {
 }
 
 impl Spec {
-    fn encode<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let object = match self {
+    fn encode<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        Ok(match self {
             Self::Generated(g) => {
                 let payload = pyo3::types::PyDict::new(py);
                 payload.set_item("effective", DateOut(g.effective))?;
@@ -56,36 +56,34 @@ impl Spec {
                 payload.set_item(
                     "convention",
                     g.convention
-                        .map(|c| BusinessDayConvention::wrap(c).__str__()),
+                        .map(|c| BusinessDayConvention::wrap(c).canonical()),
                 )?;
                 payload.set_item(
                     "termination_convention",
                     g.termination_convention
-                        .map(|c| BusinessDayConvention::wrap(c).__str__()),
+                        .map(|c| BusinessDayConvention::wrap(c).canonical()),
                 )?;
                 payload.set_item(
                     "rule",
-                    g.rule.map(|r| DateGenerationRule::wrap(r).__str__()),
+                    g.rule.map(|r| DateGenerationRule::wrap(r).canonical()),
                 )?;
                 payload.set_item("end_of_month", g.end_of_month)?;
                 payload.set_item("first_date", g.first_date.map(DateOut))?;
                 payload.set_item("next_to_last_date", g.next_to_last_date.map(DateOut))?;
-                ("generated", payload).into_pyobject(py)?.into_any()
+                ("generated", payload).into_pyobject(py)?
             }
             Self::FromDates(dates) => (
                 "from_dates",
                 dates.iter().copied().map(DateOut).collect::<Vec<_>>(),
             )
-                .into_pyobject(py)?
-                .into_any(),
-            Self::After(inner, cutoff) => ("after", inner.encode(py)?, DateOut(*cutoff))
-                .into_pyobject(py)?
-                .into_any(),
-            Self::Until(inner, cutoff) => ("until", inner.encode(py)?, DateOut(*cutoff))
-                .into_pyobject(py)?
-                .into_any(),
-        };
-        Ok(object)
+                .into_pyobject(py)?,
+            Self::After(inner, cutoff) => {
+                ("after", inner.encode(py)?, DateOut(*cutoff)).into_pyobject(py)?
+            }
+            Self::Until(inner, cutoff) => {
+                ("until", inner.encode(py)?, DateOut(*cutoff)).into_pyobject(py)?
+            }
+        })
     }
 }
 

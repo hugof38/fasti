@@ -55,7 +55,7 @@ use crate::period::Period;
 
 #[pyfunction]
 pub fn _rebuild_weekday(value: WeekdayArg) -> Weekday {
-    value.0
+    Weekday::wrap(value.0)
 }
 
 #[pyfunction]

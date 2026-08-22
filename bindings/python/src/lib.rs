@@ -84,7 +84,7 @@ fn day_count(
     schedule: Option<PyRef<'_, schedule::Schedule>>,
     termination: Option<DateArg>,
 ) -> PyResult<i64> {
-    Ok(resolve_day_count(convention, frequency, schedule, termination)?.day_count(start, end))
+    resolve_day_count(convention, frequency, schedule, termination)?.day_count(start, end)
 }
 
 fn easter(

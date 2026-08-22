@@ -7,12 +7,115 @@
 //! (`"modified_following"`, `"ModifiedFollowing"`, `"mf"`). Matching
 //! ignores case and punctuation, so a spelling that reads naturally in
 //! a config file works too.
+//!
+//! Each vocabulary is a table: the members, the core-crate value each
+//! stands for, the name it prints and pickles as, and the spellings it
+//! answers to. `named_enum!` turns that into the conversions, the
+//! argument type, the parser and the pickle support, so the table stays
+//! the only part worth reading.
 
 use pyo3::prelude::*;
 use pyo3::{Borrowed, exceptions::PyTypeError};
 
 use crate::convert::{normalize, type_name};
 use crate::error::invalid;
+
+/// Generate everything mechanical about a vocabulary enum.
+///
+/// Spellings are matched after [`normalize`], so they are written
+/// lowercase and unpunctuated. `methods` is spliced into the generated
+/// `#[pymethods]` block, because `PyO3` allows a type only one.
+macro_rules! named_enum {
+    (
+        $py:ident => $core:path,
+        arg: $arg:ident,
+        rebuild: $rebuild:literal,
+        expected: $expected:literal,
+        members {
+            $( $member:ident => $variant:ident, $canonical:literal, [$($spelling:literal),+] ; )+
+        }
+        $( methods { $($methods:tt)* } )?
+        $( fallback: $fallback:expr, )?
+    ) => {
+        impl $py {
+            /// The core-crate value this member stands for.
+            pub const fn inner(self) -> $core {
+                match self { $( Self::$member => <$core>::$variant, )+ }
+            }
+
+            /// The member standing for a core-crate value.
+            pub const fn wrap(value: $core) -> Self {
+                match value { $( <$core>::$variant => Self::$member, )+ }
+            }
+
+            /// The name this member prints and pickles as.
+            pub const fn canonical(self) -> &'static str {
+                match self { $( Self::$member => $canonical, )+ }
+            }
+
+            /// Resolve a spelling, ignoring case and punctuation.
+            pub fn from_name(name: &str) -> Option<Self> {
+                match normalize(name).as_str() {
+                    $( $($spelling)|+ => Some(Self::$member), )+
+                    _ => None,
+                }
+            }
+
+            /// The canonical names, for an error message.
+            fn spellings() -> String {
+                [$($canonical),+].join(", ")
+            }
+        }
+
+        #[pymethods]
+        impl $py {
+            $( $($methods)* )?
+
+            /// Coerce a name — or a member — to a member.
+            #[staticmethod]
+            fn parse(value: $arg) -> Self {
+                Self::wrap(value.0)
+            }
+
+            fn __str__(&self) -> &'static str {
+                self.canonical()
+            }
+
+            fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::pickle::Reduced<'py>> {
+                crate::pickle::reduce(py, $rebuild, (self.canonical(),))
+            }
+        }
+
+        #[doc = concat!("A ", $expected, ", as an argument: the member or a name.")]
+        #[derive(Debug, Clone, Copy)]
+        pub struct $arg(pub $core);
+
+        impl FromPyObject<'_, '_> for $arg {
+            type Error = PyErr;
+
+            fn extract(ob: Borrowed<'_, '_, PyAny>) -> Result<Self, Self::Error> {
+                if let Ok(member) = ob.extract::<$py>() {
+                    return Ok(Self(member.inner()));
+                }
+                if let Ok(name) = ob.extract::<String>() {
+                    return match <$py>::from_name(&name) {
+                        Some(member) => Ok(Self(member.inner())),
+                        None => Err(invalid(format!(
+                            concat!("unknown ", $expected, ": {:?} (expected one of {})"),
+                            name,
+                            <$py>::spellings(),
+                        ))),
+                    };
+                }
+                $( if let Some(result) = ($fallback)(&ob) { return result.map(Self); } )?
+                Err(PyTypeError::new_err(format!(
+                    concat!("expected a ", $expected, ", got {}"),
+                    type_name(&ob)
+                )))
+            }
+        }
+    };
+}
 
 // ---- Weekday ------------------------------------------------------------
 
@@ -37,163 +140,49 @@ pub enum Weekday {
     Sun = 7,
 }
 
-#[pymethods]
-impl Weekday {
-    /// The ISO weekday number, matching `datetime.date.isoweekday()`.
-    #[getter]
-    const fn isoweekday(&self) -> u8 {
-        self.inner().get()
+named_enum! {
+    Weekday => fasti::Weekday,
+    arg: WeekdayArg,
+    rebuild: "_rebuild_weekday",
+    expected: "weekday",
+    members {
+        Mon => Mon, "Mon", ["mon", "monday", "mo"];
+        Tue => Tue, "Tue", ["tue", "tuesday", "tues", "tu"];
+        Wed => Wed, "Wed", ["wed", "wednesday", "we"];
+        Thu => Thu, "Thu", ["thu", "thursday", "thur", "thurs", "th"];
+        Fri => Fri, "Fri", ["fri", "friday", "fr"];
+        Sat => Sat, "Sat", ["sat", "saturday", "sa"];
+        Sun => Sun, "Sun", ["sun", "sunday", "su"];
     }
+    methods {
+        /// The ISO weekday number, matching `datetime.date.isoweekday()`.
+        #[getter]
+        const fn isoweekday(&self) -> u8 {
+            self.inner().get()
+        }
 
-    /// The `datetime.date.weekday()` number, where Monday is 0.
-    #[getter]
-    const fn weekday(&self) -> u8 {
-        self.inner().get() - 1
-    }
+        /// The `datetime.date.weekday()` number, where Monday is 0.
+        #[getter]
+        const fn weekday(&self) -> u8 {
+            self.inner().get() - 1
+        }
 
-    /// Coerce a weekday name (`"mon"`, `"Monday"`), an ISO number
-    /// (1–7), or a `Weekday` to a `Weekday`.
-    #[staticmethod]
-    fn parse(value: WeekdayArg) -> Self {
-        value.0
-    }
-
-    fn __str__(&self) -> String {
-        self.inner().to_string()
-    }
-
-    fn __int__(&self) -> u8 {
-        self.inner().get()
-    }
-
-    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::pickle::Reduced<'py>> {
-        crate::pickle::reduce(py, "_rebuild_weekday", (self.inner().get(),))
-    }
-}
-
-impl Weekday {
-    pub const fn inner(self) -> fasti::Weekday {
-        match self {
-            Self::Mon => fasti::Weekday::Mon,
-            Self::Tue => fasti::Weekday::Tue,
-            Self::Wed => fasti::Weekday::Wed,
-            Self::Thu => fasti::Weekday::Thu,
-            Self::Fri => fasti::Weekday::Fri,
-            Self::Sat => fasti::Weekday::Sat,
-            Self::Sun => fasti::Weekday::Sun,
+        fn __int__(&self) -> u8 {
+            self.inner().get()
         }
     }
-
-    pub const fn wrap(w: fasti::Weekday) -> Self {
-        match w {
-            fasti::Weekday::Mon => Self::Mon,
-            fasti::Weekday::Tue => Self::Tue,
-            fasti::Weekday::Wed => Self::Wed,
-            fasti::Weekday::Thu => Self::Thu,
-            fasti::Weekday::Fri => Self::Fri,
-            fasti::Weekday::Sat => Self::Sat,
-            fasti::Weekday::Sun => Self::Sun,
-        }
-    }
-}
-
-/// A weekday-valued argument: a [`Weekday`], a name, or an ISO number.
-#[derive(Debug, Clone, Copy)]
-pub struct WeekdayArg(pub Weekday);
-
-impl FromPyObject<'_, '_> for WeekdayArg {
-    type Error = PyErr;
-
-    fn extract(ob: Borrowed<'_, '_, PyAny>) -> Result<Self, Self::Error> {
-        if let Ok(w) = ob.extract::<Weekday>() {
-            return Ok(Self(w));
-        }
-        if let Ok(name) = ob.extract::<String>() {
-            let key = normalize(&name);
-            let day = match key.as_str() {
-                "mon" | "monday" | "mo" => Weekday::Mon,
-                "tue" | "tuesday" | "tues" | "tu" => Weekday::Tue,
-                "wed" | "wednesday" | "we" => Weekday::Wed,
-                "thu" | "thursday" | "thur" | "thurs" | "th" => Weekday::Thu,
-                "fri" | "friday" | "fr" => Weekday::Fri,
-                "sat" | "saturday" | "sa" => Weekday::Sat,
-                "sun" | "sunday" | "su" => Weekday::Sun,
-                _ => return Err(invalid(format!("unknown weekday name: {name:?}"))),
-            };
-            return Ok(Self(day));
-        }
-        if let Ok(n) = ob.extract::<i64>() {
-            let day = match n {
-                1 => Weekday::Mon,
-                2 => Weekday::Tue,
-                3 => Weekday::Wed,
-                4 => Weekday::Thu,
-                5 => Weekday::Fri,
-                6 => Weekday::Sat,
-                7 => Weekday::Sun,
-                _ => {
-                    return Err(invalid(format!(
-                        "weekday number must be 1..=7 (ISO: Mon=1, Sun=7 — as \
-                         date.isoweekday(), not date.weekday()), got {n}"
-                    )));
-                }
-            };
-            return Ok(Self(day));
-        }
-        Err(PyTypeError::new_err(format!(
-            "expected a Weekday, a weekday name, or an ISO number 1..=7, got {}",
-            type_name(&ob)
-        )))
-    }
-}
-
-// ---- Month --------------------------------------------------------------
-
-/// A month-valued argument: a number 1..=12 or a name (`"jul"`, `"July"`).
-#[derive(Debug, Clone, Copy)]
-pub struct MonthArg(pub fasti::Month);
-
-impl FromPyObject<'_, '_> for MonthArg {
-    type Error = PyErr;
-
-    fn extract(ob: Borrowed<'_, '_, PyAny>) -> Result<Self, Self::Error> {
-        if let Ok(n) = ob.extract::<u8>() {
-            return fasti::Month::try_from_u8(n)
-                .map(Self)
-                .map_err(crate::error::err);
-        }
-        if let Ok(name) = ob.extract::<String>() {
-            use fasti::Month as M;
-            const MONTHS: [(&str, M); 12] = [
-                ("january", M::Jan),
-                ("february", M::Feb),
-                ("march", M::Mar),
-                ("april", M::Apr),
-                ("may", M::May),
-                ("june", M::Jun),
-                ("july", M::Jul),
-                ("august", M::Aug),
-                ("september", M::Sep),
-                ("october", M::Oct),
-                ("november", M::Nov),
-                ("december", M::Dec),
-            ];
-            // A three-letter prefix is the usual spelling; anything
-            // shorter is too ambiguous to guess at.
-            let key = normalize(&name);
-            let found = MONTHS
-                .iter()
-                .find(|(full, _)| *full == key || (key.len() >= 3 && full.starts_with(&key)));
-            if let Some((_, month)) = found {
-                return Ok(Self(*month));
-            }
-            return Err(invalid(format!("unknown month name: {name:?}")));
-        }
-        Err(PyTypeError::new_err(format!(
-            "expected a month number 1..=12 or a month name, got {}",
-            type_name(&ob)
-        )))
-    }
+    // A weekday is also spelled as its ISO number, which is what
+    // `date.isoweekday()` hands you.
+    fallback: |ob: &Borrowed<'_, '_, PyAny>| {
+        let n = ob.extract::<i64>().ok()?;
+        Some(match u8::try_from(n).ok().and_then(|n| fasti::Weekday::try_from_u8(n).ok()) {
+            Some(weekday) => Ok(weekday),
+            None => Err(invalid(format!(
+                "weekday number must be 1..=7 (ISO: Mon=1, Sun=7 — as \
+                 date.isoweekday(), not date.weekday()), got {n}"
+            ))),
+        })
+    },
 }
 
 // ---- Business-day convention -------------------------------------------
@@ -221,79 +210,19 @@ pub enum BusinessDayConvention {
     Unadjusted,
 }
 
-#[pymethods]
-impl BusinessDayConvention {
-    /// Coerce a convention name to a `BusinessDayConvention`.
-    #[staticmethod]
-    fn parse(value: ConventionArg) -> Self {
-        Self::wrap(value.0)
-    }
-
-    pub fn __str__(&self) -> String {
-        self.inner().to_string()
-    }
-
-    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::pickle::Reduced<'py>> {
-        crate::pickle::reduce(py, "_rebuild_convention", (self.inner().to_string(),))
-    }
-}
-
-impl BusinessDayConvention {
-    pub const fn inner(self) -> fasti::BusinessDayConvention {
-        use fasti::BusinessDayConvention as C;
-        match self {
-            Self::Following => C::Following,
-            Self::ModifiedFollowing => C::ModifiedFollowing,
-            Self::Preceding => C::Preceding,
-            Self::ModifiedPreceding => C::ModifiedPreceding,
-            Self::Unadjusted => C::Unadjusted,
-        }
-    }
-
-    pub const fn wrap(c: fasti::BusinessDayConvention) -> Self {
-        use fasti::BusinessDayConvention as C;
-        match c {
-            C::Following => Self::Following,
-            C::ModifiedFollowing => Self::ModifiedFollowing,
-            C::Preceding => Self::Preceding,
-            C::ModifiedPreceding => Self::ModifiedPreceding,
-            C::Unadjusted => Self::Unadjusted,
-        }
-    }
-}
-
-/// A convention-valued argument: the enum or a name.
-#[derive(Debug, Clone, Copy)]
-pub struct ConventionArg(pub fasti::BusinessDayConvention);
-
-impl FromPyObject<'_, '_> for ConventionArg {
-    type Error = PyErr;
-
-    fn extract(ob: Borrowed<'_, '_, PyAny>) -> Result<Self, Self::Error> {
-        use fasti::BusinessDayConvention as C;
-        if let Ok(c) = ob.extract::<BusinessDayConvention>() {
-            return Ok(Self(c.inner()));
-        }
-        let Ok(name) = ob.extract::<String>() else {
-            return Err(PyTypeError::new_err(format!(
-                "expected a BusinessDayConvention or a convention name, got {}",
-                type_name(&ob)
-            )));
-        };
-        let convention = match normalize(&name).as_str() {
-            "following" | "f" | "succeeding" => C::Following,
-            "modifiedfollowing" | "mf" | "modfollowing" => C::ModifiedFollowing,
-            "preceding" | "p" | "previous" => C::Preceding,
-            "modifiedpreceding" | "mp" | "modpreceding" => C::ModifiedPreceding,
-            "unadjusted" | "u" | "none" | "nil" => C::Unadjusted,
-            _ => {
-                return Err(invalid(format!(
-                    "unknown business-day convention: {name:?} (expected one of \
-                     following, modified_following, preceding, modified_preceding, unadjusted)"
-                )));
-            }
-        };
-        Ok(Self(convention))
+named_enum! {
+    BusinessDayConvention => fasti::BusinessDayConvention,
+    arg: ConventionArg,
+    rebuild: "_rebuild_convention",
+    expected: "business-day convention",
+    members {
+        Following => Following, "Following", ["following", "f", "succeeding"];
+        ModifiedFollowing => ModifiedFollowing, "ModifiedFollowing",
+            ["modifiedfollowing", "mf", "modfollowing"];
+        Preceding => Preceding, "Preceding", ["preceding", "p", "previous"];
+        ModifiedPreceding => ModifiedPreceding, "ModifiedPreceding",
+            ["modifiedpreceding", "mp", "modpreceding"];
+        Unadjusted => Unadjusted, "Unadjusted", ["unadjusted", "u", "none", "nil"];
     }
 }
 
@@ -314,76 +243,15 @@ pub enum DateGenerationRule {
     Zero,
 }
 
-#[pymethods]
-impl DateGenerationRule {
-    /// Coerce a rule name to a `DateGenerationRule`.
-    #[staticmethod]
-    fn parse(value: GenerationArg) -> Self {
-        Self::wrap(value.0)
-    }
-
-    pub fn __str__(&self) -> &'static str {
-        match self {
-            Self::Forward => "forward",
-            Self::Backward => "backward",
-            Self::Zero => "zero",
-        }
-    }
-
-    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::pickle::Reduced<'py>> {
-        crate::pickle::reduce(py, "_rebuild_generation", (self.__str__(),))
-    }
-}
-
-impl DateGenerationRule {
-    pub const fn inner(self) -> fasti::DateGenerationRule {
-        use fasti::DateGenerationRule as R;
-        match self {
-            Self::Forward => R::Forward,
-            Self::Backward => R::Backward,
-            Self::Zero => R::Zero,
-        }
-    }
-
-    pub const fn wrap(r: fasti::DateGenerationRule) -> Self {
-        use fasti::DateGenerationRule as R;
-        match r {
-            R::Forward => Self::Forward,
-            R::Backward => Self::Backward,
-            R::Zero => Self::Zero,
-        }
-    }
-}
-
-/// A generation-rule argument: the enum or a name.
-#[derive(Debug, Clone, Copy)]
-pub struct GenerationArg(pub fasti::DateGenerationRule);
-
-impl FromPyObject<'_, '_> for GenerationArg {
-    type Error = PyErr;
-
-    fn extract(ob: Borrowed<'_, '_, PyAny>) -> Result<Self, Self::Error> {
-        use fasti::DateGenerationRule as R;
-        if let Ok(r) = ob.extract::<DateGenerationRule>() {
-            return Ok(Self(r.inner()));
-        }
-        let Ok(name) = ob.extract::<String>() else {
-            return Err(PyTypeError::new_err(format!(
-                "expected a DateGenerationRule or a rule name, got {}",
-                type_name(&ob)
-            )));
-        };
-        let rule = match normalize(&name).as_str() {
-            "forward" | "forwards" => R::Forward,
-            "backward" | "backwards" => R::Backward,
-            "zero" => R::Zero,
-            _ => {
-                return Err(invalid(format!(
-                    "unknown date generation rule: {name:?} (expected forward, backward, or zero)"
-                )));
-            }
-        };
-        Ok(Self(rule))
+named_enum! {
+    DateGenerationRule => fasti::DateGenerationRule,
+    arg: GenerationArg,
+    rebuild: "_rebuild_generation",
+    expected: "date generation rule",
+    members {
+        Forward => Forward, "forward", ["forward", "forwards"];
+        Backward => Backward, "backward", ["backward", "backwards"];
+        Zero => Zero, "zero", ["zero"];
     }
 }
 
@@ -415,113 +283,46 @@ pub enum Frequency {
     Daily = 365,
 }
 
-#[pymethods]
-impl Frequency {
-    /// Recurrences per year.
-    #[getter]
-    const fn per_year(&self) -> u16 {
-        self.inner().per_year()
+named_enum! {
+    Frequency => fasti::Frequency,
+    arg: FrequencyArg,
+    rebuild: "_rebuild_frequency",
+    expected: "frequency",
+    members {
+        Annual => Annual, "Annual", ["annual", "annually", "yearly", "1y", "12m"];
+        Semiannual => Semiannual, "Semiannual", ["semiannual", "semiannually", "halfyearly", "6m"];
+        EveryFourthMonth => EveryFourthMonth, "EveryFourthMonth",
+            ["everyfourthmonth", "triannual", "4m"];
+        Quarterly => Quarterly, "Quarterly", ["quarterly", "quarter", "3m"];
+        Bimonthly => Bimonthly, "Bimonthly", ["bimonthly", "2m"];
+        Monthly => Monthly, "Monthly", ["monthly", "1m"];
+        EveryFourthWeek => EveryFourthWeek, "EveryFourthWeek", ["everyfourthweek", "4w"];
+        Biweekly => Biweekly, "Biweekly", ["biweekly", "fortnightly", "2w"];
+        Weekly => Weekly, "Weekly", ["weekly", "1w"];
+        Daily => Daily, "Daily", ["daily", "1d"];
     }
+    methods {
+        /// Recurrences per year.
+        #[getter]
+        const fn per_year(&self) -> u16 {
+            self.inner().per_year()
+        }
 
-    /// The canonical `Period` for this frequency, e.g. `Period("6M")`
-    /// for `SEMIANNUAL`.
-    #[getter]
-    fn period(&self) -> crate::period::Period {
-        crate::period::Period(fasti::Period::from(self.inner()))
-    }
-
-    /// Coerce a frequency name, a `Period`, or a `Frequency`.
-    #[staticmethod]
-    fn parse(value: FrequencyArg) -> Self {
-        Self::wrap(value.0)
-    }
-
-    fn __str__(&self) -> String {
-        self.inner().to_string()
-    }
-
-    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::pickle::Reduced<'py>> {
-        crate::pickle::reduce(py, "_rebuild_frequency", (self.inner().to_string(),))
-    }
-}
-
-impl Frequency {
-    pub const fn inner(self) -> fasti::Frequency {
-        use fasti::Frequency as F;
-        match self {
-            Self::Annual => F::Annual,
-            Self::Semiannual => F::Semiannual,
-            Self::EveryFourthMonth => F::EveryFourthMonth,
-            Self::Quarterly => F::Quarterly,
-            Self::Bimonthly => F::Bimonthly,
-            Self::Monthly => F::Monthly,
-            Self::EveryFourthWeek => F::EveryFourthWeek,
-            Self::Biweekly => F::Biweekly,
-            Self::Weekly => F::Weekly,
-            Self::Daily => F::Daily,
+        /// The canonical `Period` for this frequency, e.g. `Period("6M")`
+        /// for `SEMIANNUAL`.
+        #[getter]
+        fn period(&self) -> crate::period::Period {
+            crate::period::Period(fasti::Period::from(self.inner()))
         }
     }
-
-    pub const fn wrap(f: fasti::Frequency) -> Self {
-        use fasti::Frequency as F;
-        match f {
-            F::Annual => Self::Annual,
-            F::Semiannual => Self::Semiannual,
-            F::EveryFourthMonth => Self::EveryFourthMonth,
-            F::Quarterly => Self::Quarterly,
-            F::Bimonthly => Self::Bimonthly,
-            F::Monthly => Self::Monthly,
-            F::EveryFourthWeek => Self::EveryFourthWeek,
-            F::Biweekly => Self::Biweekly,
-            F::Weekly => Self::Weekly,
-            F::Daily => Self::Daily,
-        }
-    }
-}
-
-/// A frequency-valued argument: the enum, a name, or a `Period`
-/// (`"6M"` is `SEMIANNUAL`).
-#[derive(Debug, Clone, Copy)]
-pub struct FrequencyArg(pub fasti::Frequency);
-
-impl FromPyObject<'_, '_> for FrequencyArg {
-    type Error = PyErr;
-
-    fn extract(ob: Borrowed<'_, '_, PyAny>) -> Result<Self, Self::Error> {
-        use fasti::Frequency as F;
-        if let Ok(f) = ob.extract::<Frequency>() {
-            return Ok(Self(f.inner()));
-        }
-        if let Ok(name) = ob.extract::<String>() {
-            let key = normalize(&name);
-            let frequency = match key.as_str() {
-                "annual" | "annually" | "yearly" | "1y" | "12m" => Some(F::Annual),
-                "semiannual" | "semiannually" | "halfyearly" | "6m" => Some(F::Semiannual),
-                "everyfourthmonth" | "4m" | "triannual" => Some(F::EveryFourthMonth),
-                "quarterly" | "quarter" | "3m" => Some(F::Quarterly),
-                "bimonthly" | "2m" => Some(F::Bimonthly),
-                "monthly" | "1m" => Some(F::Monthly),
-                "everyfourthweek" | "4w" => Some(F::EveryFourthWeek),
-                "biweekly" | "fortnightly" | "2w" => Some(F::Biweekly),
-                "weekly" | "1w" => Some(F::Weekly),
-                "daily" | "1d" => Some(F::Daily),
-                _ => None,
-            };
-            if let Some(f) = frequency {
-                return Ok(Self(f));
-            }
-        }
-        // Anything Period accepts, if it maps onto a canonical frequency.
-        let period = crate::period::PeriodArg::extract(ob).map_err(|_| {
-            PyTypeError::new_err(format!(
-                "expected a Frequency, a frequency name, or a Period, got {}",
-                type_name(&ob)
-            ))
-        })?;
-        F::try_from(period.0)
-            .map(Self)
-            .map_err(|_| invalid(format!("{} does not name a canonical frequency", period.0)))
-    }
+    // Any period that names a canonical frequency is one.
+    fallback: |ob: &Borrowed<'_, '_, PyAny>| {
+        let period = crate::period::PeriodArg::extract(*ob).ok()?;
+        Some(
+            fasti::Frequency::try_from(period.0)
+                .map_err(|_| invalid(format!("{} does not name a canonical frequency", period.0))),
+        )
+    },
 }
 
 // ---- Weekend shift ------------------------------------------------------
@@ -544,76 +345,67 @@ pub enum WeekendShift {
     SatBackSunForward,
 }
 
-#[pymethods]
-impl WeekendShift {
-    /// Coerce a shift name to a `WeekendShift`.
-    #[staticmethod]
-    fn parse(value: ShiftArg) -> Self {
-        Self::wrap(value.0)
-    }
-
-    fn __str__(&self) -> &'static str {
-        shift_repr(self.inner())
-    }
-
-    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::pickle::Reduced<'py>> {
-        crate::pickle::reduce(py, "_rebuild_shift", (shift_repr(self.inner()),))
+named_enum! {
+    WeekendShift => fasti::WeekendShift,
+    arg: ShiftArg,
+    rebuild: "_rebuild_shift",
+    expected: "weekend shift",
+    members {
+        None => None, "none", ["none", "lost"];
+        Forward => Forward, "forward", ["forward", "uk"];
+        SunForward => SunForward, "sun_forward", ["sunforward", "fed", "sifma"];
+        SatBackSunForward => SatBackSunForward, "sat_back_sun_forward",
+            ["satbacksunforward", "us", "federal"];
     }
 }
 
-impl WeekendShift {
-    pub const fn inner(self) -> fasti::WeekendShift {
-        use fasti::WeekendShift as S;
-        match self {
-            Self::None => S::None,
-            Self::Forward => S::Forward,
-            Self::SunForward => S::SunForward,
-            Self::SatBackSunForward => S::SatBackSunForward,
-        }
-    }
-
-    pub const fn wrap(s: fasti::WeekendShift) -> Self {
-        use fasti::WeekendShift as S;
-        match s {
-            S::None => Self::None,
-            S::Forward => Self::Forward,
-            S::SunForward => Self::SunForward,
-            S::SatBackSunForward => Self::SatBackSunForward,
-        }
-    }
+/// Render a [`fasti::WeekendShift`] the way [`ShiftArg`] accepts it back.
+pub fn shift_repr(shift: fasti::WeekendShift) -> &'static str {
+    WeekendShift::wrap(shift).canonical()
 }
 
-/// A weekend-shift argument: the enum or a name.
+// ---- Month --------------------------------------------------------------
+
+/// A month-valued argument: a number 1..=12 or a name (`"jul"`, `"July"`).
 #[derive(Debug, Clone, Copy)]
-pub struct ShiftArg(pub fasti::WeekendShift);
+pub struct MonthArg(pub fasti::Month);
 
-impl FromPyObject<'_, '_> for ShiftArg {
+impl FromPyObject<'_, '_> for MonthArg {
     type Error = PyErr;
 
     fn extract(ob: Borrowed<'_, '_, PyAny>) -> Result<Self, Self::Error> {
-        use fasti::WeekendShift as S;
-        if let Ok(s) = ob.extract::<WeekendShift>() {
-            return Ok(Self(s.inner()));
+        use fasti::Month as M;
+        const MONTHS: [(&str, M); 12] = [
+            ("january", M::Jan),
+            ("february", M::Feb),
+            ("march", M::Mar),
+            ("april", M::Apr),
+            ("may", M::May),
+            ("june", M::Jun),
+            ("july", M::Jul),
+            ("august", M::Aug),
+            ("september", M::Sep),
+            ("october", M::Oct),
+            ("november", M::Nov),
+            ("december", M::Dec),
+        ];
+        if let Ok(n) = ob.extract::<u8>() {
+            return M::try_from_u8(n).map(Self).map_err(crate::error::err);
         }
         let Ok(name) = ob.extract::<String>() else {
             return Err(PyTypeError::new_err(format!(
-                "expected a WeekendShift or a shift name, got {}",
+                "expected a month number 1..=12 or a month name, got {}",
                 type_name(&ob)
             )));
         };
-        let shift = match normalize(&name).as_str() {
-            "none" | "lost" => S::None,
-            "forward" | "uk" => S::Forward,
-            "sunforward" | "fed" | "sifma" => S::SunForward,
-            "satbacksunforward" | "us" | "federal" => S::SatBackSunForward,
-            _ => {
-                return Err(invalid(format!(
-                    "unknown weekend shift: {name:?} (expected none, forward, \
-                     sun_forward, or sat_back_sun_forward)"
-                )));
-            }
-        };
-        Ok(Self(shift))
+        // A three-letter prefix is the usual spelling; anything shorter
+        // is too ambiguous to guess at.
+        let key = normalize(&name);
+        MONTHS
+            .iter()
+            .find(|(full, _)| *full == key || (key.len() >= 3 && full.starts_with(&key)))
+            .map(|(_, month)| Self(*month))
+            .ok_or_else(|| invalid(format!("unknown month name: {name:?}")))
     }
 }
 
@@ -654,20 +446,9 @@ impl FromPyObject<'_, '_> for WeekendArg {
         // is wrong with *it* rather than "this is not a weekend".
         let mut days = Vec::new();
         for item in items {
-            days.push(item?.extract::<WeekdayArg>()?.0.inner());
+            days.push(item?.extract::<WeekdayArg>()?.0);
         }
         Ok(Self(W::from_weekdays(&days)))
-    }
-}
-
-/// Render a [`fasti::WeekendShift`] the way [`ShiftArg`] accepts it back.
-pub fn shift_repr(shift: fasti::WeekendShift) -> &'static str {
-    use fasti::WeekendShift as S;
-    match shift {
-        S::None => "none",
-        S::Forward => "forward",
-        S::SunForward => "sun_forward",
-        S::SatBackSunForward => "sat_back_sun_forward",
     }
 }
 
@@ -688,7 +469,7 @@ pub fn weekend_repr(weekend: fasti::Weekend) -> String {
         return "none".to_owned();
     }
     days.iter()
-        .map(|d| d.inner().to_string().to_lowercase())
+        .map(|d| d.canonical().to_lowercase())
         .collect::<Vec<_>>()
         .join("_")
 }
@@ -710,15 +491,12 @@ impl FromPyObject<'_, '_> for EasterMethodArg {
                 type_name(&ob)
             )));
         };
-        let method = match normalize(&name).as_str() {
-            "western" | "gregorian" | "catholic" | "protestant" => M::Western,
-            "orthodox" | "julian" | "eastern" => M::Orthodox,
-            _ => {
-                return Err(invalid(format!(
-                    "unknown Easter method: {name:?} (expected 'western' or 'orthodox')"
-                )));
-            }
-        };
-        Ok(Self(method))
+        match normalize(&name).as_str() {
+            "western" | "gregorian" | "catholic" | "protestant" => Ok(Self(M::Western)),
+            "orthodox" | "julian" | "eastern" => Ok(Self(M::Orthodox)),
+            _ => Err(invalid(format!(
+                "unknown Easter method: {name:?} (expected 'western' or 'orthodox')"
+            ))),
+        }
     }
 }

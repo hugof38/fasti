@@ -1,5 +1,7 @@
 """The shape of the package: exports, typing marker, versions, enums."""
 
+import ast
+import pathlib
 from datetime import date
 import importlib.metadata
 
@@ -19,8 +21,6 @@ def test_version_matches_the_installed_distribution():
 
 
 def test_package_ships_a_typing_marker():
-    import pathlib
-
     root = pathlib.Path(fasti.__file__).parent
     assert (root / "py.typed").is_file()
     assert (root / "_fasti.pyi").is_file()
@@ -80,64 +80,43 @@ def test_readme_quickstart_runs():
     assert 4.9 < float(accrued) < 5.1
 
 
-def _stub_names():
-    """Top-level names declared in the stub file."""
-    import ast
-    import pathlib
-
-    stub = pathlib.Path(fasti.__file__).parent / "_fasti.pyi"
-    tree = ast.parse(stub.read_text())
+def _declared(node):
+    """The names a stub class or module body declares."""
     names = set()
-    for node in tree.body:
-        if isinstance(node, (ast.ClassDef, ast.FunctionDef)):
-            names.add(node.name)
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            names.add(node.target.id)
+    for item in node.body:
+        if isinstance(item, (ast.ClassDef, ast.FunctionDef)):
+            names.add(item.name)
+        elif isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+            names.add(item.target.id)
     return names
 
 
-def test_stub_covers_every_public_name():
-    """The stub and the compiled module must not drift apart."""
+@pytest.fixture(scope="module")
+def stub():
+    path = pathlib.Path(fasti.__file__).parent / "_fasti.pyi"
+    return ast.parse(path.read_text())
+
+
+def test_the_stub_and_the_module_agree(stub):
+    """Neither may carry a public name the other does not."""
     import fasti._fasti as core
 
+    declared = _declared(stub)
     exported = {name for name in dir(core) if not name.startswith("_")} | {"__version__"}
-    missing = exported - _stub_names()
-    assert not missing, f"missing from _fasti.pyi: {sorted(missing)}"
-
-
-def test_stub_declares_nothing_the_module_lacks():
-    import fasti._fasti as core
-
-    aliases = {name for name in _stub_names() if name.endswith("Like")}
-    extra = _stub_names() - aliases - set(dir(core))
+    assert not exported - declared, f"missing from _fasti.pyi: {sorted(exported - declared)}"
+    # The `*Like` aliases exist only for the type checker.
+    aliases = {name for name in declared if name.endswith("Like")}
+    extra = declared - aliases - set(dir(core))
     assert not extra, f"declared in _fasti.pyi but absent from the module: {sorted(extra)}"
 
 
-def test_stub_classes_declare_their_members():
-    """Every method on a bound class is described by the stub."""
-    import ast
-    import pathlib
-
-    stub = pathlib.Path(fasti.__file__).parent / "_fasti.pyi"
-    tree = ast.parse(stub.read_text())
+def test_the_stub_describes_every_method(stub):
     import fasti._fasti as core
 
-    for node in tree.body:
-        if not isinstance(node, ast.ClassDef):
-            continue
-        cls = getattr(core, node.name, None)
+    for node in stub.body:
+        cls = getattr(core, node.name, None) if isinstance(node, ast.ClassDef) else None
         if cls is None:
             continue
-        declared = {
-            item.name
-            for item in node.body
-            if isinstance(item, (ast.FunctionDef, ast.AnnAssign, ast.ClassDef))
-            and not isinstance(item, ast.AnnAssign)
-        } | {
-            item.target.id
-            for item in node.body
-            if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
-        }
         public = {name for name in vars(cls) if not name.startswith("_")}
-        missing = public - declared
+        missing = public - _declared(node)
         assert not missing, f"{node.name} is missing {sorted(missing)} from the stub"

@@ -173,10 +173,13 @@ fn parse_period_str(text: &str) -> PyResult<fasti::Period> {
             "cannot parse period {text:?}: it is empty"
         )));
     }
-    // Frequency names first: "quarterly" is a period as much as "3M" is.
-    if let Some(f) = frequency_by_name(&key) {
-        let period = fasti::Period::from(f);
-        return signed(period, negate, text);
+    // "quarterly" is a period as much as "3M" is, and the frequency
+    // vocabulary already knows those names. Only names, though: "12M" is
+    // twelve months, not the annual frequency's canonical one year.
+    if !key.starts_with(|c: char| c.is_ascii_digit())
+        && let Some(frequency) = Frequency::from_name(&key)
+    {
+        return signed(fasti::Period::from(frequency.inner()), negate, text);
     }
     // <digits><unit>, with the unit spelled long or short.
     let digits: String = key.chars().take_while(char::is_ascii_digit).collect();
@@ -218,23 +221,6 @@ fn signed(period: fasti::Period, negate: bool, text: &str) -> PyResult<fasti::Pe
     } else {
         Ok(period)
     }
-}
-
-fn frequency_by_name(key: &str) -> Option<fasti::Frequency> {
-    use fasti::Frequency as F;
-    Some(match key {
-        "annual" | "annually" | "yearly" => F::Annual,
-        "semiannual" | "semiannually" | "halfyearly" => F::Semiannual,
-        "everyfourthmonth" | "triannual" => F::EveryFourthMonth,
-        "quarterly" | "quarter" => F::Quarterly,
-        "bimonthly" => F::Bimonthly,
-        "monthly" => F::Monthly,
-        "everyfourthweek" => F::EveryFourthWeek,
-        "biweekly" | "fortnightly" => F::Biweekly,
-        "weekly" => F::Weekly,
-        "daily" => F::Daily,
-        _ => return None,
-    })
 }
 
 /// A period-valued argument: a [`Period`], a string, a
