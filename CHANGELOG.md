@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Python bindings under `bindings/python`, published as `fasti-py`
+  (import name `fasti`). They are their own cargo workspace with their
+  own lockfile, and the root manifest excludes them from the packaged
+  crate, so nothing here changes for a Rust dependent.
+
 ### Changed
 
 - Calendar evaluation now expands rules instead of matching them:

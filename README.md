@@ -53,6 +53,27 @@ same capability surface with:
 | Day counts | `DayCount`: ACT/360, ACT/365F, 30/360 (Bond Basis, US, 30E/360, 30E/360 ISDA), ACT/ACT (ISDA and schedule-aware ICMA) — all returning `Fraction` |
 | Schedules | `Schedule` / `ScheduleBuilder`: forward/backward/zero generation, stubs, end-of-month preservation |
 
+## Python
+
+The bindings live in [`bindings/python`](./bindings/python) and ship as
+`fasti-py` on PyPI (`fasti` was taken by an unrelated project); the
+import name is `fasti`.
+
+```console
+$ pip install fasti-py
+```
+
+```python
+>>> import datetime
+>>> from fasti.calendars import us
+>>> us.SETTLEMENT.adjust(datetime.date(2024, 7, 4), "following")
+datetime.date(2024, 7, 5)
+
+```
+
+Dates cross as `datetime.date` and year fractions come back as
+`fractions.Fraction`, so the float-free guarantee survives the boundary.
+
 ## Install
 
 ```toml

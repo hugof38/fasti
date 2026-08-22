@@ -76,6 +76,62 @@ design constraints. The short version:
 5. If ported from QuantLib, attribute the upstream file in the module
    docs and document any deliberate deviation.
 
+## Python bindings
+
+`bindings/python` holds the `fasti-py` distribution (import name
+`fasti`). It is **its own cargo workspace with its own `Cargo.lock`**, so
+pyo3 never reaches the core crate's MSRV job, lockfile or `cargo deny`
+run; the root manifest excludes it from the packaged `.crate`. Working
+on it:
+
+```bash
+cd bindings/python
+maturin develop            # build the extension into the active venv
+pytest                     # suite, plus every >>> example in the
+                           # package and README-py.md
+mypy                       # stubs and tests, strict
+cargo fmt --all --check
+cargo clippy --locked --all-targets -- -D warnings
+```
+
+The binding is a translation layer, not a second library. Every Python
+name maps to one in the crate, with the same method names, the same
+semantics and the same argument order; anything with no crate
+counterpart has to earn its place in a sentence. Dates cross the
+boundary as `datetime.date` and nothing else, and year fractions come
+back as `fractions.Fraction` — the crate is float-free and that has to
+survive the boundary. See
+[`bindings/python/README-py.md`](./bindings/python/README-py.md) for the
+rest of the rules, and the note there on why the file is not called
+`README.md`.
+
+Two things worth knowing before you change something:
+
+- CI pins **Python 3.10**, the abi3 floor. `doctest` compares exception
+  messages differently before 3.11, so write an expected traceback as
+  one line ending in an ellipsis.
+- Doc comments on `#[pyclass]` and `#[pyfunction]` items become Python
+  docstrings, and their `>>>` examples run under pytest. Write them
+  without markdown code fences — a fence becomes expected output.
+
+## Releases
+
+Two independent trains, whose tag patterns do not overlap:
+
+| Tag | Workflow | Publishes | Version of record |
+|---|---|---|---|
+| `v*` | `release.yml` | the crate, to crates.io | `Cargo.toml` |
+| `py-v*` | `release-python.yml` | `fasti-py`, to PyPI | `bindings/python/Cargo.toml` |
+
+Each workflow refuses to publish if its tag disagrees with its own
+manifest. The Python train builds one abi3 wheel per platform
+(manylinux and musllinux for x86_64 and aarch64, macOS for both
+architectures, Windows x64), plus a free-threaded 3.14t wheel per
+platform, checks them with `abi3audit --strict` and
+`twine check --strict`, and publishes through PyPI trusted publishing
+from a `pypi` environment. `py-v0.1.0` is not matched by `v*`, so
+tagging one never fires the other.
+
 ## Commit hygiene
 
 Small commits that each leave the workspace green. Write commit
