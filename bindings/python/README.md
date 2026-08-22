@@ -49,8 +49,7 @@ rather than quietly converted:
 >>> import datetime, fasti
 >>> fasti.calendars.US_NYSE.is_holiday("2026-07-03")
 Traceback (most recent call last):
-TypeError: expected a datetime.date, got a str; parse it first, e.g.
-datetime.date.fromisoformat('2026-07-03') ...
+TypeError: expected a datetime.date, got a str; parse it first, ...
 >>> fasti.calendars.US_NYSE.is_holiday(datetime.datetime(2026, 7, 3, 15, 30))
 Traceback (most recent call last):
 TypeError: expected a datetime.date, got a datetime; call .date() on it, ...
