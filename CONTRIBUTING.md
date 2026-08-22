@@ -127,6 +127,58 @@ Ground rules on top of the crate's own:
   the `py-v*` release tag has to match it. Keep it in step with the
   crate version unless a binding-only fix needs to ship alone.
 
+## Releasing
+
+Two release trains, one repository. The tag is the trigger; the version
+of record is the one in the manifest, and each workflow refuses to
+publish if the two disagree — which is the failure that would otherwise
+burn a version number on a registry that never lets it go.
+
+| Release | Bump | Tag | Workflow | Publishes |
+|---|---|---|---|---|
+| Rust crate | `Cargo.toml` | `v0.2.0` | `release.yml` | crates.io + a GitHub release |
+| Python package | `bindings/python/Cargo.toml` | `py-v0.2.0` | `release-python.yml` | PyPI (wheels + sdist) |
+
+The patterns do not overlap: `py-v0.2.0` does not match `v*`, so tagging
+one train never fires the other. To release both, bump both manifests in
+the same commit and push both tags — the runs are independent, and one
+failing does not block the other.
+
+```bash
+# Rust only
+git tag v0.2.0 && git push origin v0.2.0
+
+# Python only
+git tag py-v0.2.0 && git push origin py-v0.2.0
+
+# Both
+git push origin v0.2.0 py-v0.2.0
+```
+
+Tag the merge commit on `main`, not a branch head — a tag is what the
+workflow checks out.
+
+Keep the two versions in step unless a binding-only fix genuinely needs
+to ship alone. The wheel is built from the crate *source at that commit*
+(a path dependency, not the crates.io release), so a Python release can
+carry core changes that crates.io has not seen. Matching version numbers
+are what makes "which crate is in this wheel?" answerable.
+
+`CHANGELOG.md` is keyed by crate version, and the Rust workflow refuses
+to release a version with no section in it. A Python-only release has no
+section of its own; note it under the crate version it ships.
+
+Before a train's first run, its credentials have to exist: the crates.io
+job needs `CARGO_REGISTRY_TOKEN` in the `crates-io` environment (or a
+crates.io Trusted Publisher), and the PyPI job needs a Trusted Publisher
+configured for this repository and `release-python.yml`, plus a `pypi`
+environment. Both are one-time setup outside the repository.
+
+If a release fails *before* publishing — a gate, a mismatched tag — fix
+it, delete the tag, and re-tag. If it fails *after* one registry has
+accepted the upload, that version is spent: neither crates.io nor PyPI
+allows re-uploading one, so bump and tag again.
+
 ## Commit hygiene
 
 Small commits that each leave the workspace green. Write commit
