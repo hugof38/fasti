@@ -13,12 +13,12 @@ use crate::pickle::{Reduced, reduce};
 /// it again. Holding the arguments rather than a rendered string keeps
 /// `repr` and `__reduce__` from drifting apart, and keeps both honest
 /// about what the rule actually is.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Spec {
     Fixed {
         month: fasti::Month,
         day: u8,
-        shift: fasti::WeekendShift,
+        shift: crate::enums::WeekendShift,
     },
     NthWeekday {
         n: u8,
@@ -65,13 +65,39 @@ const fn method_name(method: fasti::EasterMethod) -> &'static str {
 /// >>> cal = Calendar.custom("Acme", rules=[juneteenth])
 /// >>> cal.is_holiday(date(2027, 6, 18))  # 2027-06-19 is a Saturday
 /// True
-#[pyclass(module = "fasti", from_py_object, frozen, str)]
+///
+/// Rules compare by what they say, not by identity:
+///
+/// >>> Rule.fixed("Jul", 4) == Rule.fixed(7, 4)
+/// True
+/// >>> Rule.fixed("Jul", 4) == Rule.fixed("Jul", 4, from_year=1971)
+/// False
+#[pyclass(module = "fasti", from_py_object, frozen, eq, hash, str)]
 #[derive(Debug, Clone)]
 pub struct Rule {
     pub inner: fasti::Rule,
     spec: Spec,
     from_year: Option<u16>,
     to_year: Option<u16>,
+}
+
+/// Accept either one rule or an iterable of them, the way
+/// [`crate::convert::dates`] does for dates.
+pub fn rules(ob: &Bound<'_, PyAny>) -> PyResult<Vec<Rule>> {
+    if let Ok(one) = ob.extract::<Rule>() {
+        return Ok(vec![one]);
+    }
+    let items = ob.try_iter().map_err(|_| {
+        pyo3::exceptions::PyTypeError::new_err(format!(
+            "expected a Rule or an iterable of them, got {}",
+            crate::convert::type_name(ob)
+        ))
+    })?;
+    let mut rules = Vec::new();
+    for item in items {
+        rules.push(item?.extract::<Rule>()?);
+    }
+    Ok(rules)
 }
 
 /// Build the optional year range a rule is active over.
@@ -145,6 +171,7 @@ impl Rule {
         }
         let shift = shift.map_or(fasti::WeekendShift::None, |s| s.0);
         let mut rule = fasti::FixedDate::new(month.0, day).shift(shift);
+        let shift = crate::enums::WeekendShift::wrap(shift);
         if let Some(range) = years(from_year, to_year)? {
             rule = rule.years(range);
         }
@@ -296,7 +323,7 @@ impl Rule {
         let years = self.years_repr();
         match self.spec {
             Spec::Fixed { month, day, shift } => {
-                let shift = match shift {
+                let shift = match shift.inner() {
                     fasti::WeekendShift::None => String::new(),
                     other => format!(", shift='{}'", shift_repr(other)),
                 };
@@ -331,7 +358,7 @@ impl Rule {
             Spec::Fixed { month, day, shift } => {
                 payload.set_item("month", month.get())?;
                 payload.set_item("day", day)?;
-                payload.set_item("shift", shift_repr(shift))?;
+                payload.set_item("shift", shift_repr(shift.inner()))?;
             }
             Spec::NthWeekday { n, weekday, month } => {
                 payload.set_item("n", n)?;
@@ -396,6 +423,26 @@ pub fn rebuild(kind: &str, payload: &Bound<'_, PyDict>) -> PyResult<Rule> {
         ),
         "one_off" => Ok(Rule::one_off(required("date")?.extract()?)),
         _ => Err(invalid(format!("unknown rule kind: {kind:?}"))),
+    }
+}
+
+/// A rule is exactly its arguments: `inner` is built from them, so it
+/// has no say in whether two rules are the same.
+impl PartialEq for Rule {
+    fn eq(&self, other: &Self) -> bool {
+        self.spec == other.spec
+            && self.from_year == other.from_year
+            && self.to_year == other.to_year
+    }
+}
+
+impl Eq for Rule {}
+
+impl std::hash::Hash for Rule {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.spec.hash(state);
+        self.from_year.hash(state);
+        self.to_year.hash(state);
     }
 }
 

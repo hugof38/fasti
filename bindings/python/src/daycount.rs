@@ -9,7 +9,7 @@ use crate::enums::FrequencyArg;
 use crate::error::{err, invalid};
 use crate::schedule::Schedule;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Kind {
     Act360,
     Act365Fixed,
@@ -52,8 +52,8 @@ enum Kind {
 /// Fraction(1, 4)
 /// >>> float(fasti.DayCount("ACT/365F").year_fraction(date(2025, 1, 1), date(2026, 1, 1)))
 /// 1.0
-#[pyclass(module = "fasti", from_py_object, frozen, eq)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[pyclass(module = "fasti", from_py_object, frozen, eq, hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DayCount {
     kind: Kind,
 }

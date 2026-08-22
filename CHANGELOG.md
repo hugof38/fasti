@@ -20,7 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value rebuilds by replaying the constructor calls that made it, so
   calendars and schedules can cross a process boundary intact — and the
   extension is free-thread-safe, with wheels for free-threaded CPython
-  3.14 alongside the `abi3` ones.
+  3.14 alongside the `abi3` ones. Values compare and hash structurally —
+  calendars and rules by how they were built, so an unpickled calendar
+  equals its original and either can be a dict key — and the methods
+  that extend a calendar take a single date or rule as readily as a
+  list.
 
 ### Fixed
 

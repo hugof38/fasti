@@ -119,6 +119,21 @@ Day's substitute to the Tuesday.
 True
 ```
 
+Extending a built-in is a one-liner, and leaves the original alone —
+every calendar is immutable, so each of these returns a new one:
+
+```python
+>>> from datetime import date
+>>> from fasti import calendars
+>>> nyse = calendars.US_NYSE
+>>> closed = nyse.with_holidays(date(2026, 8, 14))          # one date, or a list
+>>> closed.is_holiday(date(2026, 8, 14)), nyse.is_holiday(date(2026, 8, 14))
+(True, False)
+>>> import fasti
+>>> nyse.with_rules(fasti.Rule.fixed("Oct", 31, shift="forward")).is_holiday(date(2026, 10, 31))
+True
+```
+
 ### Schedules and accrual
 
 ```python
@@ -153,6 +168,13 @@ against.
 - **Holiday data is not a promise about the future.** Calendars encode
   published rules, not announcements. Rules that changed have effective
   years attached; one-off closures are one-offs.
+- **Values compare and hash by what they are.** Two calendars are equal
+  when they were built the same way — same built-in, same rules added in
+  the same order — so `Calendar("nyse") == Calendar("US.NYSE")`, an
+  unpickled calendar equals the one it came from, and any of these can
+  be a dict key. It is not a comparison of the days two calendars call
+  holidays: settling that means walking three centuries, which is not
+  what `==` should cost.
 - **Everything pickles**, so calendars, schedules and conventions can be
   handed to a `multiprocessing` worker, cached, or sent through `joblib`
   or `dask` like any other value. A value rebuilds by replaying the

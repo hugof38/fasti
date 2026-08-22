@@ -114,6 +114,36 @@ impl FromPyObject<'_, '_> for DateArg {
     }
 }
 
+/// Accept either one date or an iterable of them.
+///
+/// Adding a single blackout day is the common case, and
+/// `with_holidays(day)` is what a caller writes before
+/// `with_holidays([day])` occurs to them. A `datetime.date` is not
+/// iterable, so there is nothing to disambiguate.
+pub fn dates(ob: &Bound<'_, PyAny>) -> PyResult<Vec<Date>> {
+    if let Ok(one) = ob.extract::<DateArg>() {
+        return Ok(vec![one.0]);
+    }
+    // A string is iterable, so without this it would be read as a
+    // sequence of characters and complain about the first one instead of
+    // about the string.
+    if ob.is_instance_of::<PyString>() {
+        return to_date(ob).map(|date| vec![date]);
+    }
+    let items = ob.try_iter().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "expected a datetime.date or an iterable of them, got {}",
+            type_name(ob)
+        ))
+    })?;
+    // Element by element, so a bad entry reports what is wrong with it.
+    let mut dates = Vec::new();
+    for item in items {
+        dates.push(item?.extract::<DateArg>()?.0);
+    }
+    Ok(dates)
+}
+
 /// A date-valued return. Always a `datetime.date`.
 #[derive(Debug, Clone, Copy)]
 pub struct DateOut(pub Date);

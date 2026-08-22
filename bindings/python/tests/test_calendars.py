@@ -153,6 +153,36 @@ def test_custom_calendar_from_rules_and_one_offs():
     assert not cal.is_holiday(date(2021, 6, 18))  # rule starts in 2022
 
 
+@pytest.mark.parametrize("wrap", [lambda x: x, lambda x: [x]], ids=["bare", "in a list"])
+def test_a_single_holiday_or_rule_needs_no_list(wrap):
+    """Adding one blackout day is the common case; it reads like one."""
+    day = date(2026, 8, 14)
+    assert calendars.US_NYSE.with_holidays(wrap(day)).is_holiday(day)
+    halloween = fasti.Rule.fixed("Oct", 31)
+    extended = calendars.US_NYSE.with_rules(wrap(halloween))
+    assert extended.is_holiday(date(2026, 10, 31))
+    assert fasti.Calendar.custom("A", rules=wrap(halloween), holidays=wrap(day)).is_holiday(day)
+
+
+def test_the_scalar_and_list_forms_build_the_same_calendar():
+    day = date(2026, 8, 14)
+    assert calendars.US_NYSE.with_holidays(day) == calendars.US_NYSE.with_holidays([day])
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("2026-08-14", "fromisoformat"),
+        (42, "iterable of them"),
+        ([date(2026, 8, 14), "2026-09-15"], "fromisoformat"),
+    ],
+    ids=["a string", "a number", "a list with a string in it"],
+)
+def test_holidays_that_are_not_dates_say_so(value, message):
+    with pytest.raises(TypeError, match=message):
+        calendars.US_NYSE.with_holidays(value)
+
+
 def test_with_holidays_and_renamed_do_not_mutate_the_original():
     base = calendars.WEEKENDS_ONLY
     extended = base.with_holidays([date(2026, 8, 14)]).renamed("Acme")

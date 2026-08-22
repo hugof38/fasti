@@ -136,7 +136,7 @@ pub fn rebuild(py: Python<'_>, spec: &Bound<'_, PyAny>) -> PyResult<Schedule> {
 /// datetime.date(2025, 1, 15)
 /// >>> [(a, b) for a, b in s.periods()][0]
 /// (datetime.date(2025, 1, 15), datetime.date(2025, 7, 15))
-#[pyclass(module = "fasti", from_py_object, frozen, eq)]
+#[pyclass(module = "fasti", from_py_object, frozen, eq, hash)]
 #[derive(Debug, Clone)]
 pub struct Schedule {
     pub inner: fasti::Schedule,
@@ -152,6 +152,15 @@ impl PartialEq for Schedule {
 }
 
 impl Eq for Schedule {}
+
+/// The dates are enough to hash on: equal schedules share them, and two
+/// schedules that differ only in their stub reference grid are allowed
+/// to collide.
+impl std::hash::Hash for Schedule {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.inner.dates().hash(state);
+    }
+}
 
 impl Schedule {
     /// Wrap an explicit date list, recording that this is where the

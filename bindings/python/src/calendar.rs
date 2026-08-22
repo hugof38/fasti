@@ -64,7 +64,7 @@ fn builtin(name: &str) -> Option<(&'static str, fasti::Calendar<'static>)> {
 /// again. Built-ins carry `Rule::Custom` predicates — fn pointers with
 /// no data to serialize — so a built-in is recorded by name and rebuilt
 /// from the registry, never rule by rule.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Origin {
     /// A registry calendar, by canonical name.
     Builtin(&'static str),
@@ -125,12 +125,12 @@ pub fn rebuild(spec: &Bound<'_, PyAny>) -> PyResult<Calendar> {
     let weekend = |item: Bound<'_, PyAny>| -> PyResult<WeekendArg> { item.extract() };
     match tag.as_str() {
         "builtin" => Calendar::py_new(&spec.get_item(1)?.extract::<String>()?),
-        "custom" => Ok(Calendar::custom(
+        "custom" => Calendar::custom(
             &spec.get_item(1)?.extract::<String>()?,
             Some(weekend(spec.get_item(2)?)?),
-            Some(spec.get_item(3)?.extract::<Vec<Rule>>()?),
+            Some(&spec.get_item(3)?),
             None,
-        )),
+        ),
         "renamed" => {
             Ok(rebuild(&spec.get_item(1)?)?.renamed(&spec.get_item(2)?.extract::<String>()?))
         }
@@ -155,10 +155,39 @@ pub fn rebuild(spec: &Bound<'_, PyAny>) -> PyResult<Calendar> {
 /// False
 /// >>> nyse.next_business_day(datetime.date(2026, 7, 3))
 /// datetime.date(2026, 7, 6)
-#[pyclass(module = "fasti", frozen)]
+///
+/// Calendars compare by how they were built — the same name, weekend and
+/// rules, reached the same way — which is what survives a pickle and
+/// what makes a calendar usable as a dict key:
+///
+/// >>> fasti.Calendar("nyse") == fasti.Calendar("US.NYSE")
+/// True
+/// >>> nyse == nyse.with_holidays([datetime.date(2026, 8, 14)])
+/// False
+///
+/// It is deliberately not a comparison of the days the two calendars
+/// call holidays: settling that takes a walk over three centuries, which
+/// is not what `==` should cost. Two calendars that agree on every date
+/// but were assembled differently compare unequal.
+#[pyclass(module = "fasti", frozen, eq, hash)]
 pub struct Calendar {
     builder: fasti::CalendarBuilder,
     origin: Origin,
+}
+
+/// The builder is derived from the origin, so the origin decides.
+impl PartialEq for Calendar {
+    fn eq(&self, other: &Self) -> bool {
+        self.origin == other.origin
+    }
+}
+
+impl Eq for Calendar {}
+
+impl std::hash::Hash for Calendar {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.origin.hash(state);
+    }
 }
 
 impl Calendar {
@@ -174,6 +203,25 @@ impl Calendar {
     /// records so it can rebuild the calendar it was generated against.
     pub fn origin(&self) -> Origin {
         self.origin.clone()
+    }
+
+    /// This calendar plus extra holiday rules.
+    pub fn with_rules(&self, rules: Vec<Rule>) -> Self {
+        let mut builder = self.builder.clone();
+        for rule in &rules {
+            builder = builder.with_rule(rule.inner);
+        }
+        // Appending to a calendar that was itself appended to is one
+        // list of extra rules, not two — otherwise adding two holidays
+        // in two calls would compare unequal to adding them in one.
+        let origin = match self.origin.clone() {
+            Origin::Rules(base, mut existing) => {
+                existing.extend(rules);
+                Origin::Rules(base, existing)
+            }
+            base => Origin::Rules(Box::new(base), rules),
+        };
+        Self::from_builder(builder, origin)
     }
 }
 
@@ -227,34 +275,31 @@ impl Calendar {
     pub fn custom(
         name: &str,
         weekend: Option<WeekendArg>,
-        rules: Option<Vec<Rule>>,
-        holidays: Option<Vec<DateArg>>,
-    ) -> Self {
+        rules: Option<&Bound<'_, PyAny>>,
+        holidays: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
         let weekend = weekend.map_or(fasti::Weekend::SAT_SUN, |w| w.0);
+        let rules = rules.map(crate::rules::rules).transpose()?;
+        let holidays = holidays.map(crate::convert::dates).transpose()?;
         // One-off holidays are rules; folding them in here keeps a
         // calendar's provenance a single list.
         let rules: Vec<Rule> = rules
             .into_iter()
             .flatten()
-            .chain(
-                holidays
-                    .into_iter()
-                    .flatten()
-                    .map(|date| Rule::one_off_rule(date.0)),
-            )
+            .chain(holidays.into_iter().flatten().map(Rule::one_off_rule))
             .collect();
         let mut builder = fasti::CalendarBuilder::new(name, weekend);
         for rule in &rules {
             builder = builder.with_rule(rule.inner);
         }
-        Self::from_builder(
+        Ok(Self::from_builder(
             builder,
             Origin::Custom {
                 name: name.to_owned(),
                 weekend,
                 rules,
             },
-        )
+        ))
     }
 
     /// The calendar's name.
@@ -380,23 +425,26 @@ impl Calendar {
         )
     }
 
-    /// This calendar plus extra one-off holidays.
-    fn with_holidays(&self, holidays: Vec<DateArg>) -> Self {
-        self.with_rules(
-            holidays
-                .into_iter()
-                .map(|date| Rule::one_off_rule(date.0))
-                .collect(),
-        )
+    /// This calendar plus extra one-off holidays — one date, or any
+    /// number of them.
+    ///
+    /// >>> import fasti
+    /// >>> from datetime import date
+    /// >>> nyse = fasti.calendars.US_NYSE
+    /// >>> nyse.with_holidays(date(2026, 8, 14)).is_holiday(date(2026, 8, 14))
+    /// True
+    /// >>> nyse.is_holiday(date(2026, 8, 14))   # the original is untouched
+    /// False
+    fn with_holidays(&self, holidays: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let holidays = crate::convert::dates(holidays)?;
+        Ok(self.with_rules(holidays.into_iter().map(Rule::one_off_rule).collect()))
     }
 
-    /// This calendar plus extra holiday rules.
-    pub fn with_rules(&self, rules: Vec<Rule>) -> Self {
-        let mut builder = self.builder.clone();
-        for rule in &rules {
-            builder = builder.with_rule(rule.inner);
-        }
-        Self::from_builder(builder, Origin::Rules(Box::new(self.origin.clone()), rules))
+    /// This calendar plus extra holiday rules — one rule, or any number
+    /// of them.
+    #[pyo3(name = "with_rules")]
+    fn py_with_rules(&self, rules: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(self.with_rules(crate::rules::rules(rules)?))
     }
 
     /// This calendar under a different name.
