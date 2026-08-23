@@ -32,6 +32,7 @@ const EPOCH_ORDINAL: i64 = 693_961;
 static DATE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
 static DATETIME: PyOnceLock<Py<PyType>> = PyOnceLock::new();
 static FRACTION: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+static FROMORDINAL: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static EXTENSION: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
 
 /// abi3 exposes no datetime C API, so the types are imported once and
@@ -81,7 +82,9 @@ impl<'py> FromPyObject<'_, 'py> for DateArg {
             ));
         }
         if obj.is_instance(date_type(py)?.as_any())? {
-            let ordinal: i64 = obj.call_method0("toordinal")?.extract()?;
+            let ordinal: i64 = obj
+                .call_method0(pyo3::intern!(py, "toordinal"))?
+                .extract()?;
             return u32::try_from(ordinal - EPOCH_ORDINAL)
                 .map_err(|_| TimeError::DateOutOfRange)
                 .and_then(Date::from_serial)
@@ -103,7 +106,12 @@ impl<'py> FromPyObject<'_, 'py> for DateArg {
 
 /// A [`Date`] as a `datetime.date`.
 pub fn date_out(py: Python<'_>, date: Date) -> PyResult<Bound<'_, PyAny>> {
-    date_type(py)?.call_method1("fromordinal", (i64::from(date.serial()) + EPOCH_ORDINAL,))
+    FROMORDINAL
+        .get_or_try_init(py, || {
+            date_type(py)?.getattr("fromordinal").map(Bound::unbind)
+        })?
+        .bind(py)
+        .call1((i64::from(date.serial()) + EPOCH_ORDINAL,))
 }
 
 /// A run of [`Date`]s as a `list[datetime.date]`.
