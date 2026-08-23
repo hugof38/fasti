@@ -86,6 +86,28 @@ impl LastWeekday {
             Err(_) => true,
         }
     }
+
+    /// The one date this rule names in `year`, or [`None`] if the rule
+    /// is inactive that year.
+    ///
+    /// The dual of [`is_holiday`](Self::is_holiday), computed by stepping
+    /// back from the month's last day rather than by testing days.
+    pub(crate) const fn natural_date(self, year: Year) -> Option<Date> {
+        if !self.years.contains(year) {
+            return None;
+        }
+        let length = self.month.length(year);
+        let Ok(last) = Date::from_ymd(year.get(), self.month, length) else {
+            return None;
+        };
+        // Days back from the month's last day to the target weekday;
+        // at most six, so the result stays inside the month.
+        let back = (last.weekday().get() + 7 - self.weekday.get()) % 7;
+        match last.add_days(-(back as i32)) {
+            Ok(d) => Some(d),
+            Err(_) => None,
+        }
+    }
 }
 
 #[cfg(test)]

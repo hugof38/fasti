@@ -1,0 +1,408 @@
+//! Frozen-behaviour test: for every built-in calendar and every date in
+//! 1901..=2199, `Calendar::is_holiday` and `Calendar::is_business_day`
+//! must agree with the original rule-scanning algorithm, date for date.
+//!
+//! The oracle below is that original algorithm, transcribed from the
+//! pre-optimisation `src/calendar.rs` and written against the published
+//! API only — `Rule::is_holiday`, `FixedDate::weekend_shift`, and the
+//! `WeekendShift` variants. It re-derives every date from scratch for
+//! every rule, which is exactly what made it slow and exactly what makes
+//! it a trustworthy reference: it shares no code with what it checks.
+//!
+//! If a date disagrees, the change under test is wrong, not this file.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use fasti::{
+    Calendar, Date, EasterOffset, FixedDate, HolidayCache, LastWeekday, Month, NthWeekday, OneOff,
+    Ordinal, Rule, RuleDate, TimeError, Weekday, Weekend, WeekendShift, Year, YearRange, calendars,
+};
+
+// ---- the oracle: the original implementation, verbatim in behaviour ----
+
+/// `WeekendShift::direction`, which is crate-private; the table is the
+/// public documentation of each variant.
+fn direction(shift: WeekendShift, day: Weekday) -> Option<i32> {
+    match (shift, day) {
+        (WeekendShift::None, _) => None,
+        (_, Weekday::Sun) | (WeekendShift::Forward, Weekday::Sat) => Some(1),
+        (WeekendShift::SatBackSunForward, Weekday::Sat) => Some(-1),
+        _ => None,
+    }
+}
+
+/// `Rule::weekend_shift`, which is crate-private: only `FixedDate`
+/// carries a shift.
+fn shift_of(rule: &Rule) -> WeekendShift {
+    match rule {
+        Rule::Fixed(r) => r.weekend_shift(),
+        _ => WeekendShift::None,
+    }
+}
+
+fn is_natural_holiday(cal: Calendar<'_>, date: Date) -> bool {
+    cal.rules.iter().any(|r| r.is_holiday(date))
+}
+
+fn moves(cal: Calendar<'_>, day: Date, step: i32) -> bool {
+    cal.is_weekend(day)
+        && cal
+            .rules
+            .iter()
+            .any(|r| direction(shift_of(r), day.weekday()) == Some(step) && r.is_holiday(day))
+}
+
+fn owed_by_weekend(cal: Calendar<'_>, saturday: Result<Date, TimeError>) -> usize {
+    let Ok(saturday) = saturday else {
+        return 0;
+    };
+    usize::from(moves(cal, saturday, 1))
+        + usize::from(saturday.add_days(1).is_ok_and(|sun| moves(cal, sun, 1)))
+}
+
+fn is_substitute(cal: Calendar<'_>, date: Date) -> bool {
+    let shifts = |r: &Rule| !matches!(shift_of(r), WeekendShift::None);
+    if cal.is_weekend(date) || !cal.rules.iter().any(shifts) {
+        return false;
+    }
+    match date.weekday() {
+        Weekday::Fri => date.add_days(1).is_ok_and(|sat| moves(cal, sat, -1)),
+        Weekday::Mon => owed_by_weekend(cal, date.add_days(-2)) >= 1,
+        Weekday::Tue => {
+            let monday_already_a_holiday = date
+                .add_days(-1)
+                .is_ok_and(|mon| is_natural_holiday(cal, mon));
+            match owed_by_weekend(cal, date.add_days(-3)) {
+                0 => false,
+                1 => monday_already_a_holiday,
+                _ => true,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// The original `Calendar::is_holiday`.
+fn oracle_is_holiday(cal: Calendar<'_>, date: Date) -> bool {
+    is_natural_holiday(cal, date) || is_substitute(cal, date)
+}
+
+/// The original `Calendar::is_business_day`.
+fn oracle_is_business_day(cal: Calendar<'_>, date: Date) -> bool {
+    !cal.is_weekend(date) && !oracle_is_holiday(cal, date)
+}
+
+// ---- the calendars under test ------------------------------------------
+
+fn built_ins() -> [(&'static str, Calendar<'static>); 12] {
+    [
+        ("NULL_CALENDAR", calendars::NULL_CALENDAR),
+        ("WEEKENDS_ONLY", calendars::WEEKENDS_ONLY),
+        ("TARGET", calendars::TARGET),
+        ("france::SETTLEMENT", calendars::france::SETTLEMENT),
+        ("france::EXCHANGE", calendars::france::EXCHANGE),
+        ("uk::SETTLEMENT", calendars::uk::SETTLEMENT),
+        ("us::SETTLEMENT", calendars::us::SETTLEMENT),
+        ("us::FEDERAL_RESERVE", calendars::us::FEDERAL_RESERVE),
+        ("us::GOVERNMENT_BOND", calendars::us::GOVERNMENT_BOND),
+        ("us::SOFR", calendars::us::SOFR),
+        ("us::NERC", calendars::us::NERC),
+        ("us::NYSE", calendars::us::NYSE),
+    ]
+}
+
+/// Shapes the built-ins do not reach: weekends other than Sat/Sun, a
+/// shift with no weekend to step off, three shifted holidays in a row,
+/// an opaque rule sitting next to a shifted one, and a substitute whose
+/// landing day is already taken.
+/// Every Monday — an opaque rule that collides with substitutes.
+fn all_mondays(d: Date) -> bool {
+    matches!(d.weekday(), Weekday::Mon)
+}
+
+/// A predicate naming a day no other rule reaches.
+fn leap_days(d: Date) -> bool {
+    d.month() == Month::Feb && d.day() == 29
+}
+
+const XMAS: Rule = Rule::Fixed(FixedDate::new(Month::Dec, 25).shift(WeekendShift::Forward));
+const BOXING: Rule = Rule::Fixed(FixedDate::new(Month::Dec, 26).shift(WeekendShift::Forward));
+const NEW_YEAR: Rule =
+    Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::SatBackSunForward));
+
+const SYNTHETIC: [(&str, Calendar<'static>); 12] = [
+    (
+        "fri/sat weekend, forward shifts",
+        Calendar {
+            name: "fri/sat",
+            weekend: Weekend::FRI_SAT,
+            rules: &[NEW_YEAR, XMAS, BOXING],
+        },
+    ),
+    (
+        "sunday-only weekend",
+        Calendar {
+            name: "sun only",
+            weekend: Weekend::SUN_ONLY,
+            rules: &[
+                NEW_YEAR,
+                Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::SunForward)),
+            ],
+        },
+    ),
+    (
+        "no weekend at all, shifts inert",
+        Calendar {
+            name: "no weekend",
+            weekend: Weekend::NONE,
+            rules: &[NEW_YEAR, XMAS, BOXING],
+        },
+    ),
+    (
+        "three shifted holidays in a row",
+        Calendar {
+            name: "queue overflow",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Dec, 24).shift(WeekendShift::Forward)),
+                XMAS,
+                BOXING,
+            ],
+        },
+    ),
+    (
+        "the same day named twice",
+        Calendar {
+            name: "doubled",
+            weekend: Weekend::SAT_SUN,
+            rules: &[XMAS, XMAS],
+        },
+    ),
+    (
+        "an opaque rule beside a shifted one",
+        Calendar {
+            name: "custom mondays",
+            weekend: Weekend::SAT_SUN,
+            rules: &[XMAS, BOXING, Rule::Custom(all_mondays)],
+        },
+    ),
+    (
+        "an opaque rule alone",
+        Calendar {
+            name: "custom only",
+            weekend: Weekend::SAT_SUN,
+            rules: &[Rule::Custom(leap_days)],
+        },
+    ),
+    (
+        "a substitute blocked by a fixed holiday",
+        Calendar {
+            name: "blocked friday",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Dec, 31)),
+                NEW_YEAR,
+                Rule::Fixed(FixedDate::new(Month::Jan, 2)),
+            ],
+        },
+    ),
+    (
+        "a leap-day rule with a shift",
+        Calendar {
+            name: "leap day",
+            weekend: Weekend::SAT_SUN,
+            rules: &[Rule::Fixed(
+                FixedDate::new(Month::Feb, 29).shift(WeekendShift::SatBackSunForward),
+            )],
+        },
+    ),
+    (
+        "Easter and one-offs beside a shift",
+        Calendar {
+            name: "easter mix",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Easter(EasterOffset::good_friday()),
+                Rule::Easter(EasterOffset::easter_monday()),
+                Rule::Easter(EasterOffset::new_orthodox(1)),
+                Rule::OneOff(OneOff::new(Date::literal(2026, Month::Jul, 6))),
+                Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::Forward)),
+            ],
+        },
+    ),
+    (
+        "an Easter offset that leaves its year",
+        Calendar {
+            name: "easter overflow",
+            weekend: Weekend::SAT_SUN,
+            // +300 lands in the next year, which `is_holiday` never
+            // matches; the crate documents `Rule::Custom` for that.
+            rules: &[Rule::Easter(EasterOffset::new(300)), XMAS],
+        },
+    ),
+    (
+        "rules that switch on and off by year",
+        Calendar {
+            name: "year ranges",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::NthWeekday(
+                    NthWeekday::new(Ordinal::Fifth, Weekday::Fri, Month::Jan)
+                        .years(YearRange::literal_between(1950, 2050)),
+                ),
+                Rule::LastWeekday(
+                    LastWeekday::new(Weekday::Sat, Month::Aug)
+                        .years(YearRange::literal_through(1999)),
+                ),
+                Rule::Fixed(
+                    FixedDate::new(Month::Dec, 25)
+                        .shift(WeekendShift::Forward)
+                        .from_year(Year::literal(2000)),
+                ),
+            ],
+        },
+    ),
+];
+
+/// Every date the crate supports, 1901-01-01 through 2199-12-31.
+fn every_supported_date() -> impl Iterator<Item = Date> {
+    (0..=Date::MAX.serial()).filter_map(|s| Date::from_serial(s).ok())
+}
+
+#[test]
+fn is_holiday_matches_the_original_algorithm_for_every_built_in() {
+    for (name, cal) in built_ins() {
+        let mut holidays = 0u32;
+        for d in every_supported_date() {
+            let expected = oracle_is_holiday(cal, d);
+            assert_eq!(cal.is_holiday(d), expected, "{name}: is_holiday({d})");
+            assert_eq!(
+                cal.is_business_day(d),
+                oracle_is_business_day(cal, d),
+                "{name}: is_business_day({d})",
+            );
+            holidays += u32::from(expected);
+        }
+        // A calendar that suddenly has no holidays at all would satisfy
+        // the comparison only if the oracle broke too; pin the shape.
+        if !cal.rules.is_empty() {
+            assert!(holidays > 0, "{name}: no holidays in 1901..=2199");
+        }
+    }
+}
+
+#[test]
+fn the_cached_path_matches_the_original_algorithm_for_every_built_in() {
+    for (name, cal) in built_ins() {
+        let mut cache = HolidayCache::new(cal);
+        for d in every_supported_date() {
+            assert_eq!(
+                cache.is_holiday(d),
+                oracle_is_holiday(cal, d),
+                "{name}: HolidayCache::is_holiday({d})",
+            );
+            assert_eq!(
+                cache.is_business_day(d),
+                oracle_is_business_day(cal, d),
+                "{name}: HolidayCache::is_business_day({d})",
+            );
+        }
+    }
+}
+
+/// The iterators keep their memo in their own state and are double
+/// ended, so both directions have to agree with the oracle as well.
+#[test]
+fn the_range_iterators_match_the_original_algorithm() {
+    let range = Date::MIN..Date::MAX;
+    for (name, cal) in built_ins() {
+        let expected: Vec<Date> = every_supported_date()
+            .filter(|d| *d < Date::MAX && oracle_is_business_day(cal, *d))
+            .collect();
+        let forwards: Vec<Date> = cal.business_days(range.clone()).collect();
+        assert_eq!(forwards, expected, "{name}: business_days forwards");
+
+        let mut backwards: Vec<Date> = cal.business_days(range.clone()).rev().collect();
+        backwards.reverse();
+        assert_eq!(backwards, expected, "{name}: business_days backwards");
+
+        let holidays: Vec<Date> = cal.holidays(range.clone()).collect();
+        let expected_holidays: Vec<Date> = every_supported_date()
+            .filter(|d| *d < Date::MAX && oracle_is_holiday(cal, *d))
+            .collect();
+        assert_eq!(holidays, expected_holidays, "{name}: holidays");
+    }
+}
+
+/// A double-ended walk consumed from alternating ends crosses two
+/// distant years on every step, which is what the two-slot memo exists
+/// for. It must not change a single answer.
+#[test]
+fn alternating_ends_agree_with_a_single_direction_walk() {
+    for (name, cal) in built_ins() {
+        let range = Date::from_serial(0).unwrap()..Date::MAX;
+        let straight: Vec<Date> = cal.business_days(range.clone()).collect();
+        let mut iter = cal.business_days(range);
+        let (mut front, mut back) = (Vec::new(), Vec::new());
+        while let Some(f) = iter.next() {
+            front.push(f);
+            if let Some(b) = iter.next_back() {
+                back.push(b);
+            }
+        }
+        back.reverse();
+        front.extend(back);
+        assert_eq!(front, straight, "{name}: alternating ends");
+    }
+}
+
+/// Every rule of every built-in must name exactly the dates it claims:
+/// `natural_date` and `is_holiday` are duals, and the whole
+/// precomputation rests on that.
+#[test]
+fn natural_date_and_is_holiday_are_duals() {
+    for (name, cal) in built_ins() {
+        for (i, rule) in cal.rules.iter().enumerate() {
+            if matches!(rule.natural_date(Year::MIN), RuleDate::Opaque) {
+                // An opaque predicate names nothing in any year; that is
+                // the whole of its contract.
+                for year in Year::MIN.get()..=Year::MAX.get() {
+                    let year = Year::new(year).unwrap();
+                    assert!(
+                        matches!(rule.natural_date(year), RuleDate::Opaque),
+                        "{name} rule {i}: Custom stopped being opaque in {year}",
+                    );
+                }
+                continue;
+            }
+            for d in every_supported_date() {
+                let named = rule.natural_date(d.year()) == RuleDate::On(d);
+                assert_eq!(rule.is_holiday(d), named, "{name} rule {i}: {d}");
+            }
+        }
+    }
+}
+
+/// The same guarantee for calendar shapes no built-in has: other
+/// weekends, shifts with nothing to step off, opaque rules beside
+/// shifted ones, and substitutes landing on days already taken.
+#[test]
+fn synthetic_calendars_match_the_original_algorithm() {
+    for (name, cal) in SYNTHETIC {
+        let mut cache = HolidayCache::new(cal);
+        for d in every_supported_date() {
+            let expected = oracle_is_holiday(cal, d);
+            assert_eq!(cal.is_holiday(d), expected, "{name}: is_holiday({d})");
+            assert_eq!(
+                cache.is_holiday(d),
+                expected,
+                "{name}: cached is_holiday({d})"
+            );
+            assert_eq!(
+                cal.is_business_day(d),
+                oracle_is_business_day(cal, d),
+                "{name}: is_business_day({d})",
+            );
+        }
+    }
+}

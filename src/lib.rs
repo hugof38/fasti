@@ -42,6 +42,7 @@ mod daycount;
 mod easter;
 mod error;
 mod fraction;
+mod holiday_cache;
 mod period;
 mod rules;
 mod schedule;
@@ -58,8 +59,11 @@ pub use daycount::{
 pub use easter::{EasterMethod, easter_monday, easter_sunday};
 pub use error::TimeError;
 pub use fraction::Fraction;
+pub use holiday_cache::HolidayCache;
 pub use period::{Frequency, Period};
-pub use rules::{EasterOffset, FixedDate, LastWeekday, NthWeekday, OneOff, Rule, WeekendShift};
+pub use rules::{
+    EasterOffset, FixedDate, LastWeekday, NthWeekday, OneOff, Rule, RuleDate, WeekendShift,
+};
 pub use schedule::{DateGenerationRule, Generation, Schedule, ScheduleBuilder};
 pub use weekend::Weekend;
 pub use year_range::YearRange;

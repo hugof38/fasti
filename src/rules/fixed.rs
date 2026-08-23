@@ -139,6 +139,24 @@ impl FixedDate {
     pub fn is_holiday(&self, date: Date) -> bool {
         self.years.contains(date.year()) && date.month() == self.month && date.day() == self.day
     }
+
+    /// The one date this rule names in `year`, or [`None`] if the rule
+    /// is inactive that year or the year has no such day (February 29
+    /// outside a leap year).
+    ///
+    /// The dual of [`is_holiday`](Self::is_holiday): a rule names at most
+    /// one date per year, so a caller enumerating a range can ask once
+    /// per year instead of once per day.
+    pub(crate) const fn natural_date(self, year: Year) -> Option<Date> {
+        if !self.years.contains(year) {
+            return None;
+        }
+        match Date::from_ymd(year.get(), self.month, self.day) {
+            Ok(date) => Some(date),
+            // A day the month does not have: Feb 29 outside a leap year.
+            Err(_) => None,
+        }
+    }
 }
 
 #[cfg(test)]

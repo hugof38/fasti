@@ -507,19 +507,30 @@ impl Date {
     /// The [`Year`] component.
     #[must_use]
     pub const fn year(self) -> Year {
-        // Largest `idx` with `CUMULATIVE[idx] <= serial`; `lo`/`hi` are `u16` so the final add needs no cast.
+        // Largest `idx` with `CUMULATIVE[idx] <= serial`. A Gregorian
+        // cycle is 146_097 days over 400 years, so the quotient names
+        // the year directly to within one; the two loops correct it and
+        // would be right whatever the estimate, so accuracy is a matter
+        // of speed only. `year_estimate_settles_in_one_step` pins that
+        // it never takes more than a single correction, and
+        // `year_agrees_with_a_binary_search` that the answer is
+        // unchanged for every supported serial.
+        //
+        // `serial <= MAX_SERIAL` (109_572), so `serial * 400` cannot
+        // overflow `u32` and the quotient is at most `NUM_YEARS`.
         let serial = self.0;
-        let mut lo: u16 = 0;
-        let mut hi: u16 = NUM_YEARS;
-        while hi - lo > 1 {
-            let mid = lo + (hi - lo) / 2;
-            if CUMULATIVE[mid as usize] <= serial {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
+        #[allow(clippy::cast_possible_truncation)]
+        let mut idx = (serial * 400 / 146_097) as u16;
+        if idx >= NUM_YEARS {
+            idx = NUM_YEARS - 1;
         }
-        Year(EPOCH_YEAR + lo)
+        while CUMULATIVE[idx as usize] > serial {
+            idx -= 1;
+        }
+        while idx + 1 < NUM_YEARS && CUMULATIVE[idx as usize + 1] <= serial {
+            idx += 1;
+        }
+        Year(EPOCH_YEAR + idx)
     }
 
     /// Decompose into `(year, month, day-of-month)`.
@@ -1046,6 +1057,42 @@ mod tests {
         assert_eq!(d.year().get(), 2199);
         assert_eq!(d.month(), Month::Dec);
         assert_eq!(d.day(), 31);
+    }
+
+    /// The year lookup estimates before it corrects; this pins that the
+    /// answer is the one the original binary search gave, for every
+    /// supported serial.
+    #[test]
+    fn year_agrees_with_a_binary_search() {
+        for serial in 0..=MAX_SERIAL {
+            let mut lo: u16 = 0;
+            let mut hi: u16 = NUM_YEARS;
+            while hi - lo > 1 {
+                let mid = lo + (hi - lo) / 2;
+                if CUMULATIVE[mid as usize] <= serial {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let expected = EPOCH_YEAR + lo;
+            let got = Date::from_serial(serial).unwrap().year().get();
+            assert_eq!(got, expected, "serial {serial}");
+        }
+    }
+
+    /// ... and that the estimate is close enough for the correction to
+    /// be a single step, which is the whole point of estimating.
+    #[test]
+    fn year_estimate_settles_in_one_step() {
+        for serial in 0..=MAX_SERIAL {
+            let estimate = i32::try_from(serial * 400 / 146_097).unwrap();
+            let actual = i32::from(Date::from_serial(serial).unwrap().year().get() - EPOCH_YEAR);
+            assert!(
+                (estimate - actual).abs() <= 1,
+                "serial {serial}: estimate {estimate}, actual {actual}",
+            );
+        }
     }
 
     #[test]

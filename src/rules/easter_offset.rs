@@ -156,6 +156,35 @@ impl EasterOffset {
         };
         observed == date
     }
+
+    /// The one date this rule names in `year`, or [`None`] if the rule is
+    /// inactive that year.
+    ///
+    /// The dual of [`is_holiday`](Self::is_holiday), and it inherits that
+    /// method's year semantics exactly: an offset landing outside `year`
+    /// names nothing, because `is_holiday` would never match it either.
+    /// Offsets that far from Easter need
+    /// [`Rule::Custom`](super::Rule::Custom), as documented there.
+    pub(crate) const fn natural_date(self, year: Year) -> Option<Date> {
+        if !self.years.contains(year) {
+            return None;
+        }
+        // Lookup returns Easter Monday; offsets are Sunday-relative.
+        let em_doy = easter_monday(year, self.method);
+        let Ok(jan1) = Date::from_ymd(year.get(), Month::Jan, 1) else {
+            return None;
+        };
+        // em_doy − 2 = zero-based offset of Easter Sunday from Jan 1;
+        // the rule's own offset rides along in the same step.
+        let Ok(observed) = jan1.add_days(em_doy as i32 - 2 + self.days as i32) else {
+            return None;
+        };
+        if observed.year().get() == year.get() {
+            Some(observed)
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]

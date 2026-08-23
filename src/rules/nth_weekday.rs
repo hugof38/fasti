@@ -96,6 +96,34 @@ impl NthWeekday {
         let occurrence = (date.day() - 1) / 7 + 1;
         occurrence == self.n.get()
     }
+
+    /// The one date this rule names in `year`, or [`None`] if the rule
+    /// is inactive that year or the month has no Nth such weekday (a
+    /// fifth Monday it has no room for).
+    ///
+    /// The dual of [`is_holiday`](Self::is_holiday), computed directly
+    /// from the weekday the month opens on rather than by testing days.
+    pub(crate) const fn natural_date(self, year: Year) -> Option<Date> {
+        if !self.years.contains(year) {
+            return None;
+        }
+        let Ok(first) = Date::from_ymd(year.get(), self.month, 1) else {
+            return None;
+        };
+        // Days from the 1st to the month's first occurrence of the
+        // target weekday, then N−1 whole weeks on top.
+        let delta = (self.weekday.get() + 7 - first.weekday().get()) % 7;
+        let day = 1 + delta + 7 * (self.n.get() - 1);
+        if day > self.month.length(year) {
+            return None;
+        }
+        // `day` is a valid day of this month, so stepping from the 1st
+        // stays inside it — cheaper than building the date from scratch.
+        match first.add_days(day as i32 - 1) {
+            Ok(d) => Some(d),
+            Err(_) => None,
+        }
+    }
 }
 
 #[cfg(test)]

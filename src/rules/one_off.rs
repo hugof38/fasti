@@ -1,6 +1,6 @@
 //! [`OneOff`]: a holiday observed on a single specific date.
 
-use crate::Date;
+use crate::{Date, Year};
 
 /// A holiday observed on exactly one date.
 ///
@@ -34,6 +34,16 @@ impl OneOff {
     #[must_use]
     pub const fn is_holiday(&self, date: Date) -> bool {
         self.date.serial() == date.serial()
+    }
+
+    /// The rule's date if it falls in `year`, else [`None`] — the dual of
+    /// [`is_holiday`](Self::is_holiday).
+    pub(crate) const fn natural_date(self, year: Year) -> Option<Date> {
+        if self.date.year().get() == year.get() {
+            Some(self.date)
+        } else {
+            None
+        }
     }
 }
 

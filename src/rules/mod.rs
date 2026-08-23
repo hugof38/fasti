@@ -14,7 +14,7 @@ pub use last_weekday::LastWeekday;
 pub use nth_weekday::NthWeekday;
 pub use one_off::OneOff;
 
-use crate::Date;
+use crate::{Date, Year};
 
 /// A holiday rule matching a holiday's natural date.
 /// [`Rule::Custom`] holds a plain `fn` pointer to stay `const`-constructible,
@@ -35,7 +35,81 @@ pub enum Rule {
     Custom(fn(Date) -> bool),
 }
 
+/// What a [`Rule`] names in one particular year — the answer to
+/// "which date, if any, is yours in this year?".
+///
+/// Every rule but [`Rule::Custom`] is year-parameterised: it names at
+/// most one date per year and can compute it outright. That is what lets
+/// a caller walking a range resolve a calendar once per year instead of
+/// interrogating every rule on every day.
+///
+/// ```
+/// use fasti::{Date, FixedDate, Month, Rule, RuleDate, Year};
+///
+/// let christmas = Rule::Fixed(FixedDate::new(Month::Dec, 25));
+/// assert_eq!(
+///     christmas.natural_date(Year::new(2026)?),
+///     RuleDate::On(Date::from_ymd(2026, Month::Dec, 25)?),
+/// );
+///
+/// // A predicate can only be called, never asked.
+/// let custom = Rule::Custom(|d| d.day() == 13);
+/// assert_eq!(custom.natural_date(Year::new(2026)?), RuleDate::Opaque);
+/// # Ok::<(), fasti::TimeError>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleDate {
+    /// The rule names no date in this year: it is outside its
+    /// [`YearRange`](crate::YearRange), or the year has no such day —
+    /// February 29 outside a leap year, a fifth Monday the month has no
+    /// room for, an Easter offset landing in the next year.
+    None,
+    /// The rule names exactly this date, before any
+    /// [`WeekendShift`] the calendar may apply.
+    On(Date),
+    /// A [`Rule::Custom`] predicate. It cannot say what it names, only
+    /// answer for a date it is handed, so it has to be probed per day.
+    Opaque,
+}
+
 impl Rule {
+    /// The date this rule names in `year`, or why it names none.
+    ///
+    /// This is the dual of [`is_holiday`](Self::is_holiday) and agrees
+    /// with it exactly: for every date `d`, a non-[`Custom`](Self::Custom)
+    /// rule satisfies `r.is_holiday(d) == (r.natural_date(d.year()) ==
+    /// RuleDate::On(d))`. It names the *natural* date only; substitute
+    /// days are the calendar's to resolve, as
+    /// [`Calendar::is_holiday`](crate::Calendar::is_holiday) documents.
+    ///
+    /// ```
+    /// use fasti::{Date, Month, NthWeekday, Ordinal, Rule, RuleDate, Weekday, Year};
+    ///
+    /// // Thanksgiving 2026: the fourth Thursday of November.
+    /// let rule = Rule::NthWeekday(NthWeekday::new(Ordinal::Fourth, Weekday::Thu, Month::Nov));
+    /// assert_eq!(
+    ///     rule.natural_date(Year::new(2026)?),
+    ///     RuleDate::On(Date::from_ymd(2026, Month::Nov, 26)?),
+    /// );
+    /// # Ok::<(), fasti::TimeError>(())
+    /// ```
+    #[must_use]
+    pub const fn natural_date(&self, year: Year) -> RuleDate {
+        let resolved = match self {
+            Self::Fixed(r) => r.natural_date(year),
+            Self::NthWeekday(r) => r.natural_date(year),
+            Self::LastWeekday(r) => r.natural_date(year),
+            Self::Easter(r) => r.natural_date(year),
+            Self::OneOff(r) => r.natural_date(year),
+            // A fn pointer cannot be interrogated, only called.
+            Self::Custom(_) => return RuleDate::Opaque,
+        };
+        match resolved {
+            Some(date) => RuleDate::On(date),
+            None => RuleDate::None,
+        }
+    }
+
     /// The rule's weekend-shift direction. Only [`FixedDate`] carries
     /// one; nth/last-weekday rules never land on a weekend, and Easter
     /// offsets and one-offs name an exact observed date already.
