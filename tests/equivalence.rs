@@ -260,34 +260,14 @@ fn the_range_iterators_match_the_original_algorithm() {
     }
 }
 
-/// A double-ended walk consumed from alternating ends crosses two
-/// distant years on every step, which is what the two-slot memo exists
-/// for. It must not change a single answer.
-#[test]
-fn alternating_ends_agree_with_a_single_direction_walk() {
-    for cal in BUILT_INS {
-        let range = Date::from_serial(0).unwrap()..Date::MAX;
-        let straight: Vec<Date> = cal.business_days(range.clone()).collect();
-        let mut iter = cal.business_days(range);
-        let (mut front, mut back) = (Vec::new(), Vec::new());
-        while let Some(f) = iter.next() {
-            front.push(f);
-            if let Some(b) = iter.next_back() {
-                back.push(b);
-            }
-        }
-        back.reverse();
-        front.extend(back);
-        assert_eq!(front, straight, "{}: alternating ends", cal.name);
-    }
-}
-
-/// Every rule of every built-in must name exactly the dates it claims:
-/// `natural_date` and `is_holiday` are duals, and the whole
-/// precomputation rests on that.
+/// Every rule must name exactly the dates it claims: `natural_date` and
+/// `is_holiday` are duals, and per-year resolution rests on that. The
+/// synthetic rules are here too, because one of them — an Easter offset
+/// landing in the next year — can only break this way: the calendar
+/// never observes the difference, and a caller resolving a year would.
 #[test]
 fn natural_date_and_is_holiday_are_duals() {
-    for cal in BUILT_INS {
+    for cal in BUILT_INS.into_iter().chain(SYNTHETIC) {
         for (i, rule) in cal.rules.iter().enumerate() {
             if matches!(rule.natural_date(Year::MIN), RuleDate::Opaque) {
                 // An opaque predicate names nothing in any year; that is
@@ -301,6 +281,16 @@ fn natural_date_and_is_holiday_are_duals() {
                     );
                 }
                 continue;
+            }
+            // The date a rule names in a year is in that year — the
+            // promise a caller resolving a year at a time relies on, and
+            // the one an Easter offset running past December 31 would
+            // break silently, since no calendar query can observe it.
+            for year in Year::MIN.get()..=Year::MAX.get() {
+                let year = Year::new(year).unwrap();
+                if let RuleDate::On(named) = rule.natural_date(year) {
+                    assert_eq!(named.year(), year, "{} rule {i}", cal.name);
+                }
             }
             for d in every_supported_date() {
                 let named = rule.natural_date(d.year()) == RuleDate::On(d);
@@ -330,7 +320,7 @@ fn synthetic_calendars_match_the_original_algorithm() {
                 cal.name,
             );
         }
-        // ... and through the iterators' memo, over the same range.
+        // ... and through the range iterators, over the same range.
         let expected: Vec<Date> = every_supported_date()
             .filter(|d| *d < Date::MAX && oracle_is_holiday(cal, *d))
             .collect();
@@ -452,11 +442,10 @@ mod random {
             prop_assert_eq!(cal.is_business_day(date), oracle_is_business_day(cal, date));
         }
 
-        /// The iterators' memo, over a run of days across a year
-        /// boundary — where it is reused, evicted and rebuilt — read
-        /// forwards and backwards.
+        /// A run of days across a year boundary, where a substitute
+        /// reaches back into the year before, read both ways.
         #[test]
-        fn the_memo_agrees_across_a_year_boundary(
+        fn the_range_iterators_agree_across_a_year_boundary(
             rules in prop::collection::vec(any_rule(), 0..7),
             weekend in any_weekend(),
             year in 1902u16..=2198,

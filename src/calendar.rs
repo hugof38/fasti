@@ -12,7 +12,6 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use crate::holiday_cache::HolidayCache;
 use crate::{
     BusinessDayConvention, Date, DateRange, Period, Rule, RuleDate, TimeError, Weekday, Weekend,
     WeekendShift,
@@ -197,7 +196,7 @@ impl Calendar<'_> {
     /// The direction a holiday on `date` steps, or [`None`] if it stays
     /// put — `QuantLib`'s substitute only ever moves off a weekend, so a
     /// day this calendar does not call a weekend never moves.
-    pub(crate) const fn steps(&self, date: Date, shift: WeekendShift) -> Option<i32> {
+    const fn steps(&self, date: Date, shift: WeekendShift) -> Option<i32> {
         let weekday = date.weekday();
         if self.weekend.contains(weekday) {
             shift.direction(weekday)
@@ -216,11 +215,6 @@ impl Calendar<'_> {
     /// excluded. Count them with `.count()`, collect them with
     /// `.collect()`.
     ///
-    /// The iterator resolves the calendar's rules a year at a time in
-    /// its own state, so a walk costs a bit test per day rather than a
-    /// rule scan. Answers are identical to
-    /// [`is_business_day`](Self::is_business_day) for every date.
-    ///
     /// ```
     /// use fasti::{Date, Month, calendars};
     /// // Jul 2024 has 23 weekdays.
@@ -229,18 +223,13 @@ impl Calendar<'_> {
     /// # Ok::<(), fasti::TimeError>(())
     /// ```
     pub fn business_days(&self, range: Range<Date>) -> impl DoubleEndedIterator<Item = Date> {
-        // The memo lives in the iterator's own state: `Calendar` is a
-        // `Copy` view over `pub const` data and holds no cache.
-        let mut cache = HolidayCache::new(*self);
-        range.dates().filter(move |d| cache.is_business_day(*d))
+        range.dates().filter(|d| self.is_business_day(*d))
     }
 
     /// The holidays in `range`, ascending. Weekends are excluded,
-    /// matching [`is_holiday`](Self::is_holiday). Resolved a year at a
-    /// time, as [`business_days`](Self::business_days) is.
+    /// matching [`is_holiday`](Self::is_holiday).
     pub fn holidays(&self, range: Range<Date>) -> impl DoubleEndedIterator<Item = Date> {
-        let mut cache = HolidayCache::new(*self);
-        range.dates().filter(move |d| cache.is_holiday(*d))
+        range.dates().filter(|d| self.is_holiday(*d))
     }
 
     /// The first business day of `date`'s month, or [`None`] if the
@@ -385,10 +374,9 @@ impl Calendar<'_> {
 // ---- substitute-day resolution -----------------------------------------
 //
 // A substitute decision reads at most five facts about at most four
-// days, so both the direct path above and the per-year memo behind the
-// range iterators collect those facts into a `Window` and hand it to the
-// one `resolve` below. The decision itself therefore exists once,
-// whichever path asked.
+// days. `is_holiday` gathers them into a `Window` in one pass over the
+// rules and hands it to `resolve`, instead of re-scanning the rule list
+// once per neighbouring day it has to ask about.
 
 /// Which days a substitute decision reaches, as offsets from the day
 /// being asked about. Only Friday, Monday and Tuesday can be substitute
@@ -398,14 +386,14 @@ impl Calendar<'_> {
 /// `QuantLib` hardcodes the same three across its US, UK and Canadian
 /// calendars.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Shape {
+struct Shape {
     /// Offset in days from the queried date to bit 0 of the window.
-    pub(crate) lo: i32,
+    lo: i32,
     /// Days the window covers, `2..=4`.
-    pub(crate) len: u32,
+    len: u32,
     /// Window bits whose `natural` flag the decision reads. A
     /// [`Rule::Custom`] has to be probed for these and no others.
-    pub(crate) natural_mask: u8,
+    natural_mask: u8,
 }
 
 impl Shape {
@@ -422,7 +410,7 @@ impl Shape {
     /// Friday's own natural flag is bit 0 and the Saturday ahead bit 1,
     /// while a Tuesday's weekend is bits 0 and 1, the Monday between is
     /// bit 2 and the Tuesday itself bit 3.
-    pub(crate) const fn of(weekday: Weekday) -> Option<Self> {
+    const fn of(weekday: Weekday) -> Option<Self> {
         match weekday {
             Weekday::Fri => Some(Self::new(0, 2, 0b0001)),
             Weekday::Mon => Some(Self::new(-2, 3, 0b0100)),
@@ -436,19 +424,19 @@ impl Shape {
 /// is the day `shape.lo + i` days from the queried date; a bit for a day
 /// outside the supported range is simply never set.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Window {
+struct Window {
     /// Bit `i`: some rule names that day outright.
-    pub(crate) natural: u8,
+    natural: u8,
     /// Bit `i`: that day is a weekend day carrying a holiday that steps
     /// forwards off it.
-    pub(crate) fwd: u8,
+    fwd: u8,
     /// Bit `i`: ... that steps backwards off it.
-    pub(crate) back: u8,
+    back: u8,
 }
 
 impl Window {
     /// Nothing known yet: no day named, no day stepping anywhere.
-    pub(crate) const EMPTY: Self = Self {
+    const EMPTY: Self = Self {
         natural: 0,
         fwd: 0,
         back: 0,
@@ -468,7 +456,7 @@ impl Window {
 /// [`Rule::Custom`] naming the observed day outright, as `QuantLib` does
 /// with `d == 6 && m == May && (w == Monday || w == Tuesday || w ==
 /// Wednesday)`.
-pub(crate) const fn resolve(weekday: Weekday, window: Window) -> bool {
+const fn resolve(weekday: Weekday, window: Window) -> bool {
     match weekday {
         // The Saturday ahead, stepping back.
         Weekday::Fri => window.natural & 0b0001 != 0 || window.back & 0b0010 != 0,

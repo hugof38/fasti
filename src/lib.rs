@@ -42,7 +42,6 @@ mod daycount;
 mod easter;
 mod error;
 mod fraction;
-mod holiday_cache;
 mod period;
 mod rules;
 mod schedule;

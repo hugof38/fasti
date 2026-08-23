@@ -22,11 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Calendar rule evaluation is an order of magnitude faster, per call
-  and per day walked, and `Calendar::business_days` / `holidays` carry
-  a per-year memo in their own iterator state on top of that. Holiday
-  answers are unchanged, byte for byte, for every date in 1901..=2199
-  — `tests/equivalence.rs` checks each built-in and nine synthetic
-  calendars against the original algorithm.
+  and per day walked, and stays stateless: no cache, in `Calendar` or
+  anywhere else. Holiday answers are unchanged, byte for byte, for
+  every date in 1901..=2199 — `tests/equivalence.rs` checks each
+  built-in and nine synthetic calendars against the original
+  algorithm.
 - `Date::year` derives the year arithmetically instead of binary
   searching the cumulative-days table, which speeds up every
   `to_ymd`-based accessor with it.

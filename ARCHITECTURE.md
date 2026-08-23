@@ -53,15 +53,10 @@ the constraint wins unless the design discussion says otherwise.
   calendars are `pub const Calendar<'static>`, so no interior
   mutability and no lazy init is available to them, and none is
   wanted: a `Copy` view that silently carried a cache would be a
-  different type. The per-year memo is private state inside the
-  iterators `business_days` / `holidays` return; a caller wanting the
-  same for its own loop builds it from `Rule::natural_date`. Anything
-  such a memo computes must be reproducible from the rules alone.
-- **The substitute rule exists once.** Both the direct path and the
-  cached one gather the same handful of facts about the days around a
-  date into a `Window` and hand it to one `resolve`. Two copies of
-  that decision would drift; the equivalence test would catch it, but
-  a shared decision means there is nothing to catch.
+  different type. `is_holiday` is therefore stateless, and a caller
+  who wants a precomputed year builds it in their own frame out of
+  `Rule::natural_date`. Whatever they build must be reproducible from
+  the rules alone.
 
 ## Day-count conventions
 
