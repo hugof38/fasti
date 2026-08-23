@@ -113,3 +113,18 @@ def test_every_public_name_is_documented() -> None:
             # Read it off the class: a staticmethod entry in the type
             # dict carries staticmethod's own docstring, not the item's.
             assert getattr(owner, member).__doc__, f"{name}.{member} has no docstring"
+
+
+def test_the_version_is_the_one_in_the_manifest() -> None:
+    from importlib.metadata import version
+
+    assert fasti.__version__ == version("fasti-py")
+    manifest = pathlib.Path(__file__).parents[1] / "Cargo.toml"
+    if not manifest.exists():  # pragma: no cover - only in a trimmed sdist
+        return
+    declared = [
+        line.split("=", 1)[1].strip().strip('"')
+        for line in manifest.read_text().splitlines()
+        if line.startswith("version = ")
+    ]
+    assert declared[:1] == [fasti.__version__]

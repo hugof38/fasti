@@ -10,6 +10,7 @@ float-free, and that survives the boundary.
 """
 
 from ._fasti import (
+    __version__ as __version__,
     BusinessDayConvention,
     Calendar,
     DateGenerationRule,

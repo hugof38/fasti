@@ -47,6 +47,26 @@ TypeError: fasti takes a datetime.date, not a datetime.datetime: ...
 - **Values are immutable.** Every mutator returns a new value; every
   value compares, hashes and pickles.
 
+The operators the crate defines are spelled the Python way, and only
+those: a date steps by a period, and the two vocabularies the crate
+orders are the two that sort.
+
+```python
+>>> import datetime
+>>> from fasti import Frequency, Period, Weekday
+>>> datetime.date(2026, 1, 15) + Period.months(6)
+datetime.date(2026, 7, 15)
+>>> datetime.date(2026, 1, 31) + Period.months(1)   # Add clamps; it never snaps
+datetime.date(2026, 2, 28)
+>>> sorted([Weekday.SUN, Weekday.MON]), Frequency.ANNUAL < Frequency.MONTHLY
+([Weekday.MON, Weekday.SUN], True)
+
+```
+
+End-of-month preservation is `Calendar.advance`'s business, not `+`'s —
+the same split the crate makes between `Add` and `Date::advance`. A
+`BusinessDayConvention` refuses `<` because the crate gives it no order.
+
 ## Quickstart
 
 ```python
@@ -73,6 +93,17 @@ Fraction(45, 181)
 
 ```
 
+A `Schedule` is its coupon dates: it has a length, indexes, slices,
+iterates and reverses, because the crate's schedule derefs to `[Date]`.
+Slicing gives you the dates; `after` and `until` are what give you back a
+schedule, since a bare run of dates names no lattice.
+
+```python
+>>> schedule[1:], schedule[-1], len(schedule)
+([datetime.date(2025, 7, 15), datetime.date(2026, 1, 15)], datetime.date(2026, 1, 15), 3)
+
+```
+
 Calendars compose:
 
 ```python
@@ -85,6 +116,16 @@ Calendars compose:
 'Acme'
 
 ```
+
+## Reading the API
+
+One rule settles what is a property and what is a method: **a field in the
+crate is a property here, a method there is a method here.** So
+`calendar.name` and `period.unit` are properties, while
+`day_count.name()`, `period.length()` and `frequency.per_year()` are
+calls. It is not the usual Python instinct — the usual instinct is that
+anything cheap is a property — but it means you can read the Rust docs and
+know what to type without a second table.
 
 ## Vocabularies
 

@@ -170,3 +170,45 @@ def test_a_spelling_is_accepted_wherever_the_class_is() -> None:
         WEEKENDS_ONLY.adjust(datetime.date(2025, 1, 4), "following"),
     ]
     assert all(value is not None for value in everywhere)
+
+
+# The crate derives Ord on exactly these two, so exactly these two sort.
+ORDERED = [
+    (Weekday, [Weekday.MON, Weekday.TUE, Weekday.SAT, Weekday.SUN]),
+    (Frequency, [Frequency.ANNUAL, Frequency.QUARTERLY, Frequency.MONTHLY, Frequency.DAILY]),
+]
+UNORDERED = [BusinessDayConvention, DateGenerationRule, EasterMethod, WeekendShift]
+
+
+@pytest.mark.parametrize(("vocabulary", "ascending"), ORDERED, ids=lambda v: getattr(v, "__name__", ""))
+def test_the_two_ordered_vocabularies_sort_as_the_crate_does(
+    vocabulary: type, ascending: list[Any]
+) -> None:
+    assert sorted(reversed(ascending)) == ascending
+    for smaller, larger in zip(ascending, ascending[1:]):
+        assert smaller < larger and larger > smaller
+        assert smaller <= larger and not smaller >= larger
+    assert max(ascending) == ascending[-1]
+
+
+@pytest.mark.parametrize("vocabulary", UNORDERED, ids=lambda v: v.__name__)
+def test_the_others_name_no_order_and_refuse_one(vocabulary: type) -> None:
+    members = [getattr(vocabulary, name) for name in dir(vocabulary) if name.isupper()]
+    with pytest.raises(TypeError, match="not supported between instances"):
+        _ = members[0] < members[1]
+
+
+@pytest.mark.parametrize("vocabulary", [Weekday, Frequency], ids=lambda v: v.__name__)
+def test_ordering_against_another_type_is_a_type_error(vocabulary: type) -> None:
+    with pytest.raises(TypeError, match="not supported between instances"):
+        _ = vocabulary("annual" if vocabulary is Frequency else "mon") < 3
+
+
+def test_a_weekday_is_its_iso_number_where_python_wants_an_index() -> None:
+    assert int(Weekday.MON) == 1
+    assert int(Weekday.SUN) == Weekday.SUN.get() == 7
+    assert "-MTWTFSS"[Weekday.WED] == "W"
+    assert [0, 1, 2, 3, 4, 5, 6][Weekday.TUE] == 2
+    # An index is not a number: the crate gives weekdays no arithmetic.
+    with pytest.raises(TypeError):
+        _ = Weekday.WED - 1  # type: ignore[operator]

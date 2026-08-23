@@ -5,7 +5,7 @@ use pyo3::Borrowed;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 
-use crate::convert::{OrRaise, Reduction, hook};
+use crate::convert::{OrRaise, Reduction, date_operand, date_out, hook};
 use crate::vocab::{FrequencyArg, PyFrequency};
 
 /// A signed duration tagged by its calendar unit: days, weeks, months
@@ -109,6 +109,36 @@ impl PyPeriod {
     /// Frequency.SEMIANNUAL
     fn frequency(&self) -> PyResult<PyFrequency> {
         Frequency::try_from(self.0).map(PyFrequency).or_raise()
+    }
+
+    /// `date + period`: step the date by this period, as the crate's
+    /// `Add<Period> for Date` does. No end-of-month snapping — that is
+    /// `Calendar.advance`'s business.
+    ///
+    /// >>> import datetime
+    /// >>> from fasti import Period
+    /// >>> datetime.date(2026, 1, 15) + Period.months(6)
+    /// datetime.date(2026, 7, 15)
+    fn __radd__<'py>(&self, date: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        let py = date.py();
+        match date_operand(date)? {
+            Some(stepped) => date_out(py, (stepped + self.0).or_raise()?),
+            None => Ok(py.NotImplemented().into_bound(py)),
+        }
+    }
+
+    /// `date - period`, as the crate's `Sub<Period> for Date` does.
+    ///
+    /// >>> import datetime
+    /// >>> from fasti import Period
+    /// >>> datetime.date(2026, 7, 15) - Period.months(6)
+    /// datetime.date(2026, 1, 15)
+    fn __rsub__<'py>(&self, date: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        let py = date.py();
+        match date_operand(date)? {
+            Some(stepped) => date_out(py, (stepped - self.0).or_raise()?),
+            None => Ok(py.NotImplemented().into_bound(py)),
+        }
     }
 
     /// Negate the length; raises on `i32` overflow, where the crate's

@@ -61,6 +61,9 @@ fn _fasti(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "__doc__",
         "The compiled half of fasti; import `fasti` instead.",
     )?;
+    // The distribution version, from the manifest the release workflow
+    // checks the tag against — so the two can never disagree.
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("FastiError", m.py().get_type::<FastiError>())?;
 
     m.add_class::<calendar::PyCalendar>()?;

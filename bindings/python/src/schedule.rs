@@ -4,7 +4,7 @@
 use fasti::{Date, DateGenerationRule, Schedule, ScheduleBuilder};
 use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
-use pyo3::types::{PyIterator, PyList, PyTuple, PyTupleMethods};
+use pyo3::types::{PyIterator, PyList, PySlice, PyTuple, PyTupleMethods};
 
 use crate::calendar::{CalendarArg, CalendarSpec};
 use crate::convert::{
@@ -182,8 +182,7 @@ impl PyGeneration {
     hash,
     skip_from_py_object,
     module = "fasti",
-    name = "Schedule",
-    sequence
+    name = "Schedule"
 )]
 pub struct PySchedule {
     spec: ScheduleSpec,
@@ -376,12 +375,52 @@ impl PySchedule {
         PyList::new(py, self.dates(py)?)?.into_any().try_iter()
     }
 
+    /// Iterate the coupon dates backwards. Without the sequence slots —
+    /// which a slice cannot pass through — `reversed` needs saying.
+    fn __reversed__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyIterator>> {
+        let mut dates = self.schedule.dates().to_vec();
+        dates.reverse();
+        PyList::new(py, dates_out(py, &dates)?)?
+            .into_any()
+            .try_iter()
+    }
+
     fn __len__(&self) -> usize {
         self.schedule.dates().len()
     }
 
-    fn __getitem__<'py>(&self, py: Python<'py>, index: isize) -> PyResult<Bound<'py, PyAny>> {
+    /// One coupon date by index, or a `list` of them by slice — the
+    /// crate's schedule derefs to its dates, and a slice of those is what
+    /// `&schedule[1..3]` gives there.
+    ///
+    /// >>> import datetime
+    /// >>> from fasti import Schedule
+    /// >>> from fasti.calendars import WEEKENDS_ONLY
+    /// >>> s = Schedule(datetime.date(2025, 1, 15), datetime.date(2026, 1, 15),
+    /// ...              "quarterly", WEEKENDS_ONLY)
+    /// >>> s[1:3]
+    /// [datetime.date(2025, 4, 15), datetime.date(2025, 7, 15)]
+    /// >>> s[::-1] == list(reversed(s))
+    /// True
+    fn __getitem__<'py>(
+        &self,
+        py: Python<'py>,
+        index: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let dates = self.schedule.dates();
+        if let Ok(slice) = index.cast::<PySlice>() {
+            let indices = slice.indices(isize::try_from(dates.len()).unwrap_or(isize::MAX))?;
+            let mut picked = Vec::with_capacity(indices.slicelength);
+            let mut at = indices.start;
+            for _ in 0..indices.slicelength {
+                if let Some(date) = usize::try_from(at).ok().and_then(|i| dates.get(i)) {
+                    picked.push(*date);
+                }
+                at += indices.step;
+            }
+            return Ok(PyList::new(py, dates_out(py, &picked)?)?.into_any());
+        }
+        let index: isize = index.extract()?;
         let length = isize::try_from(dates.len()).unwrap_or(isize::MAX);
         let resolved = if index < 0 { index + length } else { index };
         usize::try_from(resolved)

@@ -165,3 +165,32 @@ def test_a_stub_anchor_outside_the_schedule_is_refused() -> None:
         unadjusted(
             "2025-01-15", "2026-01-15", "semiannual", first_date=datetime.date(2027, 1, 1)
         )
+
+
+def test_a_schedule_slices_as_the_crate_slices_its_dates() -> None:
+    schedule = unadjusted("2025-01-15", "2026-01-15", "quarterly")
+    dates = schedule.dates()
+    assert schedule[1:3] == dates[1:3]
+    assert schedule[:2] == dates[:2]
+    assert schedule[-2:] == dates[-2:]
+    assert schedule[::2] == dates[::2]
+    assert schedule[::-1] == dates[::-1] == list(reversed(schedule))
+    assert schedule[9:] == []
+    assert schedule[0:0] == []
+
+
+def test_slicing_a_schedule_yields_dates_not_a_schedule() -> None:
+    # A slice is a run of coupon dates; it names no lattice, so it is not
+    # a schedule. `after`/`until` are what keep one.
+    schedule = unadjusted("2025-01-15", "2026-01-15", "quarterly")
+    assert isinstance(schedule[1:3], list)
+    assert all(isinstance(d, datetime.date) for d in schedule[1:3])
+    assert isinstance(schedule.after(datetime.date(2025, 7, 15)), Schedule)
+
+
+def test_a_schedule_is_iterable_in_both_directions() -> None:
+    schedule = unadjusted("2025-01-15", "2026-01-15", "quarterly")
+    assert list(reversed(schedule)) == schedule.dates()[::-1]
+    assert next(iter(schedule)) == schedule[0]
+    assert schedule[0] in schedule
+    assert datetime.date(2025, 1, 16) not in schedule

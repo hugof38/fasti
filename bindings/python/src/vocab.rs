@@ -25,17 +25,61 @@ fn normalize(text: &str) -> String {
         .collect()
 }
 
+/// A vocabulary the crate names no order for: the class, and everything
+/// that hangs off the table.
 macro_rules! vocabulary {
     (
         $(#[$meta:meta])*
         $py:ident : $core:ty, $arg:ident, $name:literal,
-        [ $( $konst:ident => $variant:ident, $canon:literal $(| $alias:literal)* ; )+ ]
+        [ $($table:tt)* ]
         $( methods { $($methods:tt)* } )?
     ) => {
         $(#[$meta])*
         #[pyclass(frozen, eq, hash, skip_from_py_object, module = "fasti", name = $name)]
         #[derive(Clone, Copy, PartialEq, Eq)]
         pub struct $py(pub $core);
+
+        vocabulary_body! {
+            $py : $core, $arg, $name,
+            [ $($table)* ]
+            $( methods { $($methods)* } )?
+        }
+    };
+}
+
+/// The same, for the two whose core enum derives `Ord` — so they sort in
+/// Python exactly where they sort in Rust. The attribute has to be written
+/// out rather than passed in: PyO3's generated comparisons lose their
+/// hygiene when `ord` arrives through a metavariable.
+macro_rules! vocabulary_ordered {
+    (
+        $(#[$meta:meta])*
+        $py:ident : $core:ty, $arg:ident, $name:literal,
+        [ $($table:tt)* ]
+        $( methods { $($methods:tt)* } )?
+    ) => {
+        $(#[$meta])*
+        #[pyclass(frozen, eq, ord, hash, skip_from_py_object, module = "fasti", name = $name)]
+        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        pub struct $py(pub $core);
+
+        vocabulary_body! {
+            $py : $core, $arg, $name,
+            [ $($table)* ]
+            $( methods { $($methods)* } )?
+        }
+    };
+}
+
+/// Everything a vocabulary has that does not depend on whether it is
+/// ordered: the parser, the canonical spellings, the class body, the
+/// argument type and the pickle hook.
+macro_rules! vocabulary_body {
+    (
+        $py:ident : $core:ty, $arg:ident, $name:literal,
+        [ $( $konst:ident => $variant:ident, $canon:literal $(| $alias:literal)* ; )+ ]
+        $( methods { $($methods:tt)* } )?
+    ) => {
 
         impl $py {
             /// The canonical spelling: what prints, pickles and appears in errors.
@@ -158,12 +202,18 @@ vocabulary! {
     ]
 }
 
-vocabulary! {
+vocabulary_ordered! {
     /// A day of the week, ISO numbered — Monday is 1, Sunday is 7.
+    ///
+    /// Weekdays order as the crate orders them, Monday first.
     ///
     /// >>> from fasti import Weekday
     /// >>> Weekday("saturday").get()
     /// 6
+    /// >>> int(Weekday.SAT)
+    /// 6
+    /// >>> sorted([Weekday.SUN, Weekday.MON])
+    /// [Weekday.MON, Weekday.SUN]
     PyWeekday : Weekday, WeekdayArg, "Weekday",
     [
         MON => Mon, "Mon" | "Monday";
@@ -179,15 +229,35 @@ vocabulary! {
         fn get(&self) -> u8 {
             self.0.get()
         }
+
+        /// The same number, where Python asks for an index: `int(weekday)`
+        /// works, and a weekday indexes a sequence directly. It is not
+        /// arithmetic — `Weekday.WED - 1` is still a TypeError, as it is in
+        /// the crate.
+        ///
+        /// >>> from fasti import Weekday
+        /// >>> int(Weekday.SAT)
+        /// 6
+        /// >>> "-MTWTFSS"[Weekday.WED]
+        /// 'W'
+        fn __index__(&self) -> u8 {
+            self.0.get()
+        }
+
     }
 }
 
-vocabulary! {
+vocabulary_ordered! {
     /// How often a schedule recurs in a year.
+    ///
+    /// Frequencies order as the crate orders them: by recurrences per
+    /// year, so annual is the smallest.
     ///
     /// >>> from fasti import Frequency
     /// >>> Frequency.QUARTERLY.per_year()
     /// 4
+    /// >>> Frequency.ANNUAL < Frequency.MONTHLY
+    /// True
     PyFrequency : Frequency, FrequencyArg, "Frequency",
     [
         ANNUAL => Annual, "Annual" | "yearly";
@@ -206,6 +276,7 @@ vocabulary! {
         fn per_year(&self) -> u16 {
             self.0.per_year()
         }
+
     }
 }
 

@@ -104,6 +104,21 @@ impl<'py> FromPyObject<'_, 'py> for DateArg {
     }
 }
 
+/// A date operand for an operator: `None` when the object is not a date
+/// at all, so the caller can return `NotImplemented` and let Python say
+/// "unsupported operand type(s)" the way it says it everywhere else.
+///
+/// A `datetime.datetime` is not "not a date" — it is the near miss this
+/// boundary exists to catch, so it is still refused by name.
+pub fn date_operand(obj: &Bound<'_, PyAny>) -> PyResult<Option<Date>> {
+    let py = obj.py();
+    // The date branch also catches a datetime, and refuses it by name.
+    if obj.is_instance(datetime_type(py)?.as_any())? || obj.is_instance(date_type(py)?.as_any())? {
+        return DateArg::extract(obj.as_borrowed()).map(|date| Some(date.0));
+    }
+    Ok(None)
+}
+
 /// A [`Date`] as a `datetime.date`.
 pub fn date_out(py: Python<'_>, date: Date) -> PyResult<Bound<'_, PyAny>> {
     FROMORDINAL
