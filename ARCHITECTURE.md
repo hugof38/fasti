@@ -119,10 +119,10 @@ the constraint wins unless the design discussion says otherwise.
   adjustments and range walks all bottom out in `Calendar::is_holiday`,
   so its cost is the crate's cost. `cargo bench --bench calendar`
   measures it per built-in calendar; a change to rule evaluation
-  carries before/after numbers. The benchmark is a `harness = false`
-  binary with no dev-dependency: `criterion` and `divan` buy rigour
-  with a subtree `cargo deny` has to clear, and these quantities do
-  not need it.
+  carries before/after numbers. `divan` is the harness, picked over
+  `criterion` for its dependency footprint — ten crates against thirty
+  — because a dev-dependency is still a `cargo deny` surface and still
+  has to resolve on the MSRV.
 - **Optimise by asking a cheaper question, not by caching in place.**
   The rule scan got faster because a rule can name its own date for a
   year; `Date::year` got faster because a Gregorian cycle is 146_097

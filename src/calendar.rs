@@ -801,6 +801,71 @@ mod tests {
     }
 
     #[test]
+    fn a_shift_only_moves_off_a_day_the_calendar_calls_a_weekend() {
+        // Friday/Saturday weekend, so Sunday is a working day. A
+        // holiday landing on it is simply observed there — the shift
+        // has nothing to move it off, and the Monday owes nothing.
+        const GULF: Calendar<'static> = Calendar {
+            name: "Fri/Sat weekend",
+            weekend: Weekend::FRI_SAT,
+            rules: &[Rule::Fixed(
+                FixedDate::new(Month::Jan, 1).shift(WeekendShift::Forward),
+            )],
+        };
+        // Jan 1 2023 was a Sunday: a working day here.
+        assert!(GULF.is_holiday(ymd(2023, Month::Jan, 1)));
+        assert!(!GULF.is_business_day(ymd(2023, Month::Jan, 1)));
+        assert!(GULF.is_business_day(ymd(2023, Month::Jan, 2)));
+        // Jan 1 2022 was a Saturday, which this calendar does call a
+        // weekend, so that one does owe a day off — and the Sunday
+        // cannot take it, so the Monday does.
+        assert!(GULF.is_business_day(ymd(2022, Month::Jan, 2))); // Sun
+        assert!(GULF.is_holiday(ymd(2022, Month::Jan, 3))); // Mon
+    }
+
+    #[test]
+    fn a_weekend_owes_its_two_days_into_the_next_year() {
+        // Dec 31 2022 was a Saturday and Jan 1 2023 the Sunday, so the
+        // weekend owes two days off: the Monday takes the first and the
+        // Tuesday the second. Resolving that Tuesday reads three days
+        // back, into the year before.
+        const EVE_AND_DAY: Calendar<'static> = Calendar {
+            name: "New Year's Eve and Day",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Dec, 31).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::Forward)),
+            ],
+        };
+        assert!(EVE_AND_DAY.is_holiday(ymd(2022, Month::Dec, 31))); // Sat, natural
+        assert!(EVE_AND_DAY.is_holiday(ymd(2023, Month::Jan, 1))); // Sun, natural
+        assert!(EVE_AND_DAY.is_holiday(ymd(2023, Month::Jan, 2))); // Mon, first owed
+        assert!(EVE_AND_DAY.is_holiday(ymd(2023, Month::Jan, 3))); // Tue, second owed
+        assert!(EVE_AND_DAY.is_business_day(ymd(2023, Month::Jan, 4)));
+    }
+
+    #[test]
+    fn a_blocked_monday_pushes_the_day_off_into_the_next_year() {
+        // Dec 29 2029 was a Saturday, so Dec 31 is the Monday — a
+        // holiday of its own, which sends the one day off owed on to
+        // Tuesday January 1. The Tuesday is in the next year, and the
+        // Saturday that owes it is three days back in this one.
+        const YEAR_END: Calendar<'static> = Calendar {
+            name: "Year End",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Dec, 29).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Dec, 31)),
+            ],
+        };
+        assert!(YEAR_END.is_holiday(ymd(2029, Month::Dec, 29))); // Sat, natural
+        assert!(YEAR_END.is_business_day(ymd(2029, Month::Dec, 28))); // Fri, no back shift
+        assert!(YEAR_END.is_holiday(ymd(2029, Month::Dec, 31))); // Mon, natural
+        assert!(YEAR_END.is_holiday(ymd(2030, Month::Jan, 1))); // Tue, the day owed
+        assert!(YEAR_END.is_business_day(ymd(2030, Month::Jan, 2)));
+    }
+
+    #[test]
     fn a_substitute_may_cross_a_year_boundary() {
         const NEW_YEAR: Calendar<'static> = Calendar {
             name: "New Year",

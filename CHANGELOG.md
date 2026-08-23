@@ -15,18 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolution is built on — callers precomputing their own holiday sets
   need nothing else.
 - `cargo bench --bench calendar`: per-day and per-call costs for every
-  built-in calendar. No benchmarking dependency; the harness is a
-  `harness = false` binary, and an unoptimised build does a smoke run
-  so `cargo test --all-targets` keeps it compiling.
+  built-in calendar, on `divan` (a dev-dependency only). `cargo test
+  --all-targets` runs each benchmark once as a test, over a single year
+  rather than a century, so it cannot rot.
 
 ### Changed
 
 - Calendar rule evaluation is an order of magnitude faster, per call
   and per day walked, and stays stateless: no cache, in `Calendar` or
   anywhere else. Holiday answers are unchanged, byte for byte, for
-  every date in 1901..=2199 — `tests/equivalence.rs` checks each
-  built-in and nine synthetic calendars against the original
-  algorithm.
+  every date in 1901..=2199, which was verified against the original
+  algorithm over that whole range while the change was developed.
 - `Date::year` derives the year arithmetically instead of binary
   searching the cumulative-days table, which speeds up every
   `to_ymd`-based accessor with it.

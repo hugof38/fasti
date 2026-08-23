@@ -137,6 +137,10 @@ impl Rule {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    extern crate alloc;
+
+    use proptest::prelude::*;
+
     use super::*;
     use crate::{Month, Ordinal, Weekday, Year};
 
@@ -170,6 +174,93 @@ mod tests {
         // 2026-02-13 is a Friday.
         assert!(rule.is_holiday(ymd(2026, Month::Feb, 13)));
         assert!(!rule.is_holiday(ymd(2026, Month::Feb, 14)));
+    }
+
+    /// Every rule of every built-in, so the invariants below are
+    /// checked against real holiday data rather than invented rules.
+    fn built_in_rules() -> alloc::vec::Vec<Rule> {
+        use crate::calendars;
+        [
+            calendars::TARGET,
+            calendars::france::SETTLEMENT,
+            calendars::france::EXCHANGE,
+            calendars::uk::SETTLEMENT,
+            calendars::us::SETTLEMENT,
+            calendars::us::FEDERAL_RESERVE,
+            calendars::us::GOVERNMENT_BOND,
+            calendars::us::SOFR,
+            calendars::us::NERC,
+            calendars::us::NYSE,
+        ]
+        .iter()
+        .flat_map(|cal| cal.rules.iter().copied())
+        .collect()
+    }
+
+    /// The date a rule names in a year is *in* that year. Nothing a
+    /// calendar can be asked observes a rule that breaks this — an
+    /// Easter offset running past December 31 names a date the calendar
+    /// never compares it against — but a caller resolving a year at a
+    /// time would collect a holiday that is not one.
+    #[test]
+    fn natural_date_names_a_date_inside_the_year() {
+        for (i, rule) in built_in_rules().iter().enumerate() {
+            for year in Year::MIN.get()..=Year::MAX.get() {
+                let Ok(year) = Year::new(year) else { continue };
+                if let RuleDate::On(named) = rule.natural_date(year) {
+                    assert_eq!(named.year(), year, "rule {i} in {year}");
+                }
+            }
+        }
+    }
+
+    /// An Easter offset far enough out lands in the next year, which
+    /// `is_holiday` never matches — it only ever checks `date.year()` —
+    /// so `natural_date` must not name it either. Easter Sunday falls
+    /// between March 22 and April 25, so 300 days on is always the year
+    /// after; the crate documents `Rule::Custom` for offsets that far.
+    #[test]
+    fn an_easter_offset_that_leaves_its_year_names_nothing() {
+        let rule = Rule::Easter(EasterOffset::new(300));
+        for year in Year::MIN.get()..=Year::MAX.get() {
+            let Ok(year) = Year::new(year) else { continue };
+            assert_eq!(rule.natural_date(year), RuleDate::None, "{year}");
+        }
+    }
+
+    /// An opaque rule stays opaque in every year: `Rule::Custom` is a
+    /// predicate, and a predicate cannot be asked what it names.
+    #[test]
+    fn a_custom_rule_is_opaque_in_every_year() {
+        let rule = Rule::Custom(|d| d.day() == 13);
+        for year in Year::MIN.get()..=Year::MAX.get() {
+            let Ok(year) = Year::new(year) else { continue };
+            assert!(
+                matches!(rule.natural_date(year), RuleDate::Opaque),
+                "{year}"
+            );
+        }
+    }
+
+    proptest! {
+        /// `natural_date` and `is_holiday` are duals: a rule marks a
+        /// date iff that is the date it names in the date's year. Every
+        /// per-year resolution a caller writes rests on this.
+        #[test]
+        fn natural_date_and_is_holiday_agree(serial in 0u32..=Date::MAX.serial()) {
+            let date = Date::from_serial(serial).unwrap();
+            for rule in built_in_rules() {
+                if matches!(rule.natural_date(date.year()), RuleDate::Opaque) {
+                    continue;
+                }
+                prop_assert_eq!(
+                    rule.is_holiday(date),
+                    rule.natural_date(date.year()) == RuleDate::On(date),
+                    "{}",
+                    date,
+                );
+            }
+        }
     }
 
     // Const-constructibility check; module scope for clippy::items_after_statements.

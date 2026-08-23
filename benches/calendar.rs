@@ -1,41 +1,85 @@
 //! Calendar rule-evaluation benchmarks: `cargo bench --bench calendar`.
 //!
-//! No benchmarking dev-dependency on purpose — `criterion` and `divan`
-//! buy statistical rigour with a dependency subtree `cargo deny` has to
-//! clear, and the quantities here are coarse. The harness takes the
-//! minimum of several repetitions of a large fixed workload, a stable
-//! estimator for integer computation with no allocation and no I/O.
-//! `cargo test --all-targets` runs it as a fast smoke pass, so it
-//! cannot rot unnoticed.
+//! Rule evaluation is the hot path of the whole crate — schedules,
+//! adjustments and range walks all bottom out in
+//! [`Calendar::is_holiday`] — so every built-in calendar is measured
+//! three ways: a day walked in sequence, a cold call on a date with no
+//! locality, and an adjustment, which evaluates the predicate three or
+//! four times.
+//!
+//! Counters are per-day or per-call, so `divan`'s throughput column
+//! reads directly as the cost of one day or one call.
 
-use std::hint::black_box;
-use std::time::{Duration, Instant};
-
+use divan::counter::ItemsCount;
+use divan::{Bencher, black_box};
 use fasti::{BusinessDayConvention, Calendar, Date, Month, Period, calendars};
 
-/// The century measured: 1926-01-01 ..= 2025-12-31, 36 525 days.
-fn century() -> (Date, Date) {
-    (
-        Date::from_ymd(1926, Month::Jan, 1).unwrap_or(Date::MIN),
-        Date::from_ymd(2026, Month::Jan, 1).unwrap_or(Date::MAX),
-    )
+fn main() {
+    divan::main();
 }
 
 /// Every built-in calendar, plus the two market-neutral baselines.
 const CALENDARS: [(&str, Calendar<'static>); 12] = [
-    ("NULL_CALENDAR", calendars::NULL_CALENDAR),
-    ("WEEKENDS_ONLY", calendars::WEEKENDS_ONLY),
-    ("TARGET", calendars::TARGET),
-    ("france::SETTLEMENT", calendars::france::SETTLEMENT),
-    ("france::EXCHANGE", calendars::france::EXCHANGE),
-    ("uk::SETTLEMENT", calendars::uk::SETTLEMENT),
-    ("us::SETTLEMENT", calendars::us::SETTLEMENT),
-    ("us::FEDERAL_RESERVE", calendars::us::FEDERAL_RESERVE),
-    ("us::GOVERNMENT_BOND", calendars::us::GOVERNMENT_BOND),
-    ("us::SOFR", calendars::us::SOFR),
-    ("us::NERC", calendars::us::NERC),
-    ("us::NYSE", calendars::us::NYSE),
+    ("null", calendars::NULL_CALENDAR),
+    ("weekends_only", calendars::WEEKENDS_ONLY),
+    ("target", calendars::TARGET),
+    ("france_settlement", calendars::france::SETTLEMENT),
+    ("france_exchange", calendars::france::EXCHANGE),
+    ("uk_settlement", calendars::uk::SETTLEMENT),
+    ("us_settlement", calendars::us::SETTLEMENT),
+    ("us_federal_reserve", calendars::us::FEDERAL_RESERVE),
+    ("us_government_bond", calendars::us::GOVERNMENT_BOND),
+    ("us_sofr", calendars::us::SOFR),
+    ("us_nerc", calendars::us::NERC),
+    ("us_nyse", calendars::us::NYSE),
 ];
+
+/// The names `divan` runs each benchmark over.
+const NAMES: [&str; 12] = [
+    "null",
+    "weekends_only",
+    "target",
+    "france_settlement",
+    "france_exchange",
+    "uk_settlement",
+    "us_settlement",
+    "us_federal_reserve",
+    "us_government_bond",
+    "us_sofr",
+    "us_nerc",
+    "us_nyse",
+];
+
+fn calendar(name: &str) -> Calendar<'static> {
+    let mut i = 0;
+    while i < CALENDARS.len() {
+        let (candidate, cal) = CALENDARS[i];
+        if candidate.as_bytes() == name.as_bytes() {
+            return cal;
+        }
+        i += 1;
+    }
+    calendars::NULL_CALENDAR
+}
+
+/// A century: 1926-01-01 ..= 2025-12-31, 36 525 days.
+///
+/// `cargo test --benches` runs every benchmark once as a test, against
+/// an unoptimised build that measures the optimiser rather than the
+/// code. That run only has to prove the benchmark still works, so it
+/// walks one year instead of a hundred.
+fn century() -> (Date, Date) {
+    let start = Date::from_ymd(1926, Month::Jan, 1).unwrap_or(Date::MIN);
+    let end_year = if cfg!(debug_assertions) { 1927 } else { 2026 };
+    (
+        start,
+        Date::from_ymd(end_year, Month::Jan, 1).unwrap_or(Date::MAX),
+    )
+}
+
+/// How many scattered dates the per-call benchmarks probe; likewise
+/// smaller in the unoptimised smoke run.
+const PROBES: usize = if cfg!(debug_assertions) { 128 } else { 8192 };
 
 /// A deterministic scatter of in-range dates, so the per-call numbers
 /// measure a cold call rather than a sequential walk.
@@ -54,138 +98,84 @@ fn scattered(n: usize) -> Vec<Date> {
     out
 }
 
-/// Minimum wall time over `reps` runs of `f`, which must return a value
-/// derived from the work so it cannot be optimised away.
-fn best_of<T>(reps: u32, mut f: impl FnMut() -> T) -> Duration {
-    let mut best = Duration::MAX;
-    for _ in 0..reps {
-        let start = Instant::now();
-        let out = f();
-        let elapsed = start.elapsed();
-        black_box(out);
-        best = best.min(elapsed);
-    }
-    best
-}
-
-/// Cost per unit of work, in picoseconds — integer arithmetic only, as
-/// the crate forbids floats in tests and benchmarks alike.
-fn per_op_ps(elapsed: Duration, ops: u64) -> u128 {
-    if ops == 0 {
-        return 0;
-    }
-    elapsed.as_nanos().saturating_mul(1000) / u128::from(ops)
-}
-
-/// Render picoseconds as nanoseconds with one decimal place.
-fn ns(ps: u128) -> String {
-    format!("{}.{}", ps / 1000, (ps % 1000) / 100)
-}
-
-fn main() {
-    // A debug build measures the optimiser, not the code, so an
-    // unoptimised run (`cargo test --all-targets` builds one) does a
-    // smoke pass instead: it proves the benchmark still compiles and
-    // runs without pretending the numbers mean anything.
-    let smoke = cfg!(debug_assertions) || std::env::args().any(|a| a == "--test");
-    let reps = if smoke { 1 } else { 7 };
+/// Enumerating business days a day at a time — the cost the whole crate
+/// pays per day of any range it walks.
+#[divan::bench(args = NAMES)]
+fn walk_century(bencher: Bencher<'_, '_>, name: &str) {
+    let cal = calendar(name);
     let (start, end) = century();
-    let end = if smoke {
-        start.add_days(60).unwrap_or(end)
-    } else {
-        end
-    };
     let days = u64::from(end.serial() - start.serial());
-    let probes = scattered(if smoke { 256 } else { 8192 });
-    let n_probes = probes.len() as u64;
-
-    println!();
-    if smoke {
-        println!("fasti calendar benchmarks — SMOKE RUN (unoptimised build); numbers are noise");
-    } else {
-        println!("fasti calendar benchmarks — {days} days walked per iteration, best of {reps}");
-    }
-    println!();
-    println!(
-        "| calendar | walk ns/day | is_business_day ns/call | adjust ns/call | business_days ns/day |",
-    );
-    println!("|---|---|---|---|---|");
-
-    for (name, cal) in CALENDARS {
-        // Sequential walk: the range-enumeration cost the task measures.
-        let walk = best_of(reps, || {
-            let mut n = 0u32;
-            let mut d = start;
-            while d < end {
-                if cal.is_business_day(black_box(d)) {
-                    n += 1;
-                }
-                d = d.add_days(1).unwrap_or(Date::MAX);
+    bencher.counter(ItemsCount::new(days)).bench(|| {
+        let mut open = 0u32;
+        let mut day = start;
+        while day < end {
+            if cal.is_business_day(black_box(day)) {
+                open += 1;
             }
-            n
-        });
+            day = day.add_days(1).unwrap_or(Date::MAX);
+        }
+        open
+    });
+}
 
-        // Scattered single calls: the per-call path, no locality.
-        let calls = best_of(reps, || {
-            let mut n = 0u32;
-            for &d in &probes {
-                if cal.is_business_day(black_box(d)) {
-                    n += 1;
-                }
-            }
-            n
-        });
+/// The same range through the iterator, which is what callers actually
+/// write.
+#[divan::bench(args = NAMES)]
+fn business_days_iter(bencher: Bencher<'_, '_>, name: &str) {
+    let cal = calendar(name);
+    let (start, end) = century();
+    let days = u64::from(end.serial() - start.serial());
+    bencher
+        .counter(ItemsCount::new(days))
+        .bench(|| cal.business_days(black_box(start)..black_box(end)).count());
+}
 
-        // adjust: evaluates the predicate several times per call.
-        let adjust = best_of(reps, || {
-            let mut acc = 0u32;
-            for &d in &probes {
-                if let Ok(a) = cal.adjust(black_box(d), BusinessDayConvention::ModifiedFollowing) {
-                    acc = acc.wrapping_add(a.serial());
-                }
-            }
-            acc
-        });
+/// A single call on a date with no locality: the per-call path, with
+/// nothing to reuse from the call before.
+#[divan::bench(args = NAMES)]
+fn is_business_day(bencher: Bencher<'_, '_>, name: &str) {
+    let cal = calendar(name);
+    let probes = scattered(PROBES);
+    bencher
+        .counter(ItemsCount::new(probes.len()))
+        .bench(|| probes.iter().filter(|d| cal.is_business_day(**d)).count());
+}
 
-        // The iterator, which is where a per-year memo can live.
-        let iter = best_of(reps, || cal.business_days(start..end).count());
-
-        println!(
-            "| {name} | {} | {} | {} | {} |",
-            ns(per_op_ps(walk, days)),
-            ns(per_op_ps(calls, n_probes)),
-            ns(per_op_ps(adjust, n_probes)),
-            ns(per_op_ps(iter, days)),
-        );
-    }
-
-    // A schedule-shaped workload: ten years of monthly roll dates, the
-    // shape `ScheduleBuilder` walks.
-    let cal = calendars::us::SETTLEMENT;
-    let anchor = Date::from_ymd(2000, Month::Jan, 3).unwrap_or(Date::MIN);
-    // One schedule is 120 dates; time many of them so the measurement
-    // is not dominated by the clock.
-    let schedules: u32 = if smoke { 2 } else { 500 };
-    let rolls = u64::from(schedules) * 120;
-    let advance = best_of(reps, || {
+/// Adjustment, which evaluates the predicate three or four times per
+/// call and so magnifies whatever a single evaluation costs.
+#[divan::bench(args = NAMES)]
+fn adjust(bencher: Bencher<'_, '_>, name: &str) {
+    let cal = calendar(name);
+    let probes = scattered(PROBES);
+    bencher.counter(ItemsCount::new(probes.len())).bench(|| {
         let mut acc = 0u32;
-        for _ in 0..schedules {
-            for i in 0..120i32 {
-                if let Ok(d) = cal.advance(
-                    black_box(anchor),
-                    Period::Months(i),
-                    BusinessDayConvention::ModifiedFollowing,
-                    false,
-                ) {
-                    acc = acc.wrapping_add(d.serial());
-                }
+        for &d in &probes {
+            if let Ok(rolled) = cal.adjust(d, BusinessDayConvention::ModifiedFollowing) {
+                acc = acc.wrapping_add(rolled.serial());
             }
         }
         acc
     });
-    println!();
-    println!(
-        "us::SETTLEMENT, 120 monthly roll dates: advance() {} ns/call",
-        ns(per_op_ps(advance, rolls)),
-    );
+}
+
+/// A schedule-shaped workload: ten years of monthly roll dates, the
+/// shape `ScheduleBuilder` walks.
+#[divan::bench]
+fn advance_monthly_rolls(bencher: Bencher<'_, '_>) {
+    let cal = calendars::us::SETTLEMENT;
+    let anchor = Date::from_ymd(2000, Month::Jan, 3).unwrap_or(Date::MIN);
+    bencher.counter(ItemsCount::new(120usize)).bench(|| {
+        let mut acc = 0u32;
+        for months in 0..120i32 {
+            if let Ok(d) = cal.advance(
+                black_box(anchor),
+                Period::Months(months),
+                BusinessDayConvention::ModifiedFollowing,
+                false,
+            ) {
+                acc = acc.wrapping_add(d.serial());
+            }
+        }
+        acc
+    });
 }
