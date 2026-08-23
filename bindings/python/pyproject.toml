@@ -22,7 +22,20 @@ keywords = ["date", "calendar", "business-day", "day-count", "finance"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Financial and Insurance Industry",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    # abi3 is a CPython ABI; PyPy cannot load these wheels.
+    "Programming Language :: Python :: Implementation :: CPython",
+    # Beta rather than stable: the free-threaded build is exercised by the
+    # suite on every change, but the package as a whole is still 0.1.
+    "Programming Language :: Python :: Free Threading :: 2 - Beta",
     "Programming Language :: Rust",
     "Topic :: Office/Business :: Financial",
     "Typing :: Typed",
@@ -32,6 +45,10 @@ dynamic = ["version"]
 
 [project.urls]
 Repository = "https://github.com/hugof38/fasti"
+Documentation = "https://github.com/hugof38/fasti/blob/main/bindings/python/README-py.md"
+# The repository changelog: fasti-py has no separate one yet, and the
+# binding's entries live there under the version that carried them.
+Changelog = "https://github.com/hugof38/fasti/blob/main/CHANGELOG.md"
 Issues = "https://github.com/hugof38/fasti/issues"
 
 [dependency-groups]
