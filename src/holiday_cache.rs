@@ -66,13 +66,15 @@ impl Planes {
             return Self::EMPTY;
         };
         let base = jan1.serial().saturating_sub(PAD_BEFORE);
-        let last =
-            (jan1.serial() + u32::from(year.length()) - 1 + PAD_AFTER).min(Date::MAX.serial());
+        // The year's own last day, and the span's, which reaches one day
+        // further unless the end of the supported range stops it.
+        let last = jan1.serial() + u32::from(year.length()) - 1;
+        let span_last = (last + PAD_AFTER).min(Date::MAX.serial());
         let mut planes = Self {
             base,
-            len: last - base + 1,
+            len: span_last - base + 1,
             first: jan1.serial(),
-            last: last.saturating_sub(PAD_AFTER),
+            last,
             ..Self::EMPTY
         };
         // The pads belong to the neighbouring years, so their rules are
@@ -95,8 +97,8 @@ impl Planes {
 
     /// `true` iff `date` belongs to the year these planes resolve — and
     /// so iff every day a substitute decision for it reaches is inside
-    /// the padded span. Two comparisons, where deriving the year is a
-    /// search over three centuries.
+    /// the padded span. Two comparisons, against a division and a table
+    /// probe to derive the year.
     const fn covers(&self, date: Date) -> bool {
         date.serial() >= self.first && date.serial() <= self.last
     }
@@ -342,7 +344,7 @@ impl<'a> HolidayCache<'a> {
     fn window(&mut self, date: Date, shape: Shape) -> Window {
         let slot = self.slot_for(date);
         let planes = self.slots[slot];
-        let mut window = Window::default();
+        let mut window = Window::EMPTY;
         for i in 0..shape.len {
             // `shape.len` is at most 4, so neither cast can lose data.
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]

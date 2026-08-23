@@ -17,7 +17,8 @@
 //! Landed today: date primitives ([`Date`], [`Year`], [`Month`],
 //! [`Weekday`], [`Ordinal`], [`DateRange`]), holiday rules ([`Rule`] and friends),
 //! Easter tables ([`easter_monday`], [`easter_sunday`]), [`YearRange`],
-//! [`Calendar`] / [`CalendarBuilder`] with built-ins under [`calendars`],
+//! [`Calendar`] / [`CalendarBuilder`] with built-ins under [`calendars`]
+//! and the [`HolidayCache`] memo,
 //! [`Period`] / [`Frequency`] arithmetic, [`BusinessDayConvention`] with
 //! [`Calendar::adjust`] and [`Calendar::advance`], the [`Fraction`] type,
 //! the [`DayCount`] trait and its conventions, [`Schedule`] /

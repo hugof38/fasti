@@ -21,7 +21,23 @@ cargo deny check          # licenses, advisories, banned dependencies
 ```
 
 Doctests do not run under `--all-targets`, which is why they get their
-own line. The minimum supported Rust version is pinned in `Cargo.toml`
+own line.
+
+Calendar performance has a benchmark, run with one command:
+
+```bash
+cargo bench --bench calendar
+```
+
+It prints per-day and per-call costs for every built-in calendar. There
+is deliberately no benchmarking dev-dependency: a dev-dependency is
+still a `cargo deny check` surface and still has to resolve on the
+MSRV, and the quantities here are coarse enough that a
+minimum-of-repetitions harness measures them honestly. `cargo test
+--all-targets` builds and smoke-runs the benchmark so it cannot rot,
+skipping the real workload because an unoptimised build measures the
+optimiser rather than the code. Put before/after numbers in the pull
+request for any change that touches rule evaluation. The minimum supported Rust version is pinned in `Cargo.toml`
 (`rust-version`); CI builds against both stable and the MSRV.
 
 `Cargo.lock` is committed even though this is a library. It does not
@@ -59,6 +75,11 @@ design constraints. The short version:
   style.
 - Calendar data must be checkable against public sources; cite the
   source in a comment when it is not obvious.
+- Holiday answers are frozen. `tests/equivalence.rs` keeps the original
+  rule-scanning algorithm as an oracle and compares it against the
+  current one for every built-in calendar and every date in
+  1901..=2199. If a change makes a date disagree, the change is wrong,
+  not the test.
 - `tests/public_api.rs` compiles as a separate crate against the
   published surface only. Anything reachable in-crate but not
   re-exported from the root fails there rather than in a downstream

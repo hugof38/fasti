@@ -18,9 +18,10 @@ use core::str::FromStr;
 use fasti::{
     Act360, Act365Fixed, ActActICMA, ActActISDA, BusinessDayConvention, Calendar, CalendarBuilder,
     Date, DateRange, DayCount, EasterMethod, EasterOffset, FixedDate, Fraction, Frequency,
-    Generation, LastWeekday, Month, NthWeekday, OneOff, Ordinal, Period, Rule, Schedule,
-    ScheduleBuilder, Thirty360Bond, Thirty360European, Thirty360ISDA, Thirty360US, TimeError,
-    Weekday, Weekend, Year, YearRange, calendars, easter_monday, easter_sunday,
+    Generation, HolidayCache, LastWeekday, Month, NthWeekday, OneOff, Ordinal, Period, Rule,
+    RuleDate, Schedule, ScheduleBuilder, Thirty360Bond, Thirty360European, Thirty360ISDA,
+    Thirty360US, TimeError, Weekday, Weekend, Year, YearRange, calendars, easter_monday,
+    easter_sunday,
 };
 
 /// A realistic coupon-accrual workflow, the way a downstream crate would
@@ -191,6 +192,134 @@ fn calendar_builder_composes_every_rule_variant() -> Result<(), TimeError> {
     assert!(cal.is_holiday(Date::from_ymd(2028, Month::Feb, 29)?)); // custom
     // Inherited from the union with US settlement.
     assert!(cal.is_holiday(Date::from_ymd(2026, Month::Jul, 3)?));
+    Ok(())
+}
+
+/// The memo a caller opts into: it answers the same questions as the
+/// calendar it wraps, and a downstream crate can build one over a
+/// calendar of its own.
+#[test]
+fn holiday_cache_mirrors_its_calendar() -> Result<(), TimeError> {
+    let owned = CalendarBuilder::from_calendar(calendars::uk::SETTLEMENT)
+        .name("UK + blackout")
+        .with_rule(Rule::OneOff(OneOff::new(Date::from_ymd(
+            2026,
+            Month::Aug,
+            3,
+        )?)));
+    let cal = owned.view();
+    let mut cache = HolidayCache::new(cal);
+    assert_eq!(cache.calendar().name, "UK + blackout");
+
+    // Christmas 2021 fell on a Saturday: the Monday and the Tuesday are
+    // both bank holidays, and the memo says exactly what the calendar
+    // says.
+    let mut day = Date::from_ymd(2021, Month::Dec, 20)?;
+    let end = Date::from_ymd(2022, Month::Jan, 10)?;
+    while day < end {
+        assert_eq!(cache.is_holiday(day), cal.is_holiday(day), "{day}");
+        assert_eq!(
+            cache.is_business_day(day),
+            cal.is_business_day(day),
+            "{day}"
+        );
+        assert_eq!(cache.is_weekend(day), cal.is_weekend(day), "{day}");
+        day = day.add_days(1)?;
+    }
+    assert!(cache.is_holiday(Date::from_ymd(2021, Month::Dec, 27)?));
+    assert!(cache.is_holiday(Date::from_ymd(2021, Month::Dec, 28)?));
+    assert!(cache.is_holiday(Date::from_ymd(2026, Month::Aug, 3)?));
+
+    // The rolling helpers agree too, including across the year end.
+    let boxing_day = Date::from_ymd(2021, Month::Dec, 26)?;
+    assert_eq!(
+        cache.next_business_day(boxing_day),
+        cal.next_business_day(boxing_day),
+    );
+    assert_eq!(
+        cache.prev_business_day(boxing_day),
+        cal.prev_business_day(boxing_day),
+    );
+    assert_eq!(
+        cache.adjust(boxing_day, BusinessDayConvention::Following)?,
+        cal.adjust(boxing_day, BusinessDayConvention::Following)?,
+    );
+    assert_eq!(
+        cache.advance(
+            boxing_day,
+            Period::Months(1),
+            BusinessDayConvention::ModifiedFollowing,
+            false,
+        )?,
+        cal.advance(
+            boxing_day,
+            Period::Months(1),
+            BusinessDayConvention::ModifiedFollowing,
+            false,
+        )?,
+    );
+
+    // `From` is the same construction by another name.
+    let from_view: HolidayCache<'_> = HolidayCache::from(calendars::TARGET);
+    assert_eq!(from_view.calendar().name, calendars::TARGET.name);
+    Ok(())
+}
+
+/// A rule names at most one date per year and can say which, which is
+/// what lets a caller resolve a calendar a year at a time. Only
+/// `Rule::Custom` cannot answer.
+#[test]
+fn rules_name_their_own_dates() -> Result<(), TimeError> {
+    fn is_leap_day(d: Date) -> bool {
+        d.month() == Month::Feb && d.day() == 29
+    }
+
+    let year = Year::new(2026)?;
+    let cases = [
+        (
+            Rule::Fixed(FixedDate::new(Month::Jul, 4)),
+            RuleDate::On(Date::from_ymd(2026, Month::Jul, 4)?),
+        ),
+        (
+            Rule::NthWeekday(NthWeekday::new(Ordinal::Third, Weekday::Mon, Month::Jan)),
+            RuleDate::On(Date::from_ymd(2026, Month::Jan, 19)?),
+        ),
+        (
+            Rule::LastWeekday(LastWeekday::new(Weekday::Mon, Month::May)),
+            RuleDate::On(Date::from_ymd(2026, Month::May, 25)?),
+        ),
+        (
+            Rule::Easter(EasterOffset::good_friday()),
+            RuleDate::On(Date::from_ymd(2026, Month::Apr, 3)?),
+        ),
+        (
+            Rule::OneOff(OneOff::new(Date::from_ymd(2026, Month::Aug, 15)?)),
+            RuleDate::On(Date::from_ymd(2026, Month::Aug, 15)?),
+        ),
+        (
+            Rule::OneOff(OneOff::new(Date::from_ymd(2025, Month::Aug, 15)?)),
+            RuleDate::None,
+        ),
+        (Rule::Custom(is_leap_day), RuleDate::Opaque),
+    ];
+    for (rule, expected) in cases {
+        assert_eq!(rule.natural_date(year), expected);
+        // ... and what it names is what it calls a holiday.
+        if let RuleDate::On(named) = expected {
+            assert!(rule.is_holiday(named));
+        }
+    }
+
+    // A rule outside its year range names nothing.
+    let juneteenth = Rule::Fixed(FixedDate::new(Month::Jun, 19).from_year(Year::new(2022)?));
+    assert_eq!(juneteenth.natural_date(Year::new(2021)?), RuleDate::None);
+    // February 29 is not a date every year has.
+    let leap = Rule::Fixed(FixedDate::new(Month::Feb, 29));
+    assert_eq!(leap.natural_date(Year::new(2026)?), RuleDate::None);
+    assert_eq!(
+        leap.natural_date(Year::new(2028)?),
+        RuleDate::On(Date::from_ymd(2028, Month::Feb, 29)?),
+    );
     Ok(())
 }
 

@@ -37,7 +37,7 @@ pub enum WeekendShift {
 impl WeekendShift {
     /// Which way a holiday falling on `day` steps, if it steps at all —
     /// the whole table, and the only thing the variants differ by.
-    pub(crate) fn direction(self, day: Weekday) -> Option<i32> {
+    pub(crate) const fn direction(self, day: Weekday) -> Option<i32> {
         match (self, day) {
             (Self::None, _) => None,
             (_, Weekday::Sun) | (Self::Forward, Weekday::Sat) => Some(1),

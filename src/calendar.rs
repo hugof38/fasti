@@ -121,7 +121,7 @@ impl Calendar<'_> {
     /// Collect the natural-holiday facts about the days `shape` reaches,
     /// in one pass over the rules.
     fn window(&self, date: Date, shape: Shape) -> Window {
-        let mut window = Window::default();
+        let mut window = Window::EMPTY;
         let base = i64::from(date.serial()) + i64::from(shape.lo);
         let max = i64::from(Date::MAX.serial());
         // `date` itself is always inside the span, so clamping the ends
@@ -196,7 +196,7 @@ impl Calendar<'_> {
     /// The direction a holiday on `date` steps, or [`None`] if it stays
     /// put — `QuantLib`'s substitute only ever moves off a weekend, so a
     /// day this calendar does not call a weekend never moves.
-    pub(crate) fn steps(&self, date: Date, shift: WeekendShift) -> Option<i32> {
+    pub(crate) const fn steps(&self, date: Date, shift: WeekendShift) -> Option<i32> {
         let weekday = date.weekday();
         if self.weekend.contains(weekday) {
             shift.direction(weekday)
@@ -215,6 +215,10 @@ impl Calendar<'_> {
     /// excluded. Count them with `.count()`, collect them with
     /// `.collect()`.
     ///
+    /// The iterator resolves the calendar's rules a year at a time in
+    /// its own state — see [`HolidayCache`] — so a walk costs a bit test
+    /// per day rather than a rule scan.
+    ///
     /// ```
     /// use fasti::{Date, Month, calendars};
     /// // Jul 2024 has 23 weekdays.
@@ -230,7 +234,8 @@ impl Calendar<'_> {
     }
 
     /// The holidays in `range`, ascending. Weekends are excluded,
-    /// matching [`is_holiday`](Self::is_holiday).
+    /// matching [`is_holiday`](Self::is_holiday). Resolved a year at a
+    /// time, as [`business_days`](Self::business_days) is.
     pub fn holidays(&self, range: Range<Date>) -> impl DoubleEndedIterator<Item = Date> {
         let mut cache = HolidayCache::new(*self);
         range.dates().filter(move |d| cache.is_holiday(*d))
@@ -387,7 +392,9 @@ impl Calendar<'_> {
 /// being asked about. Only Friday, Monday and Tuesday can be substitute
 /// days: a weekend owes at most two days off, so there are three places
 /// one can land — the Monday and Tuesday going forwards, the Friday
-/// going back.
+/// going back — and they are checked rather than searched for.
+/// `QuantLib` hardcodes the same three across its US, UK and Canadian
+/// calendars.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Shape {
     /// Offset in days from the queried date to bit 0 of the window.
@@ -431,7 +438,7 @@ impl Shape {
 /// The natural-holiday facts about the days a [`Shape`] reaches. Bit `i`
 /// is the day `shape.lo + i` days from the queried date; a bit for a day
 /// outside the supported range is simply never set.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Window {
     /// Bit `i`: some rule names that day outright.
     pub(crate) natural: u8,
@@ -442,12 +449,28 @@ pub(crate) struct Window {
     pub(crate) back: u8,
 }
 
+impl Window {
+    /// Nothing known yet: no day named, no day stepping anywhere.
+    pub(crate) const EMPTY: Self = Self {
+        natural: 0,
+        fwd: 0,
+        back: 0,
+    };
+}
+
 /// [`Calendar::is_holiday`] for a day a substitute can land on.
 ///
 /// This is the substitute rule itself, unchanged: the Tuesday is reached
 /// whenever the Monday is taken, which a holiday of the Monday's own does
-/// as readily as the weekend's first day off, and a substitute needing
-/// the Wednesday is not granted.
+/// as readily as the weekend's first day off.
+///
+/// A substitute needing the Wednesday is not granted. Japan's Golden
+/// Week is the one convention that gets there, chaining through three
+/// consecutive holidays. No [`WeekendShift`] names a chain, and one
+/// pinned to a single date is data rather than a policy: it belongs in a
+/// [`Rule::Custom`] naming the observed day outright, as `QuantLib` does
+/// with `d == 6 && m == May && (w == Monday || w == Tuesday || w ==
+/// Wednesday)`.
 pub(crate) const fn resolve(weekday: Weekday, window: Window) -> bool {
     match weekday {
         // The Saturday ahead, stepping back.

@@ -35,6 +35,11 @@ same capability surface with:
   built-in calendar is a `pub const` — zero allocation, zero setup.
 - **No panics in library code.** Fallible operations return
   `Result<_, TimeError>`. `unwrap`/`expect`/`panic` are clippy-walled.
+- **Fast enough to walk a century.** Holiday rules resolve a year at a
+  time rather than a day at a time, so enumerating the business days of
+  1926..2026 on the US settlement calendar costs ~20 ns per day — about
+  0.7 ms for the century. `cargo bench --bench calendar` prints the
+  table for every built-in.
 - **Property-tested invariants.** Conservation laws (ACT-family
   additivity, adjust idempotence, schedule monotonicity) are proptest
   suites, not comments. A separate integration test compiles against
@@ -48,7 +53,7 @@ same capability surface with:
 | Date primitives | `Date` (serial, 1901-01-01..=2199-12-31), `Year`, `Month`, `Weekday`, `Ordinal` |
 | Durations | `Period` (days/weeks/months/years), `Frequency` |
 | Holiday rules | `Rule`: fixed-date (with weekend-shift policies), nth/last weekday, Easter offsets (Western & Orthodox), one-offs, custom `fn(Date) -> bool` |
-| Calendars | `Calendar` / `CalendarBuilder`; built-ins: TARGET, UK Settlement, US Settlement, NYSE, Federal Reserve, Government Bond, SOFR, NERC, France Settlement & Exchange, plus `WEEKENDS_ONLY` / `NULL_CALENDAR` baselines. Business-day and holiday enumeration over a date range, month edges, and joint calendars via `CalendarBuilder::union` |
+| Calendars | `Calendar` / `CalendarBuilder`, `HolidayCache`; built-ins: TARGET, UK Settlement, US Settlement, NYSE, Federal Reserve, Government Bond, SOFR, NERC, France Settlement & Exchange, plus `WEEKENDS_ONLY` / `NULL_CALENDAR` baselines. Business-day and holiday enumeration over a date range, month edges, and joint calendars via `CalendarBuilder::union` |
 | Business days | `BusinessDayConvention` (Following, ModifiedFollowing, Preceding, ModifiedPreceding, Unadjusted), `adjust`, `advance` |
 | Day counts | `DayCount`: ACT/360, ACT/365F, 30/360 (Bond Basis, US, 30E/360, 30E/360 ISDA), ACT/ACT (ISDA and schedule-aware ICMA) — all returning `Fraction` |
 | Schedules | `Schedule` / `ScheduleBuilder`: forward/backward/zero generation, stubs, end-of-month preservation |

@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `HolidayCache`: a caller-owned memo that resolves a `Calendar`'s
+  rules once per year instead of once per day, answering `is_holiday`,
+  `is_business_day`, `next`/`prev_business_day`, `adjust` and
+  `advance` identically to the calendar it wraps. `Calendar` stays a
+  borrowed `Copy` view and holds no cache; this is where one lives.
+- `Rule::natural_date(year) -> RuleDate`: the date a rule names in a
+  given year, or `RuleDate::Opaque` for the `Rule::Custom` predicate
+  that cannot say. The dual of `Rule::is_holiday`, and what the
+  per-year resolution is built on.
+- `cargo bench --bench calendar`: per-day and per-call costs for every
+  built-in calendar. No benchmarking dependency; the harness is a
+  `harness = false` binary, and an unoptimised build does a smoke run
+  so `cargo test --all-targets` keeps it compiling.
+
+### Changed
+
+- Calendar rule evaluation is 6-12x faster per day walked and per call
+  (US settlement: 923 -> 76 ns per day, 1146 -> 91 ns per
+  `is_business_day`, 1755 -> 148 ns per `adjust`); the iterators from
+  `Calendar::business_days` and `Calendar::holidays` carry a per-year
+  memo and are 20-45x faster (US settlement: 923 -> 20 ns per day).
+  Holiday answers are unchanged, byte for byte, for every date in
+  1901..=2199 — `tests/equivalence.rs` checks each built-in and twelve
+  synthetic calendars against the original algorithm.
+- `Date::year` derives the year arithmetically instead of binary
+  searching the cumulative-days table, which speeds up every
+  `to_ymd`-based accessor with it.
+
 ## [0.1.0] - 2026-08-21
 
 Initial release.
