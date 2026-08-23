@@ -130,7 +130,38 @@ const BOXING: Rule = Rule::Fixed(FixedDate::new(Month::Dec, 26).shift(WeekendShi
 const NEW_YEAR: Rule =
     Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::SatBackSunForward));
 
-const SYNTHETIC: [(&str, Calendar<'static>); 12] = [
+const SYNTHETIC: [(&str, Calendar<'static>); 14] = [
+    (
+        "a substitute reaching three days back over the year end",
+        Calendar {
+            name: "december 29",
+            weekend: Weekend::SAT_SUN,
+            // When December 29 is a Saturday, January 1 is the Tuesday
+            // three days later, and it is granted the day off only
+            // because December 31 is a holiday of its own that takes the
+            // Monday. Resolving that Tuesday reads a day in the previous
+            // year, three days before it.
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Dec, 29).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Dec, 31)),
+            ],
+        },
+    ),
+    (
+        "a weekend owing two days across the year end",
+        Calendar {
+            name: "new year's eve and day",
+            weekend: Weekend::SAT_SUN,
+            // When December 31 is a Saturday, January 1 is the Sunday:
+            // the Monday takes the first day off and the Tuesday the
+            // second, so resolving that Tuesday has to reach back three
+            // days into the previous year.
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Dec, 31).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::Forward)),
+            ],
+        },
+    ),
     (
         "fri/sat weekend, forward shifts",
         Calendar {
@@ -403,6 +434,156 @@ fn synthetic_calendars_match_the_original_algorithm() {
                 oracle_is_business_day(cal, d),
                 "{name}: is_business_day({d})",
             );
+        }
+    }
+}
+
+// ---- randomised calendars ----------------------------------------------
+
+/// A hand-picked calendar can only cover the shapes someone thought of.
+/// These build calendars out of random rules, random year ranges and
+/// random weekends, and hold all three paths — the oracle, the direct
+/// one and the memo — to the same answer on random dates.
+mod random {
+    use super::{oracle_is_business_day, oracle_is_holiday};
+    use fasti::{
+        Calendar, Date, EasterMethod, EasterOffset, FixedDate, HolidayCache, LastWeekday, Month,
+        NthWeekday, OneOff, Ordinal, Rule, Weekday, Weekend, WeekendShift, Year, YearRange,
+    };
+    use proptest::prelude::*;
+
+    /// Opaque predicates the generator can reach for. Each is cheap and
+    /// names days that collide with substitutes.
+    const CUSTOM: [fn(Date) -> bool; 3] = [
+        |d| matches!(d.weekday(), Weekday::Mon),
+        |d| d.day() == 1,
+        |d| d.month() == Month::Dec && d.day() >= 24,
+    ];
+
+    fn any_month() -> impl Strategy<Value = Month> {
+        (1u8..=12).prop_map(|m| Month::try_from_u8(m).unwrap_or(Month::Jan))
+    }
+
+    fn any_weekday() -> impl Strategy<Value = Weekday> {
+        (1u8..=7).prop_map(|w| Weekday::try_from_u8(w).unwrap_or(Weekday::Mon))
+    }
+
+    fn any_shift() -> impl Strategy<Value = WeekendShift> {
+        prop_oneof![
+            Just(WeekendShift::None),
+            Just(WeekendShift::Forward),
+            Just(WeekendShift::SunForward),
+            Just(WeekendShift::SatBackSunForward),
+        ]
+    }
+
+    /// A range that is sometimes open, sometimes a narrow window, so
+    /// rules switch on and off part-way through the walk.
+    fn any_years() -> impl Strategy<Value = YearRange> {
+        (1901u16..=2199, 0u16..=300).prop_map(|(from, span)| {
+            let to = from.saturating_add(span).min(2199);
+            YearRange::try_between(
+                Year::new(from).unwrap_or(Year::MIN),
+                Year::new(to).unwrap_or(Year::MAX),
+            )
+            .unwrap_or(YearRange::ALWAYS)
+        })
+    }
+
+    fn any_rule() -> impl Strategy<Value = Rule> {
+        prop_oneof![
+            // Days beyond a month's length are deliberately reachable:
+            // a rule naming February 31 names nothing, ever.
+            (any_month(), 1u8..=31, any_shift(), any_years())
+                .prop_map(|(m, d, s, y)| { Rule::Fixed(FixedDate::new(m, d).shift(s).years(y)) }),
+            ((1u8..=5), any_weekday(), any_month(), any_years()).prop_map(|(n, w, m, y)| {
+                Rule::NthWeekday(
+                    NthWeekday::new(Ordinal::try_from_u8(n).unwrap_or(Ordinal::First), w, m)
+                        .years(y),
+                )
+            }),
+            (any_weekday(), any_month(), any_years())
+                .prop_map(|(w, m, y)| Rule::LastWeekday(LastWeekday::new(w, m).years(y))),
+            // Offsets past a year's end are included on purpose: they
+            // name nothing, which is what the crate documents.
+            (-70i16..=400, any::<bool>(), any_years()).prop_map(|(days, orthodox, y)| {
+                let rule = if orthodox {
+                    EasterOffset::new_orthodox(days)
+                } else {
+                    EasterOffset::new(days)
+                };
+                assert_eq!(
+                    rule.method(),
+                    if orthodox {
+                        EasterMethod::Orthodox
+                    } else {
+                        EasterMethod::Western
+                    },
+                );
+                Rule::Easter(rule.years(y))
+            }),
+            (0u32..=Date::MAX.serial())
+                .prop_map(|s| Rule::OneOff(OneOff::new(Date::from_serial(s).unwrap_or(Date::MIN)))),
+            (0usize..CUSTOM.len()).prop_map(|i| Rule::Custom(CUSTOM[i])),
+        ]
+    }
+
+    fn any_weekend() -> impl Strategy<Value = Weekend> {
+        prop::collection::vec(any_weekday(), 0..3).prop_map(|days| Weekend::from_weekdays(&days))
+    }
+
+    proptest! {
+        /// One random calendar, one random date: all three paths agree.
+        #[test]
+        fn all_paths_agree_on_random_calendars(
+            rules in prop::collection::vec(any_rule(), 0..7),
+            weekend in any_weekend(),
+            serial in 0u32..=Date::MAX.serial(),
+        ) {
+            let cal = Calendar { name: "random", weekend, rules: &rules };
+            let date = Date::from_serial(serial).unwrap_or(Date::MIN);
+            let expected = oracle_is_holiday(cal, date);
+            prop_assert_eq!(cal.is_holiday(date), expected, "{}", date);
+            prop_assert_eq!(
+                HolidayCache::new(cal).is_holiday(date),
+                expected,
+                "cached {}",
+                date,
+            );
+            prop_assert_eq!(cal.is_business_day(date), oracle_is_business_day(cal, date));
+        }
+
+        /// A run of consecutive days across a year boundary, so the memo
+        /// is reused, evicted and rebuilt while the answers are checked.
+        #[test]
+        fn a_memo_reused_across_a_year_boundary_agrees(
+            rules in prop::collection::vec(any_rule(), 0..7),
+            weekend in any_weekend(),
+            year in 1902u16..=2198,
+        ) {
+            let cal = Calendar { name: "random", weekend, rules: &rules };
+            let mut cache = HolidayCache::new(cal);
+            let start = Date::from_ymd(year, Month::Dec, 20).unwrap_or(Date::MIN);
+            for offset in 0..25 {
+                let Ok(date) = start.add_days(offset) else { break };
+                prop_assert_eq!(
+                    cache.is_holiday(date),
+                    oracle_is_holiday(cal, date),
+                    "{}",
+                    date,
+                );
+            }
+            // ... and the same days answered back to front, which is the
+            // order a double-ended walk reaches them in.
+            for offset in (0..25).rev() {
+                let Ok(date) = start.add_days(offset) else { continue };
+                prop_assert_eq!(
+                    cache.is_business_day(date),
+                    oracle_is_business_day(cal, date),
+                    "{}",
+                    date,
+                );
+            }
         }
     }
 }
