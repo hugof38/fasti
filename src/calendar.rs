@@ -12,9 +12,10 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::Range;
 
+use crate::holiday_cache::HolidayCache;
 use crate::{
-    BusinessDayConvention, Date, DateRange, HolidayCache, Period, Rule, RuleDate, TimeError,
-    Weekday, Weekend, WeekendShift,
+    BusinessDayConvention, Date, DateRange, Period, Rule, RuleDate, TimeError, Weekday, Weekend,
+    WeekendShift,
 };
 
 /// A holiday calendar: a [`Weekend`] configuration plus a sequence of
@@ -216,8 +217,9 @@ impl Calendar<'_> {
     /// `.collect()`.
     ///
     /// The iterator resolves the calendar's rules a year at a time in
-    /// its own state — see [`HolidayCache`] — so a walk costs a bit test
-    /// per day rather than a rule scan.
+    /// its own state, so a walk costs a bit test per day rather than a
+    /// rule scan. Answers are identical to
+    /// [`is_business_day`](Self::is_business_day) for every date.
     ///
     /// ```
     /// use fasti::{Date, Month, calendars};
@@ -383,10 +385,10 @@ impl Calendar<'_> {
 // ---- substitute-day resolution -----------------------------------------
 //
 // A substitute decision reads at most five facts about at most four
-// days, so both the direct path above and the precomputed
-// [`HolidayCache`](crate::HolidayCache) collect those facts into a
-// `Window` and hand it to the one `resolve` below. The decision itself
-// therefore exists once, whichever path asked.
+// days, so both the direct path above and the per-year memo behind the
+// range iterators collect those facts into a `Window` and hand it to the
+// one `resolve` below. The decision itself therefore exists once,
+// whichever path asked.
 
 /// Which days a substitute decision reaches, as offsets from the day
 /// being asked about. Only Friday, Monday and Tuesday can be substitute
@@ -407,29 +409,24 @@ pub(crate) struct Shape {
 }
 
 impl Shape {
+    const fn new(lo: i32, len: u32, natural_mask: u8) -> Self {
+        Self {
+            lo,
+            len,
+            natural_mask,
+        }
+    }
+
     /// The window a date of this weekday needs, or [`None`] if no
-    /// substitute can land on it.
+    /// substitute can land on it. Bit 0 is the earliest day in it: a
+    /// Friday's own natural flag is bit 0 and the Saturday ahead bit 1,
+    /// while a Tuesday's weekend is bits 0 and 1, the Monday between is
+    /// bit 2 and the Tuesday itself bit 3.
     pub(crate) const fn of(weekday: Weekday) -> Option<Self> {
         match weekday {
-            // Bit 0 the Friday itself, bit 1 the Saturday ahead.
-            Weekday::Fri => Some(Self {
-                lo: 0,
-                len: 2,
-                natural_mask: 0b0001,
-            }),
-            // Bits 0 and 1 the weekend just gone, bit 2 the Monday.
-            Weekday::Mon => Some(Self {
-                lo: -2,
-                len: 3,
-                natural_mask: 0b0100,
-            }),
-            // Bits 0 and 1 the weekend, bit 2 the Monday between, bit 3
-            // the Tuesday.
-            Weekday::Tue => Some(Self {
-                lo: -3,
-                len: 4,
-                natural_mask: 0b1100,
-            }),
+            Weekday::Fri => Some(Self::new(0, 2, 0b0001)),
+            Weekday::Mon => Some(Self::new(-2, 3, 0b0100)),
+            Weekday::Tue => Some(Self::new(-3, 4, 0b1100)),
             _ => None,
         }
     }

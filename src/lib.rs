@@ -17,8 +17,7 @@
 //! Landed today: date primitives ([`Date`], [`Year`], [`Month`],
 //! [`Weekday`], [`Ordinal`], [`DateRange`]), holiday rules ([`Rule`] and friends),
 //! Easter tables ([`easter_monday`], [`easter_sunday`]), [`YearRange`],
-//! [`Calendar`] / [`CalendarBuilder`] with built-ins under [`calendars`]
-//! and the [`HolidayCache`] memo,
+//! [`Calendar`] / [`CalendarBuilder`] with built-ins under [`calendars`],
 //! [`Period`] / [`Frequency`] arithmetic, [`BusinessDayConvention`] with
 //! [`Calendar::adjust`] and [`Calendar::advance`], the [`Fraction`] type,
 //! the [`DayCount`] trait and its conventions, [`Schedule`] /
@@ -60,7 +59,6 @@ pub use daycount::{
 pub use easter::{EasterMethod, easter_monday, easter_sunday};
 pub use error::TimeError;
 pub use fraction::Fraction;
-pub use holiday_cache::HolidayCache;
 pub use period::{Frequency, Period};
 pub use rules::{
     EasterOffset, FixedDate, LastWeekday, NthWeekday, OneOff, Rule, RuleDate, WeekendShift,

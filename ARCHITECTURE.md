@@ -49,14 +49,14 @@ the constraint wins unless the design discussion says otherwise.
   makes per-year resolution possible; `Custom` returns
   `RuleDate::Opaque` and is probed per day. A new question a rule must
   answer becomes another method on the enum — never a trait.
-- **The memo lives in the caller, never in the calendar.** Built-in
+- **A memo lives in the caller, never in the calendar.** Built-in
   calendars are `pub const Calendar<'static>`, so no interior
   mutability and no lazy init is available to them, and none is
   wanted: a `Copy` view that silently carried a cache would be a
-  different type. `HolidayCache` is the memo, owned by whoever asks
-  repeatedly, and it is also what the `business_days` / `holidays`
-  iterators keep in their own state. Anything it computes must be
-  reproducible from the rules alone.
+  different type. The per-year memo is private state inside the
+  iterators `business_days` / `holidays` return; a caller wanting the
+  same for its own loop builds it from `Rule::natural_date`. Anything
+  such a memo computes must be reproducible from the rules alone.
 - **The substitute rule exists once.** Both the direct path and the
   cached one gather the same handful of facts about the days around a
   date into a `Window` and hand it to one `resolve`. Two copies of
@@ -124,12 +124,10 @@ the constraint wins unless the design discussion says otherwise.
   adjustments and range walks all bottom out in `Calendar::is_holiday`,
   so its cost is the crate's cost. `cargo bench --bench calendar`
   measures it per built-in calendar; a change to rule evaluation
-  carries before/after numbers.
-- **No benchmarking dependency.** The benchmark is a `harness = false`
-  binary taking the minimum of repeated fixed workloads. `criterion`
-  and `divan` buy statistical rigour with a dependency subtree that
-  `cargo deny` has to clear and the MSRV job has to resolve; the
-  quantities measured here do not need it.
+  carries before/after numbers. The benchmark is a `harness = false`
+  binary with no dev-dependency: `criterion` and `divan` buy rigour
+  with a subtree `cargo deny` has to clear, and these quantities do
+  not need it.
 - **Optimise by asking a cheaper question, not by caching in place.**
   The rule scan got faster because a rule can name its own date for a
   year; `Date::year` got faster because a Gregorian cycle is 146_097

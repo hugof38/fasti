@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 83922c6e911ae67eeeed2c74dc7c2b8764535e72c62d78530c4660047cd9bc98 # shrinks to rules = [Easter(EasterOffset { days: 278, method: Western, years: YearRange { from: Year(1944), to: Year(2065) } })], weekend = Weekend(0), year = 1983
+cc 3330096f2f398277fba47c0ef695d4cc4b91c98369855e3a8a3db82259bfd85d # shrinks to rules = [Custom(0x55d352ba2b20), Fixed(FixedDate { month: Jan, day: 1, shift: Forward, years: YearRange { from: Year(1901), to: Year(1901) } })], weekend = Weekend(0), serial = 57294
+cc 74b7be4e59138229adadf3f805220058bc2227089b0e6f2d49f4fab0f18508ba # shrinks to rules = [NthWeekday(NthWeekday { n: First, weekday: Mon, month: Jan, years: YearRange { from: Year(1929), to: Year(2102) } })], weekend = Weekend(0), year = 1928
