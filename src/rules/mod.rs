@@ -160,17 +160,23 @@ mod tests {
         }
     }
 
-    /// The forward direction, exhaustively: every date a rule expands
-    /// to falls in the asked-for year and probes as a holiday.
+    /// Both directions, exhaustively: for every case rule and every
+    /// year, the expanded date is exactly the set of days the rule
+    /// probes as holidays — no invented dates, none missed.
     #[test]
-    fn expansion_names_dates_the_rule_claims() {
+    fn expansion_matches_probing_over_every_year() {
+        use alloc::vec::Vec;
+        extern crate alloc;
         for rule in expansion_cases() {
             for y in Year::MIN.get()..=Year::MAX.get() {
                 let year = Year::new(y).unwrap();
-                if let Some(d) = rule.natural_date_in(year) {
-                    assert_eq!(d.year(), year, "{rule:?} in {y}");
-                    assert!(rule.is_holiday(d), "{rule:?} in {y} named {d}");
-                }
+                let jan1 = Date::from_ymd(y, Month::Jan, 1).unwrap();
+                let probed: Vec<Date> = (0..u32::from(year.length()))
+                    .map(|offset| Date::from_serial(jan1.serial() + offset).unwrap())
+                    .filter(|d| rule.is_holiday(*d))
+                    .collect();
+                let expanded: Vec<Date> = rule.natural_date_in(year).into_iter().collect();
+                assert_eq!(expanded, probed, "{rule:?} in {y}");
             }
         }
     }

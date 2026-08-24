@@ -823,6 +823,84 @@ mod tests {
     }
 
     #[test]
+    fn a_saturday_chain_is_pushed_past_a_natural_monday_holiday() {
+        // Jul 4 2026 is a Saturday with the chaining shift, Jul 6 a
+        // Monday holiday of its own, nothing on the Sunday: the
+        // Saturday's substitute alone is pushed to the Tuesday.
+        const CAL: Calendar<'static> = Calendar {
+            name: "Sat chain, Mon natural",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Jul, 6)),
+            ],
+        };
+        assert!(CAL.is_holiday(ymd(2026, Month::Jul, 6)));
+        assert!(CAL.is_holiday(ymd(2026, Month::Jul, 7)));
+        assert!(CAL.is_business_day(ymd(2026, Month::Jul, 8)));
+    }
+
+    #[test]
+    fn a_custom_rule_on_the_monday_pushes_a_chain_like_any_holiday() {
+        // The Monday blocker in the Tuesday decision must see Custom
+        // rules too: every July 6 is claimed by a predicate here.
+        fn july_sixth(d: Date) -> bool {
+            d.month() as u8 == Month::Jul as u8 && d.day() == 6
+        }
+        const CAL: Calendar<'static> = Calendar {
+            name: "Custom Monday",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::Forward)),
+                Rule::Custom(july_sixth),
+            ],
+        };
+        // Jul 5 2026 (Sun) chains past the Custom-claimed Monday.
+        assert!(CAL.is_holiday(ymd(2026, Month::Jul, 6)));
+        assert!(CAL.is_holiday(ymd(2026, Month::Jul, 7)));
+    }
+
+    #[test]
+    fn two_rules_on_one_day_keep_the_stronger_step() {
+        // A union can put a chaining and a single-step rule on the same
+        // natural date; the day then chains — whichever order the
+        // rules appear in.
+        const CHAIN_FIRST: Calendar<'static> = Calendar {
+            name: "Chain first",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::SunForward)),
+                Rule::Fixed(FixedDate::new(Month::Jul, 6)),
+            ],
+        };
+        const CHAIN_SECOND: Calendar<'static> = Calendar {
+            name: "Chain second",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::SunForward)),
+                Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Jul, 6)),
+            ],
+        };
+        // Jul 5 2026 (Sun) → Monday taken → the chain reaches Tuesday.
+        for cal in [CHAIN_FIRST, CHAIN_SECOND] {
+            assert!(cal.is_holiday(ymd(2026, Month::Jul, 7)), "{}", cal.name);
+        }
+    }
+
+    #[test]
+    fn only_fixed_rules_carry_a_shift() {
+        // A OneOff naming a Saturday outright grants no substitute —
+        // shifts belong to FixedDate rules alone.
+        let cal = CalendarBuilder::new("Weekend one-off", Weekend::SAT_SUN)
+            .with_rule(Rule::OneOff(OneOff::new(ymd(2026, Month::Jul, 4))));
+        assert!(cal.view().is_holiday(ymd(2026, Month::Jul, 4)));
+        assert!(cal.view().is_business_day(ymd(2026, Month::Jul, 3)));
+        assert!(cal.view().is_business_day(ymd(2026, Month::Jul, 6)));
+    }
+
+    #[test]
     fn conventions_deeper_than_the_supported_chain_use_custom_rules() {
         // Japan's Public Holiday Law Art. 3 moves a Sunday holiday to
         // the next day that is not itself a holiday — an unbounded
