@@ -29,7 +29,13 @@ chrono = { version = "0.4", optional = true, default-features = false }
 [package.metadata.docs.rs]
 all-features = true
 
+[[bench]]
+name = "calendar"
+harness = false
+
 [dev-dependencies]
+# Calendar-evaluation benchmark harness; `cargo bench` only.
+divan = "0.1.21"
 proptest = "1"
 # Only to round-trip the `serde` feature in tests/public_api.rs; never a
 # runtime dependency, and the crate itself is format-agnostic.

@@ -151,6 +151,11 @@ impl Calendar<'_> {
         // and ask each rule "what date do you name this year?" (one
         // date construction per rule). Only `Rule::Custom` cannot
         // answer that and keeps being probed per date.
+        if self.rules.is_empty() {
+            // No rules, no holidays — spare the weekends-only and null
+            // calendars the year derivation entirely.
+            return false;
+        }
         let weekday = date.weekday();
         let on_weekend = self.weekend.contains(weekday);
 
@@ -176,17 +181,20 @@ impl Calendar<'_> {
         let mut facts = [DayFacts::NONE; 5];
         self.scan_year(date, year, lo, hi, &mut facts);
         // The window can straddle a year boundary, and then each rule
-        // names a date on both sides of it — scan the neighbour too.
-        let day_of_year = i32::from(date.day_of_year());
-        if day_of_year + lo < 1
-            && let Ok(prev) = Year::new(year.get() - 1)
-        {
-            self.scan_year(date, prev, lo, hi, &mut facts);
-        }
-        if day_of_year + hi > i32::from(year.length())
-            && let Ok(next) = Year::new(year.get() + 1)
-        {
-            self.scan_year(date, next, lo, hi, &mut facts);
+        // names a date on both sides of it — scan the neighbour too. A
+        // natural-only window ({0}) lies in `year` by definition.
+        if lo < 0 || hi > 0 {
+            let day_of_year = i32::from(date.day_of_year());
+            if day_of_year + lo < 1
+                && let Ok(prev) = Year::new(year.get() - 1)
+            {
+                self.scan_year(date, prev, lo, hi, &mut facts);
+            }
+            if day_of_year + hi > i32::from(year.length())
+                && let Ok(next) = Year::new(year.get() + 1)
+            {
+                self.scan_year(date, next, lo, hi, &mut facts);
+            }
         }
 
         if facts[3].natural || self.custom_names(date) {
