@@ -1041,6 +1041,37 @@ mod tests {
         assert!(NEW_YEAR.is_holiday(ymd(2021, Month::Dec, 31)));
     }
 
+    #[test]
+    fn a_forward_substitute_may_cross_into_the_next_year() {
+        // The mirror image: the natural date lies in the year before
+        // its substitute. Dec 31 2023 was a Sunday → observed Monday
+        // Jan 1 2024.
+        const NYE: Calendar<'static> = Calendar {
+            name: "New Year's Eve",
+            weekend: Weekend::SAT_SUN,
+            rules: &[Rule::Fixed(
+                FixedDate::new(Month::Dec, 31).shift(WeekendShift::Forward),
+            )],
+        };
+        assert!(NYE.is_holiday(ymd(2024, Month::Jan, 1)));
+        // Dec 31 2022 was a Saturday → observed Monday Jan 2 2023.
+        assert!(NYE.is_holiday(ymd(2023, Month::Jan, 2)));
+        // And a chained pair straddling the boundary: Sat Dec 31 2022
+        // takes Monday Jan 2, pushing Sun Jan 1's substitute to
+        // Tuesday Jan 3 — the Tuesday decision reads into both years.
+        const NYE_AND_NY: Calendar<'static> = Calendar {
+            name: "New Year's Eve + New Year",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Dec, 31).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::Forward)),
+            ],
+        };
+        assert!(NYE_AND_NY.is_holiday(ymd(2023, Month::Jan, 2)));
+        assert!(NYE_AND_NY.is_holiday(ymd(2023, Month::Jan, 3)));
+        assert!(NYE_AND_NY.is_business_day(ymd(2023, Month::Jan, 4)));
+    }
+
     proptest! {
         /// A substitute is always a weekday, and never a date some rule
         /// already claims outright.
