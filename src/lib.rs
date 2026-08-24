@@ -60,7 +60,7 @@ pub use error::TimeError;
 pub use fraction::Fraction;
 pub use period::{Frequency, Period};
 pub use rules::{
-    EasterOffset, FixedDate, LastWeekday, NthWeekday, OneOff, Rule, RuleDate, WeekendShift,
+    EasterOffset, FixedDate, LastWeekday, NthWeekday, Occurrence, OneOff, Rule, WeekendShift,
 };
 pub use schedule::{DateGenerationRule, Generation, Schedule, ScheduleBuilder};
 pub use weekend::Weekend;

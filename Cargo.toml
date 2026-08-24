@@ -34,9 +34,7 @@ harness = false
 all-features = true
 
 [dev-dependencies]
-# The benchmark harness. Picked over `criterion` for its dependency
-# footprint — ten crates against thirty — in a crate whose required set
-# is one deep; `cargo deny check` covers both the same way.
+# Benchmark harness for `benches/calendar.rs`.
 divan = "0.1"
 proptest = "1"
 # Only to round-trip the `serde` feature in tests/public_api.rs; never a

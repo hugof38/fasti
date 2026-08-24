@@ -30,12 +30,8 @@ cargo bench --bench calendar
 ```
 
 It reports per-day and per-call costs for every built-in calendar, on
-[`divan`](https://docs.rs/divan) — chosen over `criterion` for its
-dependency footprint, since a dev-dependency is still a `cargo deny
-check` surface and still has to resolve on the MSRV. `cargo test
---all-targets` runs every benchmark once as a test, so the benchmark
-cannot rot; that run walks one year rather than a century, because an
-unoptimised build measures the optimiser rather than the code. Put
+[`divan`](https://docs.rs/divan). `cargo test --all-targets` runs every
+benchmark once as a test, over a single year rather than a century. Put
 before/after numbers in the pull request for any change that touches
 rule evaluation. The minimum supported Rust version is pinned in `Cargo.toml`
 (`rust-version`); CI builds against both stable and the MSRV.

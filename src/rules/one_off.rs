@@ -36,8 +36,7 @@ impl OneOff {
         self.date.serial() == date.serial()
     }
 
-    /// The rule's date if it falls in `year`, else [`None`] — the dual of
-    /// [`is_holiday`](Self::is_holiday).
+    /// The rule's date if it falls in `year`, else [`None`].
     pub(crate) const fn natural_date(self, year: Year) -> Option<Date> {
         if self.date.year().get() == year.get() {
             Some(self.date)

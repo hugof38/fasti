@@ -101,8 +101,7 @@ impl NthWeekday {
     /// is inactive that year or the month has no Nth such weekday (a
     /// fifth Monday it has no room for).
     ///
-    /// The dual of [`is_holiday`](Self::is_holiday), computed directly
-    /// from the weekday the month opens on rather than by testing days.
+    /// The dual of [`is_holiday`](Self::is_holiday).
     pub(crate) const fn natural_date(self, year: Year) -> Option<Date> {
         if !self.years.contains(year) {
             return None;
@@ -118,7 +117,7 @@ impl NthWeekday {
             return None;
         }
         // `day` is a valid day of this month, so stepping from the 1st
-        // stays inside it — cheaper than building the date from scratch.
+        // stays inside it.
         match first.add_days(day as i32 - 1) {
             Ok(d) => Some(d),
             Err(_) => None,

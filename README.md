@@ -35,11 +35,8 @@ same capability surface with:
   built-in calendar is a `pub const` — zero allocation, zero setup.
 - **No panics in library code.** Fallible operations return
   `Result<_, TimeError>`. `unwrap`/`expect`/`panic` are clippy-walled.
-- **Fast enough to walk a century.** Holiday rules resolve a year at a
-  time rather than a day at a time, so enumerating the business days of
-  1926..2026 on the US settlement calendar costs ~20 ns per day — about
-  0.7 ms for the century. `cargo bench --bench calendar` prints the
-  table for every built-in.
+- **Benchmarked.** `cargo bench --bench calendar` reports the per-day
+  and per-call cost of rule evaluation for every built-in calendar.
 - **Property-tested invariants.** Conservation laws (ACT-family
   additivity, adjust idempotence, schedule monotonicity) are proptest
   suites, not comments. A separate integration test compiles against

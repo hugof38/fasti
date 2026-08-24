@@ -44,19 +44,15 @@ the constraint wins unless the design discussion says otherwise.
   `CalendarBuilder`, which exposes `view() -> Calendar<'_>`.
 - **A rule answers two questions, not one.** `is_holiday(date)` asks
   "is this date yours?"; `natural_date(year)` asks "which date is
-  yours this year?". Every variant but `Custom` is
-  year-parameterised and can answer the second directly, which is what
-  makes per-year resolution possible; `Custom` returns
-  `RuleDate::Opaque` and is probed per day. A new question a rule must
-  answer becomes another method on the enum — never a trait.
+  yours this year?". Every variant but `Custom` is year-parameterised
+  and answers the second directly; `Custom` returns
+  `Occurrence::Opaque` and is probed per day. A new question a rule
+  must answer becomes another method on the enum — never a trait.
 - **A memo lives in the caller, never in the calendar.** Built-in
   calendars are `pub const Calendar<'static>`, so no interior
-  mutability and no lazy init is available to them, and none is
-  wanted: a `Copy` view that silently carried a cache would be a
-  different type. `is_holiday` is therefore stateless, and a caller
-  who wants a precomputed year builds it in their own frame out of
-  `Rule::natural_date`. Whatever they build must be reproducible from
-  the rules alone.
+  mutability and no lazy init is available to them. `is_holiday` is
+  stateless; a caller who wants a precomputed year builds it in their
+  own frame out of `Rule::natural_date`.
 
 ## Day-count conventions
 
@@ -115,19 +111,11 @@ the constraint wins unless the design discussion says otherwise.
 
 ## Performance
 
-- **Rule evaluation is on the hot path of everything.** Schedules,
-  adjustments and range walks all bottom out in `Calendar::is_holiday`,
-  so its cost is the crate's cost. `cargo bench --bench calendar`
-  measures it per built-in calendar; a change to rule evaluation
-  carries before/after numbers. `divan` is the harness, picked over
-  `criterion` for its dependency footprint — ten crates against thirty
-  — because a dev-dependency is still a `cargo deny` surface and still
-  has to resolve on the MSRV.
-- **Optimise by asking a cheaper question, not by caching in place.**
-  The rule scan got faster because a rule can name its own date for a
-  year; `Date::year` got faster because a Gregorian cycle is 146_097
-  days over 400 years and the quotient names the year to within one.
-  Both stayed `const`.
+- Schedules, adjustments and range walks all bottom out in
+  `Calendar::is_holiday`, so its cost is the crate's cost.
+  `cargo bench --bench calendar` measures it per built-in calendar, on
+  `divan`; a change to rule evaluation carries before/after numbers.
+- Optimise by asking a cheaper question, not by caching in place.
 
 ## Supported date range
 

@@ -1,14 +1,9 @@
 //! Calendar rule-evaluation benchmarks: `cargo bench --bench calendar`.
 //!
-//! Rule evaluation is the hot path of the whole crate — schedules,
-//! adjustments and range walks all bottom out in
-//! [`Calendar::is_holiday`] — so every built-in calendar is measured
-//! three ways: a day walked in sequence, a cold call on a date with no
-//! locality, and an adjustment, which evaluates the predicate three or
-//! four times.
-//!
-//! Counters are per-day or per-call, so `divan`'s throughput column
-//! reads directly as the cost of one day or one call.
+//! Every built-in calendar is measured three ways: a day walked in
+//! sequence, a cold call on a date with no locality, and an adjustment.
+//! Counters are per day or per call, so `divan`'s throughput column
+//! reads as the cost of one.
 
 use divan::counter::ItemsCount;
 use divan::{Bencher, black_box};
@@ -62,12 +57,8 @@ fn calendar(name: &str) -> Calendar<'static> {
     calendars::NULL_CALENDAR
 }
 
-/// A century: 1926-01-01 ..= 2025-12-31, 36 525 days.
-///
-/// `cargo test --benches` runs every benchmark once as a test, against
-/// an unoptimised build that measures the optimiser rather than the
-/// code. That run only has to prove the benchmark still works, so it
-/// walks one year instead of a hundred.
+/// A century: 1926-01-01 ..= 2025-12-31, 36 525 days. The smoke run
+/// under `cargo test --benches` walks one year instead.
 fn century() -> (Date, Date) {
     let start = Date::from_ymd(1926, Month::Jan, 1).unwrap_or(Date::MIN);
     let end_year = if cfg!(debug_assertions) { 1927 } else { 2026 };
@@ -77,8 +68,7 @@ fn century() -> (Date, Date) {
     )
 }
 
-/// How many scattered dates the per-call benchmarks probe; likewise
-/// smaller in the unoptimised smoke run.
+/// How many scattered dates the per-call benchmarks probe.
 const PROBES: usize = if cfg!(debug_assertions) { 128 } else { 8192 };
 
 /// A deterministic scatter of in-range dates, so the per-call numbers

@@ -39,26 +39,24 @@ pub enum Rule {
 /// "which date, if any, is yours in this year?".
 ///
 /// Every rule but [`Rule::Custom`] is year-parameterised: it names at
-/// most one date per year and can compute it outright. That is what lets
-/// a caller walking a range resolve a calendar once per year instead of
-/// interrogating every rule on every day.
+/// most one date per year and can compute it outright.
 ///
 /// ```
-/// use fasti::{Date, FixedDate, Month, Rule, RuleDate, Year};
+/// use fasti::{Date, FixedDate, Month, Rule, Occurrence, Year};
 ///
 /// let christmas = Rule::Fixed(FixedDate::new(Month::Dec, 25));
 /// assert_eq!(
 ///     christmas.natural_date(Year::new(2026)?),
-///     RuleDate::On(Date::from_ymd(2026, Month::Dec, 25)?),
+///     Occurrence::On(Date::from_ymd(2026, Month::Dec, 25)?),
 /// );
 ///
 /// // A predicate can only be called, never asked.
 /// let custom = Rule::Custom(|d| d.day() == 13);
-/// assert_eq!(custom.natural_date(Year::new(2026)?), RuleDate::Opaque);
+/// assert_eq!(custom.natural_date(Year::new(2026)?), Occurrence::Opaque);
 /// # Ok::<(), fasti::TimeError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuleDate {
+pub enum Occurrence {
     /// The rule names no date in this year: it is outside its
     /// [`YearRange`](crate::YearRange), or the year has no such day —
     /// February 29 outside a leap year, a fifth Monday the month has no
@@ -75,26 +73,26 @@ pub enum RuleDate {
 impl Rule {
     /// The date this rule names in `year`, or why it names none.
     ///
-    /// This is the dual of [`is_holiday`](Self::is_holiday) and agrees
-    /// with it exactly: for every date `d`, a non-[`Custom`](Self::Custom)
-    /// rule satisfies `r.is_holiday(d) == (r.natural_date(d.year()) ==
-    /// RuleDate::On(d))`. It names the *natural* date only; substitute
-    /// days are the calendar's to resolve, as
+    /// The dual of [`is_holiday`](Self::is_holiday): for every date `d`,
+    /// a non-[`Custom`](Self::Custom) rule satisfies `r.is_holiday(d) ==
+    /// (r.natural_date(d.year()) == Occurrence::On(d))`. It names the
+    /// *natural* date only; substitute days are the calendar's to
+    /// resolve, as
     /// [`Calendar::is_holiday`](crate::Calendar::is_holiday) documents.
     ///
     /// ```
-    /// use fasti::{Date, Month, NthWeekday, Ordinal, Rule, RuleDate, Weekday, Year};
+    /// use fasti::{Date, Month, NthWeekday, Ordinal, Rule, Occurrence, Weekday, Year};
     ///
     /// // Thanksgiving 2026: the fourth Thursday of November.
     /// let rule = Rule::NthWeekday(NthWeekday::new(Ordinal::Fourth, Weekday::Thu, Month::Nov));
     /// assert_eq!(
     ///     rule.natural_date(Year::new(2026)?),
-    ///     RuleDate::On(Date::from_ymd(2026, Month::Nov, 26)?),
+    ///     Occurrence::On(Date::from_ymd(2026, Month::Nov, 26)?),
     /// );
     /// # Ok::<(), fasti::TimeError>(())
     /// ```
     #[must_use]
-    pub const fn natural_date(&self, year: Year) -> RuleDate {
+    pub const fn natural_date(&self, year: Year) -> Occurrence {
         let resolved = match self {
             Self::Fixed(r) => r.natural_date(year),
             Self::NthWeekday(r) => r.natural_date(year),
@@ -102,11 +100,11 @@ impl Rule {
             Self::Easter(r) => r.natural_date(year),
             Self::OneOff(r) => r.natural_date(year),
             // A fn pointer cannot be interrogated, only called.
-            Self::Custom(_) => return RuleDate::Opaque,
+            Self::Custom(_) => return Occurrence::Opaque,
         };
         match resolved {
-            Some(date) => RuleDate::On(date),
-            None => RuleDate::None,
+            Some(date) => Occurrence::On(date),
+            None => Occurrence::None,
         }
     }
 
@@ -176,8 +174,7 @@ mod tests {
         assert!(!rule.is_holiday(ymd(2026, Month::Feb, 14)));
     }
 
-    /// Every rule of every built-in, so the invariants below are
-    /// checked against real holiday data rather than invented rules.
+    /// Every rule of every built-in calendar.
     fn built_in_rules() -> alloc::vec::Vec<Rule> {
         use crate::calendars;
         [
@@ -197,17 +194,15 @@ mod tests {
         .collect()
     }
 
-    /// The date a rule names in a year is *in* that year. Nothing a
-    /// calendar can be asked observes a rule that breaks this — an
-    /// Easter offset running past December 31 names a date the calendar
-    /// never compares it against — but a caller resolving a year at a
-    /// time would collect a holiday that is not one.
+    /// The date a rule names in a year is *in* that year. No calendar
+    /// query observes a rule that breaks this, but a caller resolving a
+    /// year at a time would collect a holiday that is not one.
     #[test]
     fn natural_date_names_a_date_inside_the_year() {
         for (i, rule) in built_in_rules().iter().enumerate() {
             for year in Year::MIN.get()..=Year::MAX.get() {
                 let Ok(year) = Year::new(year) else { continue };
-                if let RuleDate::On(named) = rule.natural_date(year) {
+                if let Occurrence::On(named) = rule.natural_date(year) {
                     assert_eq!(named.year(), year, "rule {i} in {year}");
                 }
             }
@@ -215,16 +210,15 @@ mod tests {
     }
 
     /// An Easter offset far enough out lands in the next year, which
-    /// `is_holiday` never matches — it only ever checks `date.year()` —
-    /// so `natural_date` must not name it either. Easter Sunday falls
-    /// between March 22 and April 25, so 300 days on is always the year
-    /// after; the crate documents `Rule::Custom` for offsets that far.
+    /// `is_holiday` never matches, so `natural_date` must not name it
+    /// either. Easter Sunday falls between March 22 and April 25, so 300
+    /// days on is always the year after.
     #[test]
     fn an_easter_offset_that_leaves_its_year_names_nothing() {
         let rule = Rule::Easter(EasterOffset::new(300));
         for year in Year::MIN.get()..=Year::MAX.get() {
             let Ok(year) = Year::new(year) else { continue };
-            assert_eq!(rule.natural_date(year), RuleDate::None, "{year}");
+            assert_eq!(rule.natural_date(year), Occurrence::None, "{year}");
         }
     }
 
@@ -236,7 +230,7 @@ mod tests {
         for year in Year::MIN.get()..=Year::MAX.get() {
             let Ok(year) = Year::new(year) else { continue };
             assert!(
-                matches!(rule.natural_date(year), RuleDate::Opaque),
+                matches!(rule.natural_date(year), Occurrence::Opaque),
                 "{year}"
             );
         }
@@ -244,18 +238,17 @@ mod tests {
 
     proptest! {
         /// `natural_date` and `is_holiday` are duals: a rule marks a
-        /// date iff that is the date it names in the date's year. Every
-        /// per-year resolution a caller writes rests on this.
+        /// date iff that is the date it names in the date's year.
         #[test]
         fn natural_date_and_is_holiday_agree(serial in 0u32..=Date::MAX.serial()) {
             let date = Date::from_serial(serial).unwrap();
             for rule in built_in_rules() {
-                if matches!(rule.natural_date(date.year()), RuleDate::Opaque) {
+                if matches!(rule.natural_date(date.year()), Occurrence::Opaque) {
                     continue;
                 }
                 prop_assert_eq!(
                     rule.is_holiday(date),
-                    rule.natural_date(date.year()) == RuleDate::On(date),
+                    rule.natural_date(date.year()) == Occurrence::On(date),
                     "{}",
                     date,
                 );

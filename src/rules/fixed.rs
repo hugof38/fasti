@@ -144,9 +144,7 @@ impl FixedDate {
     /// is inactive that year or the year has no such day (February 29
     /// outside a leap year).
     ///
-    /// The dual of [`is_holiday`](Self::is_holiday): a rule names at most
-    /// one date per year, so a caller enumerating a range can ask once
-    /// per year instead of once per day.
+    /// The dual of [`is_holiday`](Self::is_holiday).
     pub(crate) const fn natural_date(self, year: Year) -> Option<Date> {
         if !self.years.contains(year) {
             return None;

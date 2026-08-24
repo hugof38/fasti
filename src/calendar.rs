@@ -13,8 +13,8 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use crate::{
-    BusinessDayConvention, Date, DateRange, Period, Rule, RuleDate, TimeError, Weekday, Weekend,
-    WeekendShift,
+    BusinessDayConvention, Date, DateRange, Occurrence, Period, Rule, TimeError, Weekday, Weekend,
+    WeekendShift, Year,
 };
 
 /// A holiday calendar: a [`Weekend`] configuration plus a sequence of
@@ -75,127 +75,35 @@ impl Calendar<'_> {
         if self.rules.is_empty() {
             return false;
         }
-        let weekday = date.weekday();
-        // Only Friday, Monday and Tuesday can ever *be* a substitute
-        // day, a weekend day never is, and a calendar whose rules never
-        // step off a weekend grants none at all. Every other day needs
-        // nothing but the natural scan.
-        let Some(shape) = Shape::of(weekday) else {
-            return self.is_natural_holiday(date);
-        };
-        if self.is_weekend(date) || !self.any_rule_shifts() {
-            return self.is_natural_holiday(date);
+        match Observance::around(*self, date) {
+            Some(observance) => observance.grants(date.weekday()),
+            None => self.is_natural_holiday(date),
         }
-        resolve(weekday, self.window(date, shape))
     }
 
     /// `true` iff a rule names `date` outright, before any shift.
-    ///
-    /// The year is derived once and handed to every rule, which then
-    /// names its own date for that year directly — a rule is
-    /// year-parameterised, so asking it "which day is yours?" costs less
-    /// than asking "is it you?" and lets it answer `None` for a year it
-    /// is not active in. Only [`Rule::Custom`] has to be probed.
     fn is_natural_holiday(&self, date: Date) -> bool {
-        // Deriving the year is the most expensive part of a rule-free
-        // calendar's day, so a calendar without rules never pays it.
         if self.rules.is_empty() {
             return false;
         }
         let year = date.year();
         self.rules.iter().any(|rule| match rule.natural_date(year) {
-            RuleDate::On(named) => named.serial() == date.serial(),
-            RuleDate::None => false,
-            RuleDate::Opaque => rule.is_holiday(date),
+            Occurrence::On(named) => named.serial() == date.serial(),
+            Occurrence::None => false,
+            Occurrence::Opaque => rule.is_holiday(date),
         })
     }
 
-    /// `true` iff any rule can step off a weekend at all. Calendars
-    /// without one — France, TARGET — never look at a neighbouring day.
+    /// `true` iff any rule can step off a weekend at all.
     fn any_rule_shifts(&self) -> bool {
         self.rules
             .iter()
             .any(|r| !matches!(r.weekend_shift(), WeekendShift::None))
     }
 
-    /// Collect the natural-holiday facts about the days `shape` reaches,
-    /// in one pass over the rules.
-    fn window(&self, date: Date, shape: Shape) -> Window {
-        let mut window = Window::EMPTY;
-        let base = i64::from(date.serial()) + i64::from(shape.lo);
-        let max = i64::from(Date::MAX.serial());
-        // `date` itself is always inside the span, so clamping the ends
-        // to the supported range leaves a non-empty one. Days outside it
-        // do not exist and so are named by nothing, which is what the
-        // original's `add_days(..)` error arms amounted to.
-        let first = base.clamp(0, max);
-        let last = (base + i64::from(shape.len) - 1).clamp(0, max);
-        // Both ends are in `0..=Date::MAX.serial()` after the clamp.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let (Ok(first), Ok(last)) = (
-            Date::from_serial(first as u32),
-            Date::from_serial(last as u32),
-        ) else {
-            return window;
-        };
-        let (first_year, last_year) = (first.year(), last.year());
-        for rule in self.rules {
-            match rule.natural_date(first_year) {
-                RuleDate::On(named) => self.mark(&mut window, base, shape, named, rule),
-                RuleDate::None => {}
-                RuleDate::Opaque => Self::probe(&mut window, date, shape, rule),
-            }
-            // A window of four days can straddle a year boundary, and
-            // then each rule names a date on both sides of it.
-            if last_year.get() != first_year.get()
-                && let RuleDate::On(named) = rule.natural_date(last_year)
-            {
-                self.mark(&mut window, base, shape, named, rule);
-            }
-        }
-        window
-    }
-
-    /// Record that `rule` names `named`, if that day is inside the window.
-    fn mark(&self, window: &mut Window, base: i64, shape: Shape, named: Date, rule: &Rule) {
-        let offset = i64::from(named.serial()) - base;
-        if offset < 0 || offset >= i64::from(shape.len) {
-            return;
-        }
-        // `offset` is bounded by `shape.len`, at most 4.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let bit = 1u8 << (offset as u32);
-        window.natural |= bit;
-        match self.steps(named, rule.weekend_shift()) {
-            Some(1) => window.fwd |= bit,
-            Some(-1) => window.back |= bit,
-            _ => {}
-        }
-    }
-
-    /// Probe an opaque [`Rule::Custom`] for the window days whose natural
-    /// flag is actually consulted — at most two, and only for calendars
-    /// that carry such a rule.
-    fn probe(window: &mut Window, date: Date, shape: Shape, rule: &Rule) {
-        for i in 0..shape.len {
-            // `shape.len` is at most 4.
-            #[allow(clippy::cast_possible_truncation)]
-            let bit = 1u8 << (i as u8);
-            if shape.natural_mask & bit == 0 || window.natural & bit != 0 {
-                continue;
-            }
-            // `shape.len` is at most 4, so the offset stays tiny.
-            #[allow(clippy::cast_possible_wrap)]
-            let offset = shape.lo + i as i32;
-            if date.add_days(offset).is_ok_and(|d| rule.is_holiday(d)) {
-                window.natural |= bit;
-            }
-        }
-    }
-
     /// The direction a holiday on `date` steps, or [`None`] if it stays
-    /// put — `QuantLib`'s substitute only ever moves off a weekend, so a
-    /// day this calendar does not call a weekend never moves.
+    /// put: a substitute only ever moves off a weekend, so a day this
+    /// calendar does not call a weekend never moves.
     const fn steps(&self, date: Date, shift: WeekendShift) -> Option<i32> {
         let weekday = date.weekday();
         if self.weekend.contains(weekday) {
@@ -372,59 +280,28 @@ impl Calendar<'_> {
 }
 
 // ---- substitute-day resolution -----------------------------------------
-//
-// A substitute decision reads at most five facts about at most four
-// days. `is_holiday` gathers them into a `Window` in one pass over the
-// rules and hands it to `resolve`, instead of re-scanning the rule list
-// once per neighbouring day it has to ask about.
 
-/// Which days a substitute decision reaches, as offsets from the day
-/// being asked about. Only Friday, Monday and Tuesday can be substitute
-/// days: a weekend owes at most two days off, so there are three places
-/// one can land — the Monday and Tuesday going forwards, the Friday
-/// going back — and they are checked rather than searched for.
-/// `QuantLib` hardcodes the same three across its US, UK and Canadian
-/// calendars.
+/// The natural-holiday facts about the days a substitute can reach,
+/// gathered in one pass over the rules and read by
+/// [`grants`](Observance::grants).
+///
+/// Only Friday, Monday and Tuesday can be substitute days: a weekend
+/// owes at most two days off, so there are three places one can land —
+/// the Monday and Tuesday going forwards, the Friday going back.
+///
+/// Bit `i` is the day `base + i`. A bit for a day outside the supported
+/// range is never set, which is what makes the range ends need no
+/// special case.
 #[derive(Debug, Clone, Copy)]
-struct Shape {
-    /// Offset in days from the queried date to bit 0 of the window.
-    lo: i32,
-    /// Days the window covers, `2..=4`.
+struct Observance {
+    /// Serial of bit 0, as `i64` because the window can reach back past
+    /// [`Date::MIN`].
+    base: i64,
+    /// Days covered, `2..=4`.
     len: u32,
-    /// Window bits whose `natural` flag the decision reads. A
-    /// [`Rule::Custom`] has to be probed for these and no others.
-    natural_mask: u8,
-}
-
-impl Shape {
-    const fn new(lo: i32, len: u32, natural_mask: u8) -> Self {
-        Self {
-            lo,
-            len,
-            natural_mask,
-        }
-    }
-
-    /// The window a date of this weekday needs, or [`None`] if no
-    /// substitute can land on it. Bit 0 is the earliest day in it: a
-    /// Friday's own natural flag is bit 0 and the Saturday ahead bit 1,
-    /// while a Tuesday's weekend is bits 0 and 1, the Monday between is
-    /// bit 2 and the Tuesday itself bit 3.
-    const fn of(weekday: Weekday) -> Option<Self> {
-        match weekday {
-            Weekday::Fri => Some(Self::new(0, 2, 0b0001)),
-            Weekday::Mon => Some(Self::new(-2, 3, 0b0100)),
-            Weekday::Tue => Some(Self::new(-3, 4, 0b1100)),
-            _ => None,
-        }
-    }
-}
-
-/// The natural-holiday facts about the days a [`Shape`] reaches. Bit `i`
-/// is the day `shape.lo + i` days from the queried date; a bit for a day
-/// outside the supported range is simply never set.
-#[derive(Debug, Clone, Copy)]
-struct Window {
+    /// Bits whose `natural` flag is read. A [`Rule::Custom`] is probed
+    /// for these and no others.
+    read: u8,
     /// Bit `i`: some rule names that day outright.
     natural: u8,
     /// Bit `i`: that day is a weekend day carrying a holiday that steps
@@ -434,50 +311,156 @@ struct Window {
     back: u8,
 }
 
-impl Window {
-    /// Nothing known yet: no day named, no day stepping anywhere.
-    const EMPTY: Self = Self {
-        natural: 0,
-        fwd: 0,
-        back: 0,
-    };
-}
+impl Observance {
+    /// The days a substitute decision for a date of this weekday reads,
+    /// as the offset of bit 0, the number of days, and the bits whose
+    /// `natural` flag the decision consults.
+    const fn reach(weekday: Weekday) -> Option<(i32, u32, u8)> {
+        match weekday {
+            // Bit 0 the Friday itself, bit 1 the Saturday ahead.
+            Weekday::Fri => Some((0, 2, 0b0001)),
+            // Bits 0 and 1 the weekend just gone, bit 2 the Monday.
+            Weekday::Mon => Some((-2, 3, 0b0100)),
+            // Bits 0 and 1 the weekend, bit 2 the Monday between, bit 3
+            // the Tuesday.
+            Weekday::Tue => Some((-3, 4, 0b1100)),
+            _ => None,
+        }
+    }
 
-/// [`Calendar::is_holiday`] for a day a substitute can land on.
-///
-/// This is the substitute rule itself, unchanged: the Tuesday is reached
-/// whenever the Monday is taken, which a holiday of the Monday's own does
-/// as readily as the weekend's first day off.
-///
-/// A substitute needing the Wednesday is not granted. Japan's Golden
-/// Week is the one convention that gets there, chaining through three
-/// consecutive holidays. No [`WeekendShift`] names a chain, and one
-/// pinned to a single date is data rather than a policy: it belongs in a
-/// [`Rule::Custom`] naming the observed day outright, as `QuantLib` does
-/// with `d == 6 && m == May && (w == Monday || w == Tuesday || w ==
-/// Wednesday)`.
-const fn resolve(weekday: Weekday, window: Window) -> bool {
-    match weekday {
-        // The Saturday ahead, stepping back.
-        Weekday::Fri => window.natural & 0b0001 != 0 || window.back & 0b0010 != 0,
-        // The first day off the weekend just gone owes.
-        Weekday::Mon => window.natural & 0b0100 != 0 || window.fwd & 0b0011 != 0,
-        Weekday::Tue => {
-            if window.natural & 0b1000 != 0 {
-                return true;
+    /// Gather what a substitute decision for `date` reads, or [`None`]
+    /// if no substitute can land on it: a weekend day is never one, nor
+    /// is any day in a calendar whose rules never step off a weekend.
+    fn around(calendar: Calendar<'_>, date: Date) -> Option<Self> {
+        let (lo, len, read) = Self::reach(date.weekday())?;
+        if calendar.is_weekend(date) || !calendar.any_rule_shifts() {
+            return None;
+        }
+        let mut observance = Self {
+            base: i64::from(date.serial()) + i64::from(lo),
+            len,
+            read,
+            natural: 0,
+            fwd: 0,
+            back: 0,
+        };
+        let Some((first_year, last_year)) = observance.years() else {
+            return Some(observance);
+        };
+        for rule in calendar.rules {
+            match rule.natural_date(first_year) {
+                Occurrence::On(named) => observance.mark(calendar, named, rule),
+                Occurrence::None => {}
+                Occurrence::Opaque => observance.probe(rule),
             }
-            match (window.fwd & 0b0001 != 0, window.fwd & 0b0010 != 0) {
-                // Nothing owed, so nothing reaches the Tuesday.
-                (false, false) => false,
-                // One day off owed: it comes here only if a holiday of
-                // the Monday's own has taken the Monday.
-                (true, false) | (false, true) => window.natural & 0b0100 != 0,
-                // Two owed: the Monday took the first, this is the second.
-                (true, true) => true,
+            // Four days can straddle a year boundary, and then each rule
+            // names a date on both sides of it.
+            if last_year.get() != first_year.get()
+                && let Occurrence::On(named) = rule.natural_date(last_year)
+            {
+                observance.mark(calendar, named, rule);
             }
         }
-        // `Shape::of` yields no window for any other weekday.
-        _ => false,
+        Some(observance)
+    }
+
+    /// The years these days fall in. The ends are clamped into the
+    /// supported range rather than dropped: the queried day is always
+    /// inside, so the clamp always leaves a year to resolve rules for,
+    /// and days that do not exist are named by nothing anyway.
+    fn years(&self) -> Option<(Year, Year)> {
+        let max = i64::from(Date::MAX.serial());
+        let lo = self.base.clamp(0, max);
+        let hi = (self.base + i64::from(self.len) - 1).clamp(0, max);
+        // Both ends are in `0..=Date::MAX.serial()` after the clamp.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let (Ok(first), Ok(last)) = (Date::from_serial(lo as u32), Date::from_serial(hi as u32))
+        else {
+            return None;
+        };
+        Some((first.year(), last.year()))
+    }
+
+    /// The day bit `i` stands for, or [`None`] if it falls outside the
+    /// supported range.
+    fn day(&self, i: u32) -> Option<Date> {
+        let serial = self.base + i64::from(i);
+        if serial < 0 || serial > i64::from(Date::MAX.serial()) {
+            return None;
+        }
+        // Bounded by the check above.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        Date::from_serial(serial as u32).ok()
+    }
+
+    /// Record that `rule` names `named`, if that day is one of these.
+    fn mark(&mut self, calendar: Calendar<'_>, named: Date, rule: &Rule) {
+        let offset = i64::from(named.serial()) - self.base;
+        if offset < 0 || offset >= i64::from(self.len) {
+            return;
+        }
+        // `offset` is bounded by `len`, at most 4.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let bit = 1u8 << (offset as u32);
+        self.natural |= bit;
+        match calendar.steps(named, rule.weekend_shift()) {
+            Some(1) => self.fwd |= bit,
+            Some(-1) => self.back |= bit,
+            _ => {}
+        }
+    }
+
+    /// Probe an opaque [`Rule::Custom`] for the days whose `natural`
+    /// flag is read — at most two.
+    fn probe(&mut self, rule: &Rule) {
+        for i in 0..self.len {
+            // `len` is at most 4.
+            #[allow(clippy::cast_possible_truncation)]
+            let bit = 1u8 << (i as u8);
+            if self.read & bit == 0 || self.natural & bit != 0 {
+                continue;
+            }
+            if self.day(i).is_some_and(|day| rule.is_holiday(day)) {
+                self.natural |= bit;
+            }
+        }
+    }
+
+    /// [`Calendar::is_holiday`] for a day a substitute can land on.
+    ///
+    /// The Tuesday is reached whenever the Monday is taken, which a
+    /// holiday of the Monday's own does as readily as the weekend's
+    /// first day off.
+    ///
+    /// A substitute needing the Wednesday is not granted. Japan's Golden
+    /// Week is the one convention that gets there, chaining through
+    /// three consecutive holidays; no [`WeekendShift`] names a chain,
+    /// and one pinned to a single date belongs in a [`Rule::Custom`]
+    /// naming the observed day outright.
+    const fn grants(self, weekday: Weekday) -> bool {
+        match weekday {
+            // The Saturday ahead, stepping back.
+            Weekday::Fri => self.natural & 0b0001 != 0 || self.back & 0b0010 != 0,
+            // The first day off the weekend just gone owes.
+            Weekday::Mon => self.natural & 0b0100 != 0 || self.fwd & 0b0011 != 0,
+            Weekday::Tue => {
+                if self.natural & 0b1000 != 0 {
+                    return true;
+                }
+                match (self.fwd & 0b0001 != 0, self.fwd & 0b0010 != 0) {
+                    // Nothing owed, so nothing reaches the Tuesday.
+                    (false, false) => false,
+                    // One day off owed: it comes here only if a holiday
+                    // of the Monday's own has taken the Monday.
+                    (true, false) | (false, true) => self.natural & 0b0100 != 0,
+                    // Two owed: the Monday took the first, this is the
+                    // second.
+                    (true, true) => true,
+                }
+            }
+            // `reach` yields nothing for any other weekday.
+            _ => false,
+        }
     }
 }
 
@@ -583,7 +566,7 @@ impl CalendarBuilder {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::{FixedDate, Month, OneOff, WeekendShift};
+    use crate::{FixedDate, Month, OneOff, WeekendShift, calendars};
 
     fn ymd(y: u16, m: Month, d: u8) -> Date {
         Date::from_ymd(y, m, d).unwrap()
@@ -798,6 +781,40 @@ mod tests {
         // No shift, no substitute either way.
         assert!(UNSHIFTED.is_business_day(ymd(sat_year, Month::Jul, 3)));
         assert!(UNSHIFTED.is_business_day(ymd(sun_year, Month::Jul, 5)));
+    }
+
+    #[test]
+    fn both_ends_of_the_supported_range_resolve() {
+        // Date::MIN and Date::MAX are both Tuesdays, and a Tuesday's
+        // substitute decision reads the three days before it — past
+        // Date::MIN at one end. Days outside the range name nothing; the
+        // days inside it must still be read.
+        const NEW_YEAR: Calendar<'static> = Calendar {
+            name: "New Year",
+            weekend: Weekend::SAT_SUN,
+            rules: &[Rule::Fixed(
+                FixedDate::new(Month::Jan, 1).shift(WeekendShift::Forward),
+            )],
+        };
+        // Dec 28 2199 is a Saturday and Dec 29 the Sunday, so the pair
+        // owes two days off: Mon Dec 30 and Tue Dec 31, the last day the
+        // crate supports.
+        const YEAR_END: Calendar<'static> = Calendar {
+            name: "Year End",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Dec, 28).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Dec, 29).shift(WeekendShift::Forward)),
+            ],
+        };
+
+        assert!(NEW_YEAR.is_holiday(Date::MIN));
+        assert!(!NEW_YEAR.is_business_day(Date::MIN));
+        assert!(calendars::us::SETTLEMENT.is_holiday(Date::MIN));
+
+        assert!(YEAR_END.is_holiday(ymd(2199, Month::Dec, 30)));
+        assert!(YEAR_END.is_holiday(Date::MAX));
+        assert!(YEAR_END.is_business_day(ymd(2199, Month::Dec, 27)));
     }
 
     #[test]

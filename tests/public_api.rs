@@ -18,9 +18,9 @@ use core::str::FromStr;
 use fasti::{
     Act360, Act365Fixed, ActActICMA, ActActISDA, BusinessDayConvention, Calendar, CalendarBuilder,
     Date, DateRange, DayCount, EasterMethod, EasterOffset, FixedDate, Fraction, Frequency,
-    Generation, LastWeekday, Month, NthWeekday, OneOff, Ordinal, Period, Rule, RuleDate, Schedule,
-    ScheduleBuilder, Thirty360Bond, Thirty360European, Thirty360ISDA, Thirty360US, TimeError,
-    Weekday, Weekend, Year, YearRange, calendars, easter_monday, easter_sunday,
+    Generation, LastWeekday, Month, NthWeekday, Occurrence, OneOff, Ordinal, Period, Rule,
+    Schedule, ScheduleBuilder, Thirty360Bond, Thirty360European, Thirty360ISDA, Thirty360US,
+    TimeError, Weekday, Weekend, Year, YearRange, calendars, easter_monday, easter_sunday,
 };
 
 /// A realistic coupon-accrual workflow, the way a downstream crate would
@@ -207,47 +207,47 @@ fn rules_name_their_own_dates() -> Result<(), TimeError> {
     let cases = [
         (
             Rule::Fixed(FixedDate::new(Month::Jul, 4)),
-            RuleDate::On(Date::from_ymd(2026, Month::Jul, 4)?),
+            Occurrence::On(Date::from_ymd(2026, Month::Jul, 4)?),
         ),
         (
             Rule::NthWeekday(NthWeekday::new(Ordinal::Third, Weekday::Mon, Month::Jan)),
-            RuleDate::On(Date::from_ymd(2026, Month::Jan, 19)?),
+            Occurrence::On(Date::from_ymd(2026, Month::Jan, 19)?),
         ),
         (
             Rule::LastWeekday(LastWeekday::new(Weekday::Mon, Month::May)),
-            RuleDate::On(Date::from_ymd(2026, Month::May, 25)?),
+            Occurrence::On(Date::from_ymd(2026, Month::May, 25)?),
         ),
         (
             Rule::Easter(EasterOffset::good_friday()),
-            RuleDate::On(Date::from_ymd(2026, Month::Apr, 3)?),
+            Occurrence::On(Date::from_ymd(2026, Month::Apr, 3)?),
         ),
         (
             Rule::OneOff(OneOff::new(Date::from_ymd(2026, Month::Aug, 15)?)),
-            RuleDate::On(Date::from_ymd(2026, Month::Aug, 15)?),
+            Occurrence::On(Date::from_ymd(2026, Month::Aug, 15)?),
         ),
         (
             Rule::OneOff(OneOff::new(Date::from_ymd(2025, Month::Aug, 15)?)),
-            RuleDate::None,
+            Occurrence::None,
         ),
-        (Rule::Custom(is_leap_day), RuleDate::Opaque),
+        (Rule::Custom(is_leap_day), Occurrence::Opaque),
     ];
     for (rule, expected) in cases {
         assert_eq!(rule.natural_date(year), expected);
         // ... and what it names is what it calls a holiday.
-        if let RuleDate::On(named) = expected {
+        if let Occurrence::On(named) = expected {
             assert!(rule.is_holiday(named));
         }
     }
 
     // A rule outside its year range names nothing.
     let juneteenth = Rule::Fixed(FixedDate::new(Month::Jun, 19).from_year(Year::new(2022)?));
-    assert_eq!(juneteenth.natural_date(Year::new(2021)?), RuleDate::None);
+    assert_eq!(juneteenth.natural_date(Year::new(2021)?), Occurrence::None);
     // February 29 is not a date every year has.
     let leap = Rule::Fixed(FixedDate::new(Month::Feb, 29));
-    assert_eq!(leap.natural_date(Year::new(2026)?), RuleDate::None);
+    assert_eq!(leap.natural_date(Year::new(2026)?), Occurrence::None);
     assert_eq!(
         leap.natural_date(Year::new(2028)?),
-        RuleDate::On(Date::from_ymd(2028, Month::Feb, 29)?),
+        Occurrence::On(Date::from_ymd(2028, Month::Feb, 29)?),
     );
     Ok(())
 }

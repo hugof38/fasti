@@ -9,26 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `Rule::natural_date(year) -> RuleDate`: the date a rule names in a
-  given year, or `RuleDate::Opaque` for the `Rule::Custom` predicate
-  that cannot say. The dual of `Rule::is_holiday`, and what per-year
-  resolution is built on — callers precomputing their own holiday sets
-  need nothing else.
+- `Rule::natural_date(year) -> Occurrence`: the date a rule names in a
+  given year, or `Occurrence::Opaque` for the `Rule::Custom` predicate,
+  which can only be probed. The dual of `Rule::is_holiday`.
 - `cargo bench --bench calendar`: per-day and per-call costs for every
-  built-in calendar, on `divan` (a dev-dependency only). `cargo test
-  --all-targets` runs each benchmark once as a test, over a single year
-  rather than a century, so it cannot rot.
+  built-in calendar, on `divan` (a dev-dependency only).
 
 ### Changed
 
 - Calendar rule evaluation is an order of magnitude faster, per call
-  and per day walked, and stays stateless: no cache, in `Calendar` or
-  anywhere else. Holiday answers are unchanged, byte for byte, for
-  every date in 1901..=2199, which was verified against the original
-  algorithm over that whole range while the change was developed.
+  and per day walked, and stays stateless. Holiday answers are
+  unchanged for every date in 1901..=2199.
 - `Date::year` derives the year arithmetically instead of binary
-  searching the cumulative-days table, which speeds up every
-  `to_ymd`-based accessor with it.
+  searching the cumulative-days table.
 
 ## [0.1.0] - 2026-08-21
 

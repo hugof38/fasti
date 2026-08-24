@@ -509,12 +509,8 @@ impl Date {
     pub const fn year(self) -> Year {
         // Largest `idx` with `CUMULATIVE[idx] <= serial`. A Gregorian
         // cycle is 146_097 days over 400 years, so the quotient names
-        // the year directly to within one; the two loops correct it and
-        // would be right whatever the estimate, so accuracy is a matter
-        // of speed only. `year_estimate_settles_in_one_step` pins that
-        // it never takes more than a single correction, and
-        // `year_agrees_with_a_binary_search` that the answer is
-        // unchanged for every supported serial.
+        // the year to within one; the loops correct it, and are right
+        // whatever the estimate.
         //
         // `serial <= MAX_SERIAL` (109_572), so `serial * 400` cannot
         // overflow `u32` and the quotient is at most `NUM_YEARS`.
@@ -1059,9 +1055,8 @@ mod tests {
         assert_eq!(d.day(), 31);
     }
 
-    /// The year lookup estimates before it corrects; this pins that the
-    /// answer is the one the original binary search gave, for every
-    /// supported serial.
+    /// The estimate-and-correct lookup agrees with a binary search over
+    /// the cumulative table, for every supported serial.
     #[test]
     fn year_agrees_with_a_binary_search() {
         for serial in 0..=MAX_SERIAL {
@@ -1081,8 +1076,8 @@ mod tests {
         }
     }
 
-    /// ... and that the estimate is close enough for the correction to
-    /// be a single step, which is the whole point of estimating.
+    /// The estimate is never more than one year out, so the correction
+    /// is a single step.
     #[test]
     fn year_estimate_settles_in_one_step() {
         for serial in 0..=MAX_SERIAL {
