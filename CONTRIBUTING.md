@@ -123,13 +123,19 @@ Two independent trains, whose tag patterns do not overlap:
 | `v*` | `release.yml` | the crate, to crates.io | `Cargo.toml` |
 | `py-v*` | `release-python.yml` | `fasti-py`, to PyPI | `bindings/python/Cargo.toml` |
 
+Both carry the same version number, so a bug report naming one
+identifies the same code on either side of the boundary. The full
+procedure — the one-time PyPI setup, and the pre-release dry run that
+comes before spending a version number — is in
+[`RELEASING.md`](./RELEASING.md).
+
 Each workflow refuses to publish if its tag disagrees with its own
 manifest. The Python train builds one abi3 wheel per platform
 (manylinux and musllinux for x86_64 and aarch64, macOS for both
 architectures, Windows x64), plus a free-threaded 3.14t wheel per
 platform, checks them with `abi3audit --strict` and
 `twine check --strict`, and publishes through PyPI trusted publishing
-from a `pypi` environment. `py-v0.1.0` is not matched by `v*`, so
+from a `pypi` environment. `py-v0.2.0` is not matched by `v*`, so
 tagging one never fires the other.
 
 ## Commit hygiene

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-24
+
+Two artifacts at one version: the crate on crates.io and `fasti-py` on
+PyPI. They release together and carry the same number, so a reported
+version identifies the same code whichever side of the boundary it was
+seen from.
+
 ### Added
 
 - Python bindings under `bindings/python`, published as `fasti-py`
