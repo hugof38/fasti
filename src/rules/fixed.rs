@@ -55,6 +55,13 @@ pub enum WeekendShift {
 }
 
 impl WeekendShift {
+    /// `true` iff this variant's substitute chains past a taken day
+    /// rather than taking a single fixed step — the semantic split
+    /// documented above, kept next to the variants it classifies.
+    pub(crate) const fn chains(self) -> bool {
+        matches!(self, Self::Forward)
+    }
+
     /// Which way a holiday falling on `day` steps, if it steps at all —
     /// the whole table, and the only thing the variants differ by.
     pub(crate) fn direction(self, day: Weekday) -> Option<i32> {
@@ -167,10 +174,7 @@ impl FixedDate {
         if !self.years.contains(year) {
             return None;
         }
-        match Date::from_ymd(year.get(), self.month, self.day) {
-            Ok(d) => Some(d),
-            Err(_) => None,
-        }
+        super::date_ok(Date::from_ymd(year.get(), self.month, self.day))
     }
 }
 

@@ -162,6 +162,8 @@ impl EasterOffset {
     /// mirrors [`is_holiday`](Self::is_holiday), which only consults
     /// the query date's own year: an offset reaching into a
     /// neighbouring year never matches there either.
+    // Widening u16 -> i32 / i16 -> i32 casts; `as` because `From` is not const.
+    #[allow(clippy::cast_lossless)]
     pub(crate) const fn natural_date_in(self, year: Year) -> Option<Date> {
         if !self.years.contains(year) {
             return None;
@@ -169,18 +171,12 @@ impl EasterOffset {
         let Ok(jan1) = Date::from_ymd(year.get(), Month::Jan, 1) else {
             return None;
         };
-        // Widening u16 -> i32 / i16 -> i32 casts; `as` because `From`
-        // is not const. Zero-based offset of the observed day from Jan 1.
-        #[allow(clippy::cast_lossless)]
-        let offset = easter_monday(year, self.method) as i32 - 2 + self.days as i32;
-        #[allow(clippy::cast_lossless)]
+        // Zero-based offset of the observed day from Jan 1.
+        let offset = crate::easter_sunday(year, self.method) as i32 - 1 + self.days as i32;
         if offset < 0 || offset >= year.length() as i32 {
             return None;
         }
-        match jan1.add_days(offset) {
-            Ok(d) => Some(d),
-            Err(_) => None,
-        }
+        super::date_ok(jan1.add_days(offset))
     }
 }
 

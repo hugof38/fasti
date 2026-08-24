@@ -17,37 +17,34 @@ fn main() {
     divan::main();
 }
 
-const CALENDARS: &[&str] = &[
-    "null",
-    "weekends_only",
-    "target",
-    "france_settlement",
-    "france_exchange",
-    "uk_settlement",
-    "us_settlement",
-    "us_federal_reserve",
-    "us_government_bond",
-    "us_sofr",
-    "us_nerc",
-    "us_nyse",
+/// One row per built-in: the bench-arg label and the calendar it names.
+const CALENDARS: &[(&str, Calendar<'static>)] = &[
+    ("null", calendars::NULL_CALENDAR),
+    ("weekends_only", calendars::WEEKENDS_ONLY),
+    ("target", calendars::TARGET),
+    ("france_settlement", calendars::france::SETTLEMENT),
+    ("france_exchange", calendars::france::EXCHANGE),
+    ("uk_settlement", calendars::uk::SETTLEMENT),
+    ("us_settlement", calendars::us::SETTLEMENT),
+    ("us_federal_reserve", calendars::us::FEDERAL_RESERVE),
+    ("us_government_bond", calendars::us::GOVERNMENT_BOND),
+    ("us_sofr", calendars::us::SOFR),
+    ("us_nerc", calendars::us::NERC),
+    ("us_nyse", calendars::us::NYSE),
 ];
 
-fn lookup(name: &str) -> Calendar<'static> {
-    match name {
-        "null" => calendars::NULL_CALENDAR,
-        "weekends_only" => calendars::WEEKENDS_ONLY,
-        "target" => calendars::TARGET,
-        "france_settlement" => calendars::france::SETTLEMENT,
-        "france_exchange" => calendars::france::EXCHANGE,
-        "uk_settlement" => calendars::uk::SETTLEMENT,
-        "us_settlement" => calendars::us::SETTLEMENT,
-        "us_federal_reserve" => calendars::us::FEDERAL_RESERVE,
-        "us_government_bond" => calendars::us::GOVERNMENT_BOND,
-        "us_sofr" => calendars::us::SOFR,
-        "us_nerc" => calendars::us::NERC,
-        "us_nyse" => calendars::us::NYSE,
-        _ => unreachable!("unknown calendar {name}"),
+const NAMES: [&str; CALENDARS.len()] = {
+    let mut names = [""; CALENDARS.len()];
+    let mut i = 0;
+    while i < names.len() {
+        names[i] = CALENDARS[i].0;
+        i += 1;
     }
+    names
+};
+
+fn lookup(name: &str) -> Calendar<'static> {
+    CALENDARS.iter().find(|(n, _)| *n == name).unwrap().1
 }
 
 /// The serial range walked: 1926..2026 (36 525 days), or one year in
@@ -63,9 +60,19 @@ fn range() -> (u32, u32) {
     (start, end)
 }
 
+/// The range sampled with a prime stride, so repeated calls visit
+/// every weekday and month over time — the point-query workload.
+fn sampled_dates() -> Vec<Date> {
+    let (start, end) = range();
+    (start..end)
+        .step_by(23)
+        .map(|s| Date::from_serial(s).unwrap())
+        .collect()
+}
+
 /// `is_business_day` over every day of the range — the bulk-walk shape
 /// of holiday enumeration and schedule generation.
-#[divan::bench(args = CALENDARS)]
+#[divan::bench(args = NAMES)]
 fn walk(bencher: Bencher<'_, '_>, name: &str) {
     let cal = lookup(name);
     let (start, end) = range();
@@ -84,15 +91,10 @@ fn walk(bencher: Bencher<'_, '_>, name: &str) {
 }
 
 /// Point queries spread across the year — the single-call shape.
-#[divan::bench(args = CALENDARS)]
+#[divan::bench(args = NAMES)]
 fn is_business_day(bencher: Bencher<'_, '_>, name: &str) {
     let cal = lookup(name);
-    let (start, end) = range();
-    // A prime stride visits every weekday and month over time.
-    let dates: Vec<Date> = (start..end)
-        .step_by(23)
-        .map(|s| Date::from_serial(s).unwrap())
-        .collect();
+    let dates = sampled_dates();
     bencher
         .counter(ItemsCount::new(dates.len()))
         .bench(|| -> u32 {
@@ -107,14 +109,10 @@ fn is_business_day(bencher: Bencher<'_, '_>, name: &str) {
 }
 
 /// `adjust` under `ModifiedFollowing` over the same point queries.
-#[divan::bench(args = CALENDARS)]
+#[divan::bench(args = NAMES)]
 fn adjust(bencher: Bencher<'_, '_>, name: &str) {
     let cal = lookup(name);
-    let (start, end) = range();
-    let dates: Vec<Date> = (start..end)
-        .step_by(23)
-        .map(|s| Date::from_serial(s).unwrap())
-        .collect();
+    let dates = sampled_dates();
     bencher
         .counter(ItemsCount::new(dates.len()))
         .bench(|| -> u32 {
@@ -133,7 +131,7 @@ fn adjust(bencher: Bencher<'_, '_>, name: &str) {
 
 /// 120 monthly rolls under `ModifiedFollowing` — the schedule-stepping
 /// shape.
-#[divan::bench(args = CALENDARS)]
+#[divan::bench(args = NAMES)]
 fn advance(bencher: Bencher<'_, '_>, name: &str) {
     let cal = lookup(name);
     let rolls: i32 = if cfg!(debug_assertions) { 12 } else { 120 };

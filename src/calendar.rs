@@ -30,6 +30,18 @@ enum ForwardStep {
     Chaining,
 }
 
+impl ForwardStep {
+    /// How a forward-moving holiday under `shift` travels; the
+    /// chains-or-not split belongs to the variant itself.
+    fn of(shift: WeekendShift) -> Self {
+        if shift.chains() {
+            Self::Chaining
+        } else {
+            Self::Single
+        }
+    }
+}
+
 /// What the rules say about one day of the window around a query date:
 /// whether a rule names it outright, and — when it is a weekend day —
 /// which way the holiday steps off it.
@@ -179,7 +191,7 @@ impl Calendar<'_> {
 
         let year = date.year();
         let mut facts = [DayFacts::NONE; 5];
-        self.scan_year(date, year, lo, hi, &mut facts);
+        let has_custom = self.scan_year(date, year, lo, hi, &mut facts);
         // The window can straddle a year boundary, and then each rule
         // names a date on both sides of it — scan the neighbour too. A
         // natural-only window ({0}) lies in `year` by definition.
@@ -197,7 +209,7 @@ impl Calendar<'_> {
             }
         }
 
-        if facts[3].natural || self.custom_names(date) {
+        if facts[3].natural || (has_custom && self.custom_names(date)) {
             return true;
         }
         if on_weekend {
@@ -220,8 +232,8 @@ impl Calendar<'_> {
                 if !(sat.chains() || sun.chains()) {
                     return false;
                 }
-                let monday_taken =
-                    mon.natural || date.add_days(-1).is_ok_and(|m| self.custom_names(m));
+                let monday_taken = mon.natural
+                    || (has_custom && date.add_days(-1).is_ok_and(|m| self.custom_names(m)));
                 // The Sunday's substitute is pushed here when the
                 // Monday is a holiday of its own or the Saturday's
                 // substitute took it; the Saturday's only when the
@@ -238,16 +250,27 @@ impl Calendar<'_> {
     /// One pass over the rules for `year`, recording which days of the
     /// `lo..=hi` window (offsets from `date`, index `offset + 3`) carry
     /// a natural holiday and which way it steps off a weekend.
-    /// `Rule::Custom` expands to nothing here and is probed by
-    /// [`custom_names`](Self::custom_names) instead.
-    fn scan_year(&self, date: Date, year: Year, lo: i32, hi: i32, facts: &mut [DayFacts; 5]) {
-        let base = i64::from(date.serial());
+    ///
+    /// `Rule::Custom` expands to nothing here and must be probed via
+    /// [`custom_names`](Self::custom_names) instead; the return value
+    /// says whether the calendar holds one, so callers without any can
+    /// skip those probes.
+    fn scan_year(
+        &self,
+        date: Date,
+        year: Year,
+        lo: i32,
+        hi: i32,
+        facts: &mut [DayFacts; 5],
+    ) -> bool {
+        let mut has_custom = false;
         for rule in self.rules {
             let Some(natural) = rule.natural_date_in(year) else {
+                has_custom |= matches!(rule, Rule::Custom(_));
                 continue;
             };
-            let offset = i64::from(natural.serial()) - base;
-            if offset < i64::from(lo) || offset > i64::from(hi) {
+            let offset = natural.days_since(date);
+            if offset < lo || offset > hi {
                 continue;
             }
             // `offset` is in −3..=1, so `offset + 3` indexes 0..=4.
@@ -258,19 +281,13 @@ impl Calendar<'_> {
             if self.weekend.contains(weekday) {
                 let shift = rule.weekend_shift();
                 match shift.direction(weekday) {
-                    Some(1) => {
-                        let step = if matches!(shift, WeekendShift::Forward) {
-                            ForwardStep::Chaining
-                        } else {
-                            ForwardStep::Single
-                        };
-                        facts.forward = facts.forward.max(step);
-                    }
+                    Some(1) => facts.forward = facts.forward.max(ForwardStep::of(shift)),
                     Some(-1) => facts.steps_back = true,
                     _ => {}
                 }
             }
         }
+        has_custom
     }
 
     /// `true` iff a [`Rule::Custom`] predicate claims `date`. Cheap for
@@ -845,7 +862,7 @@ mod tests {
         // The Monday blocker in the Tuesday decision must see Custom
         // rules too: every July 6 is claimed by a predicate here.
         fn july_sixth(d: Date) -> bool {
-            d.month() as u8 == Month::Jul as u8 && d.day() == 6
+            d.month() == Month::Jul && d.day() == 6
         }
         const CAL: Calendar<'static> = Calendar {
             name: "Custom Monday",
@@ -921,7 +938,7 @@ mod tests {
             ],
         };
         fn constitution_day_observed(d: Date) -> bool {
-            d.month() as u8 == Month::May as u8
+            d.month() == Month::May
                 && d.day() == 6
                 && matches!(d.weekday(), Weekday::Mon | Weekday::Tue | Weekday::Wed)
         }

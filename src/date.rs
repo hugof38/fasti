@@ -508,19 +508,18 @@ impl Date {
     #[must_use]
     pub const fn year(self) -> Year {
         // A Gregorian cycle is 146 097 days over 400 years, so the
-        // serial names its own year index to within one (verified
-        // exhaustively by `year_estimate_is_within_one_everywhere`);
-        // the loops absorb the remainder and are what correctness
-        // rests on. `serial * 400` peaks below 44 million — no overflow.
+        // serial names its own year index to within one (pinned
+        // exhaustively by `year_is_correct_for_every_serial`); the
+        // loops absorb the remainder. The upward loop needs no bounds
+        // check: `CUMULATIVE`'s final entry is one past the last valid
+        // day, so it never compares `<=` a valid serial. `serial * 400`
+        // peaks below 44 million — no overflow.
         let serial = self.0;
         // `serial * 400 / 146_097 < NUM_YEARS` for every valid serial, so
-        // the `u32 -> u16` narrowing is safe.
+        // the `u32 -> u16` narrowing is safe and the index in bounds.
         #[allow(clippy::cast_possible_truncation)]
         let mut idx = (serial * 400 / 146_097) as u16;
-        if idx >= NUM_YEARS {
-            idx = NUM_YEARS - 1;
-        }
-        while idx + 1 < NUM_YEARS && CUMULATIVE[idx as usize + 1] <= serial {
+        while CUMULATIVE[idx as usize + 1] <= serial {
             idx += 1;
         }
         while CUMULATIVE[idx as usize] > serial {
@@ -1130,7 +1129,10 @@ mod tests {
     fn year_is_correct_for_every_serial() {
         // Exhaustive: walk the whole range once, tracking the expected
         // year incrementally, so `year`'s estimate-plus-correction is
-        // pinned at every day — boundaries included — not just samples.
+        // pinned at every day — boundaries included — along with the
+        // doc comment's claim that the 400-year-cycle estimate is off
+        // by at most one year index (which also keeps the unclamped
+        // table index in bounds).
         let mut expected: u16 = EPOCH_YEAR;
         let mut next_year_start: u32 = CUMULATIVE[1];
         for serial in 0..=MAX_SERIAL {
@@ -1143,19 +1145,10 @@ mod tests {
                 expected,
                 "serial {serial}",
             );
-        }
-    }
-
-    #[test]
-    fn year_estimate_is_within_one_everywhere() {
-        // The doc comment on `year` claims the 400-year-cycle estimate
-        // is off by at most one year index; hold it to that.
-        for serial in 0..=MAX_SERIAL {
             let estimate = serial * 400 / 146_097;
-            let true_idx = u32::from(Date::from_serial(serial).unwrap().year().get() - EPOCH_YEAR);
             assert!(
-                estimate.abs_diff(true_idx) <= 1,
-                "serial {serial}: estimate {estimate}, true {true_idx}",
+                estimate.abs_diff(u32::from(expected - EPOCH_YEAR)) <= 1,
+                "serial {serial}: estimate {estimate} not within one of the true index",
             );
         }
     }

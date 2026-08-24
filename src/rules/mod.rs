@@ -63,7 +63,8 @@ impl Rule {
     /// describable rule names at most one date per year, and for a date
     /// `d` in `year`, `natural_date_in(year) == Some(d)` iff
     /// [`is_holiday(d)`](Self::is_holiday) — the property the calendar
-    /// evaluation rests on, pinned by `expansion_agrees_with_probing`.
+    /// evaluation rests on, pinned by
+    /// `expansion_matches_probing_over_every_year`.
     ///
     /// [`Rule::Custom`] is a predicate, not a description: it answers
     /// [`None`] here and callers must probe it per date instead.
@@ -76,6 +77,15 @@ impl Rule {
             Self::OneOff(r) => r.natural_date_in(year),
             Self::Custom(_) => None,
         }
+    }
+}
+
+/// `Result::ok`, spelled out because `Result::ok` is not yet callable
+/// in const fns — the shared tail of every rule's `natural_date_in`.
+pub(crate) const fn date_ok(result: Result<Date, crate::TimeError>) -> Option<Date> {
+    match result {
+        Ok(d) => Some(d),
+        Err(_) => None,
     }
 }
 
@@ -143,30 +153,14 @@ mod tests {
         ]
     }
 
-    proptest! {
-        /// Asking "is this date yours?" and "what date do you name in
-        /// this year?" are the same question: for every describable
-        /// rule and every date, probing agrees with expansion.
-        #[test]
-        fn expansion_agrees_with_probing(serial in 0u32..=Date::MAX.serial()) {
-            let d = Date::from_serial(serial).unwrap();
-            for rule in expansion_cases() {
-                prop_assert_eq!(
-                    rule.is_holiday(d),
-                    rule.natural_date_in(d.year()) == Some(d),
-                    "{:?} at {}", rule, d,
-                );
-            }
-        }
-    }
-
-    /// Both directions, exhaustively: for every case rule and every
-    /// year, the expanded date is exactly the set of days the rule
-    /// probes as holidays — no invented dates, none missed.
+    /// Asking "is this date yours?" and "what date do you name in this
+    /// year?" are the same question — both directions, exhaustively:
+    /// for every case rule and every year, the expanded date is
+    /// exactly the set of days the rule probes as holidays.
     #[test]
     fn expansion_matches_probing_over_every_year() {
-        use alloc::vec::Vec;
         extern crate alloc;
+        use alloc::vec::Vec;
         for rule in expansion_cases() {
             for y in Year::MIN.get()..=Year::MAX.get() {
                 let year = Year::new(y).unwrap();
@@ -180,8 +174,6 @@ mod tests {
             }
         }
     }
-
-    use proptest::prelude::*;
 
     // Const-constructibility check; module scope for clippy::items_after_statements.
     const JULY_FOURTH: Rule = Rule::Fixed(FixedDate::new(Month::Jul, 4));

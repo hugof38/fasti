@@ -63,13 +63,9 @@ fn reference(cal: &Calendar<'_>, lo: Date, hi: Date) -> BTreeSet<Date> {
         }
     }
     // Walk every ISO Saturday whose weekend can spill into the range.
-    let spill = lo.serial().saturating_sub(7);
-    let first_sat = (spill..spill + 7)
-        .map(|s| Date::from_serial(s).unwrap())
-        .find(|d| d.weekday() == Weekday::Sat)
-        .unwrap();
-    let mut sat = first_sat;
-    while sat.serial() <= hi.serial().min(Date::MAX.serial() - 1) {
+    let spill = Date::from_serial(lo.serial().saturating_sub(7)).unwrap();
+    let mut sat = spill.next_weekday(Weekday::Sat).unwrap();
+    while sat.serial() <= hi.serial() {
         let sun = sat.add_days(1).unwrap();
 
         // Backward: a single fixed step from the Saturday.
@@ -96,7 +92,6 @@ fn reference(cal: &Calendar<'_>, lo: Date, hi: Date) -> BTreeSet<Date> {
         let tue = sat.add_days(3);
         let mut insert = |slot: Result<Date, fasti::TimeError>| {
             if let Ok(day) = slot
-                && day.serial() <= Date::MAX.serial()
                 && !cal.is_weekend(day)
             {
                 days.insert(day);
@@ -170,49 +165,51 @@ model_agreement! {
 /// pairs, mixed variants, blockers — over the full range.
 #[test]
 fn synthetic_chaining_calendars_agree_with_the_model() {
-    let shapes: &[&[Rule]] = &[
-        // UK Christmas/Boxing Day shape.
-        &[
-            Rule::Fixed(FixedDate::new(Month::Dec, 25).shift(WeekendShift::Forward)),
-            Rule::Fixed(FixedDate::new(Month::Dec, 26).shift(WeekendShift::Forward)),
-        ],
-        // Chained pair straddling the year boundary.
-        &[
-            Rule::Fixed(FixedDate::new(Month::Dec, 31).shift(WeekendShift::Forward)),
-            Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::Forward)),
-        ],
-        // Chain blocked by a natural Monday-capable holiday.
-        &[
-            Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::Forward)),
-            Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::Forward)),
-            Rule::Fixed(FixedDate::new(Month::Jul, 6)),
-        ],
-        // Mixed variants sharing a weekend.
-        &[
-            Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::Forward)),
-            Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::SunForward)),
-        ],
-        // Single-step next to a blocker, plus a backward step.
-        &[
-            Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::SatBackSunForward)),
-            Rule::Fixed(FixedDate::new(Month::Jan, 2)),
-        ],
+    let shapes: &[(&str, &[Rule])] = &[
+        (
+            "UK Christmas/Boxing Day pair",
+            &[
+                Rule::Fixed(FixedDate::new(Month::Dec, 25).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Dec, 26).shift(WeekendShift::Forward)),
+            ],
+        ),
+        (
+            "chained pair straddling the year boundary",
+            &[
+                Rule::Fixed(FixedDate::new(Month::Dec, 31).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::Forward)),
+            ],
+        ),
+        (
+            "chain blocked by a natural Monday-capable holiday",
+            &[
+                Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Jul, 6)),
+            ],
+        ),
+        (
+            "mixed variants sharing a weekend",
+            &[
+                Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::SunForward)),
+            ],
+        ),
+        (
+            "single step next to a blocker, plus a backward step",
+            &[
+                Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::SatBackSunForward)),
+                Rule::Fixed(FixedDate::new(Month::Jan, 2)),
+            ],
+        ),
     ];
-    for (i, rules) in shapes.iter().enumerate() {
+    for (name, rules) in shapes {
         let cal = Calendar {
-            name: "synthetic",
+            name,
             weekend: Weekend::SAT_SUN,
             rules,
         };
-        let expected = reference(&cal, Date::MIN, Date::MAX);
-        for serial in Date::MIN.serial()..=Date::MAX.serial() {
-            let d = Date::from_serial(serial).unwrap();
-            assert_eq!(
-                cal.is_holiday(d),
-                expected.contains(&d),
-                "shape {i}: is_holiday({d}) disagrees with the reference model",
-            );
-        }
+        assert_agrees(&cal, Date::MIN, Date::MAX);
     }
 }
 
