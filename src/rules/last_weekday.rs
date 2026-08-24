@@ -86,6 +86,26 @@ impl LastWeekday {
             Err(_) => true,
         }
     }
+
+    /// The natural date this rule names in `year`: the last occurrence
+    /// of the weekday in the month, or [`None`] when the year is
+    /// inactive.
+    pub(crate) const fn natural_date_in(self, year: Year) -> Option<Date> {
+        if !self.years.contains(year) {
+            return None;
+        }
+        let Ok(last) = Date::from_ymd(year.get(), self.month, self.month.length(year)) else {
+            return None;
+        };
+        // Widening u8 -> i32 casts; `as` because `From` is not const.
+        #[allow(clippy::cast_lossless)]
+        let back_to_weekday =
+            (last.weekday().get() as i32 - self.weekday.get() as i32).rem_euclid(7);
+        match last.add_days(-back_to_weekday) {
+            Ok(d) => Some(d),
+            Err(_) => None,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -139,6 +139,19 @@ impl FixedDate {
     pub fn is_holiday(&self, date: Date) -> bool {
         self.years.contains(date.year()) && date.month() == self.month && date.day() == self.day
     }
+
+    /// The natural date this rule names in `year`: its month/day when
+    /// the year is active, [`None`] otherwise (a Feb 29 rule names
+    /// nothing in a non-leap year).
+    pub(crate) const fn natural_date_in(self, year: Year) -> Option<Date> {
+        if !self.years.contains(year) {
+            return None;
+        }
+        match Date::from_ymd(year.get(), self.month, self.day) {
+            Ok(d) => Some(d),
+            Err(_) => None,
+        }
+    }
 }
 
 #[cfg(test)]

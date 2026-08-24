@@ -14,7 +14,7 @@ pub use last_weekday::LastWeekday;
 pub use nth_weekday::NthWeekday;
 pub use one_off::OneOff;
 
-use crate::Date;
+use crate::{Date, Year};
 
 /// A holiday rule matching a holiday's natural date.
 /// [`Rule::Custom`] holds a plain `fn` pointer to stay `const`-constructible,
@@ -58,6 +58,25 @@ impl Rule {
             Self::Custom(f) => f(date),
         }
     }
+
+    /// The natural date this rule names in `year`, if any. Every
+    /// describable rule names at most one date per year, and for a date
+    /// `d` in `year`, `natural_date_in(year) == Some(d)` iff
+    /// [`is_holiday(d)`](Self::is_holiday) — the property the calendar
+    /// evaluation rests on, pinned by `expansion_agrees_with_probing`.
+    ///
+    /// [`Rule::Custom`] is a predicate, not a description: it answers
+    /// [`None`] here and callers must probe it per date instead.
+    pub(crate) const fn natural_date_in(&self, year: Year) -> Option<Date> {
+        match self {
+            Self::Fixed(r) => r.natural_date_in(year),
+            Self::NthWeekday(r) => r.natural_date_in(year),
+            Self::LastWeekday(r) => r.natural_date_in(year),
+            Self::Easter(r) => r.natural_date_in(year),
+            Self::OneOff(r) => r.natural_date_in(year),
+            Self::Custom(_) => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -97,6 +116,66 @@ mod tests {
         assert!(rule.is_holiday(ymd(2026, Month::Feb, 13)));
         assert!(!rule.is_holiday(ymd(2026, Month::Feb, 14)));
     }
+
+    /// Rules covering every describable variant and the edge shapes
+    /// that make expansion interesting: leap-day fixed dates, fifth
+    /// ordinals that may not exist, offsets that leave their year, and
+    /// bounded year ranges.
+    fn expansion_cases() -> [Rule; 12] {
+        use crate::{FixedDate, LastWeekday, NthWeekday, OneOff, WeekendShift, YearRange};
+        [
+            Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::SatBackSunForward)),
+            Rule::Fixed(FixedDate::new(Month::Feb, 29)),
+            Rule::Fixed(
+                FixedDate::new(Month::Jan, 1).years(YearRange::literal_between(1971, 1977)),
+            ),
+            Rule::Fixed(FixedDate::new(Month::Dec, 31).shift(WeekendShift::Forward)),
+            Rule::NthWeekday(NthWeekday::new(Ordinal::Third, Weekday::Mon, Month::Jan)),
+            Rule::NthWeekday(NthWeekday::new(Ordinal::Fifth, Weekday::Sun, Month::Feb)),
+            Rule::LastWeekday(LastWeekday::new(Weekday::Mon, Month::May)),
+            Rule::LastWeekday(
+                LastWeekday::new(Weekday::Wed, Month::Dec).years(YearRange::literal_through(1950)),
+            ),
+            Rule::Easter(EasterOffset::good_friday()),
+            Rule::Easter(EasterOffset::new_orthodox(1)),
+            Rule::Easter(EasterOffset::new(280)), // can leave its year
+            Rule::OneOff(OneOff::new(Date::literal(2026, Month::Aug, 15))),
+        ]
+    }
+
+    proptest! {
+        /// Asking "is this date yours?" and "what date do you name in
+        /// this year?" are the same question: for every describable
+        /// rule and every date, probing agrees with expansion.
+        #[test]
+        fn expansion_agrees_with_probing(serial in 0u32..=Date::MAX.serial()) {
+            let d = Date::from_serial(serial).unwrap();
+            for rule in expansion_cases() {
+                prop_assert_eq!(
+                    rule.is_holiday(d),
+                    rule.natural_date_in(d.year()) == Some(d),
+                    "{:?} at {}", rule, d,
+                );
+            }
+        }
+    }
+
+    /// The forward direction, exhaustively: every date a rule expands
+    /// to falls in the asked-for year and probes as a holiday.
+    #[test]
+    fn expansion_names_dates_the_rule_claims() {
+        for rule in expansion_cases() {
+            for y in Year::MIN.get()..=Year::MAX.get() {
+                let year = Year::new(y).unwrap();
+                if let Some(d) = rule.natural_date_in(year) {
+                    assert_eq!(d.year(), year, "{rule:?} in {y}");
+                    assert!(rule.is_holiday(d), "{rule:?} in {y} named {d}");
+                }
+            }
+        }
+    }
+
+    use proptest::prelude::*;
 
     // Const-constructibility check; module scope for clippy::items_after_statements.
     const JULY_FOURTH: Rule = Rule::Fixed(FixedDate::new(Month::Jul, 4));

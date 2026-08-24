@@ -1152,8 +1152,7 @@ mod tests {
         // is off by at most one year index; hold it to that.
         for serial in 0..=MAX_SERIAL {
             let estimate = serial * 400 / 146_097;
-            let true_idx =
-                u32::from(Date::from_serial(serial).unwrap().year().get() - EPOCH_YEAR);
+            let true_idx = u32::from(Date::from_serial(serial).unwrap().year().get() - EPOCH_YEAR);
             assert!(
                 estimate.abs_diff(true_idx) <= 1,
                 "serial {serial}: estimate {estimate}, true {true_idx}",
