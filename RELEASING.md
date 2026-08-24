@@ -58,10 +58,10 @@ merged.
    `## [<version>]` heading — `release.yml` greps for that heading and
    refuses to publish without it.
 
-2. **Dry-run the Python train first.** See below. PyPI never lets a
-   version be re-uploaded, so a half-published `0.2.0` is burned and the
-   next attempt has to be `0.2.1`. The pre-release costs one extra tag
-   and buys the knowledge that fifteen artifacts actually build.
+2. **Rehearse the Python train first**, with the manual run described
+   below. It builds and audits every artifact without uploading, which
+   is the cheap way to find out that a wheel does not build on a
+   platform no CI job covers.
 
 3. **Tag the crate**, and wait for it to finish:
 
@@ -95,59 +95,49 @@ merged.
    Check the PyPI page shows `README-py.md` and not the crate's README —
    they collide in the sdist, which is why the file has that name.
 
-## The pre-release dry run
+## The rehearsal
 
 The Python release path has never executed: `release-python.yml` only
 reaches `main` with the bindings themselves, so nothing in it has run
 beyond YAML parsing. The parts most likely to break are the ones CI
 never exercises — 3.14t wheels inside a manylinux container, aarch64
-under QEMU, and the macOS x86_64 runner.
+under QEMU, and the macOS x86\_64 runner.
 
-A pre-release runs all of it against the real PyPI without spending the
-version. `pip` will not install it without `--pre`.
+Run it manually first, from Actions → *Release (Python)* → *Run
+workflow*, on `main`. `verify` and `publish` are gated on the ref being
+a `py-v*` tag, so a manual run does everything except upload: sdist,
+seven abi3 wheels, seven free-threaded 3.14t wheels, `twine check
+--strict` over all of them and `abi3audit --strict` over the abi3 ones.
 
-Cargo's `0.2.0-rc.1` renders as PEP 440 `0.2.0rc1`, which is what the
-artifacts are named and what PyPI stores. `verify` compares the tag
-suffix to the manifest verbatim, so the tag carries Cargo's spelling.
+What to look for, in the order it is likely to be what breaks:
 
-Tag a commit that exists only as a tag, so no branch carries an rc
-version:
-
-```bash
-git switch --detach main
-sed -i '0,/^version = "0.2.0"$/s//version = "0.2.0-rc.1"/' bindings/python/Cargo.toml
-(cd bindings/python && cargo update -p fasti-py --offline)
-git commit -am "fasti-py 0.2.0-rc.1, for a release dry run"
-git tag py-v0.2.0-rc.1
-git push origin py-v0.2.0-rc.1        # the tag only, never the commit
-git switch -                          # main is untouched
-```
-
-Watch the run. What it proves, in order of how likely it is to be what
-breaks:
-
-- fifteen artifacts land in `audit` — one sdist, seven abi3 wheels,
-  seven 3.14t wheels. A missing one is a build that failed on a
-  platform no CI job covers.
+- fifteen artifacts reach `audit` — one sdist, seven abi3 wheels, seven
+  3.14t wheels. A missing one is a build that failed on a platform no
+  CI job covers.
 - `abi3audit --strict` passes on the seven abi3 wheels, and is not
   asked about the 3.14t ones, which are version-specific by design.
-- the OIDC exchange with PyPI works, which is the step that fails if
-  the pending publisher or the environment name is wrong by a
-  character.
+- `publish` shows as skipped rather than failed.
 
-Then install it somewhere clean:
+This costs nothing and can be repeated. A pre-release tag would prove
+one extra thing — that the OIDC handshake with PyPI works — but that
+step uploads nothing when it fails, so a misconfigured publisher costs
+a re-tag rather than a version number, and it is not worth leaving
+permanent pre-releases on the index to find out early.
+
+## When a tag goes wrong
+
+Nothing is uploaded unless every build and both audits passed:
+`publish` needs `audit`, and `audit` needs all three build jobs. A
+failure anywhere upstream leaves PyPI untouched, so the recovery is:
 
 ```bash
-python -m venv /tmp/rc && /tmp/rc/bin/pip install --pre fasti-py==0.2.0rc1
-/tmp/rc/bin/python -c "import fasti, datetime as dt; \
-  from fasti.calendars import us; \
-  print(fasti.__version__, us.SETTLEMENT.is_business_day(dt.date(2026, 7, 3)))"
+git push origin :py-v0.2.0      # delete the remote tag
+git tag -d py-v0.2.0            # and the local one
+# fix, merge the fix to main, then tag again
 ```
 
-If it all passes, the real tags are steps 3 and 4 above. If it does not,
-the fix lands on `main` and the next dry run is `py-v0.2.0-rc.2` — rc
-numbers are cheap, `0.2.0` is not.
-
-Delete the dangling rc commit's tag once it has served its purpose
-(`git push origin :py-v0.2.0-rc.1`); the pre-release stays on PyPI,
-where it is harmless and hidden from `pip` without `--pre`.
+The one case that does spend the version is a failure *inside* the
+upload after some files have landed, because PyPI will not accept a
+second file under a name it already has. If that happens, do not fight
+it: yank what is there and release `0.2.1`. Deleting a release does not
+free the version either.

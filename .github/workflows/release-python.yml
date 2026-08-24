@@ -4,9 +4,13 @@ name: Release (Python)
 # release train is v*, and the two patterns do not overlap: py-v0.2.0 is
 # not matched by v*. The tag is the trigger, but the version of record is
 # the one in bindings/python/Cargo.toml.
+# workflow_dispatch runs everything except the upload, so the fifteen
+# artifacts can be proven to build before a tag commits to a version
+# number that PyPI will never release back.
 on:
   push:
     tags: ["py-v*"]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,6 +19,9 @@ env:
 jobs:
   verify:
     name: verify tag
+    # Nothing to verify on a manual run: there is no tag to disagree
+    # with the manifest, and skipping this skips publish with it.
+    if: startsWith(github.ref, 'refs/tags/py-v')
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.check.outputs.version }}
@@ -159,6 +166,9 @@ jobs:
   publish:
     name: publish to PyPI
     needs: [verify, gates, audit]
+    # Belt and braces: verify is already tag-gated, and a skipped
+    # dependency skips this job, but an upload is worth saying twice.
+    if: startsWith(github.ref, 'refs/tags/py-v')
     runs-on: ubuntu-latest
     # Trusted publishing: PyPI mints a short-lived token from this
     # workflow's OIDC identity, so there is no stored secret. The
