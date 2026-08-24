@@ -42,7 +42,7 @@ VALUES: list[Any] = [
     Period.ZERO,
     Period.months(-3),
     Period.years(2),
-    Rule.fixed(7, 4, shift="fed", years=(1971, 2100)),
+    Rule.fixed(7, 4, shift="sunforward", years=(1971, 2100)),
     Rule.nth_weekday(3, "mon", 1),
     Rule.last_weekday("mon", 5, years=(None, 1970)),
     Rule.easter(-2, method="orthodox"),

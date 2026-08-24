@@ -283,19 +283,22 @@ vocabulary_ordered! {
 vocabulary! {
     /// Which way a fixed-date holiday moves when it lands on a weekend.
     ///
-    /// `"fed"` is a spelling of `SUN_FORWARD` — the Federal Reserve and
-    /// SIFMA convention. `"federal"` is a spelling of nothing: the US
-    /// federal convention is `SAT_BACK_SUN_FORWARD`, and one word
-    /// standing for two different answers would be a trap.
+    /// The members say what the rule does, and nothing here names a
+    /// market that follows it. `"fed"` and `"sifma"` were once spellings
+    /// of `SUN_FORWARD` and are not any more: an institution is not a
+    /// rule, its convention can change, and the US federal convention is
+    /// `SAT_BACK_SUN_FORWARD` — so `"federal"` sitting one keystroke
+    /// away from `"fed"` and meaning something else was a trap waiting
+    /// to be sprung. Name the shift you mean.
     ///
     /// >>> from fasti import WeekendShift
-    /// >>> WeekendShift("fed")
+    /// >>> WeekendShift("SunForward")
     /// WeekendShift.SUN_FORWARD
     PyWeekendShift : WeekendShift, ShiftArg, "WeekendShift",
     [
         NONE => None, "None";
         FORWARD => Forward, "Forward";
-        SUN_FORWARD => SunForward, "SunForward" | "fed" | "sifma";
+        SUN_FORWARD => SunForward, "SunForward";
         SAT_BACK_SUN_FORWARD => SatBackSunForward, "SatBackSunForward";
     ]
 }

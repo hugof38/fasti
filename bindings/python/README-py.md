@@ -142,15 +142,17 @@ appears in errors.
 False
 >>> BusinessDayConvention("mod_following") == BusinessDayConvention.MODIFIED_FOLLOWING
 True
->>> WeekendShift("fed")
+>>> WeekendShift("SunForward")
 WeekendShift.SUN_FORWARD
 
 ```
 
-`"fed"` is a spelling of `SUN_FORWARD`, the Federal Reserve and SIFMA
-convention. `"federal"` is a spelling of nothing: the US federal
-convention is `SAT_BACK_SUN_FORWARD`, and one word standing for two
-different answers would be a trap.
+The spellings describe the thing, never a market that uses it. A shift
+is `SUN_FORWARD` or `SAT_BACK_SUN_FORWARD`; it is not "the Fed one",
+because an institution is not a rule and its convention can change
+without this library hearing about it. The US federal convention is in
+fact `SAT_BACK_SUN_FORWARD`, so a `"fed"` spelling would have sat one
+keystroke from a `"federal"` that means something else.
 
 The string spelling is parsed on every call, so in a loop that runs
 millions of times it is worth passing the member instead — measured on

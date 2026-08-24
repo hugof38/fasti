@@ -40,7 +40,7 @@ TABLE: list[tuple[type, str, str, list[str]]] = [
     (Frequency, "DAILY", "Daily", []),
     (WeekendShift, "NONE", "None", []),
     (WeekendShift, "FORWARD", "Forward", []),
-    (WeekendShift, "SUN_FORWARD", "SunForward", ["fed", "sifma"]),
+    (WeekendShift, "SUN_FORWARD", "SunForward", []),
     (WeekendShift, "SAT_BACK_SUN_FORWARD", "SatBackSunForward", []),
     (EasterMethod, "WESTERN", "Western", ["gregorian"]),
     (EasterMethod, "ORTHODOX", "Orthodox", ["julian"]),
@@ -119,13 +119,14 @@ def test_the_wrong_type_is_a_type_error(vocabulary: type) -> None:
         vocabulary(3)
 
 
-def test_federal_is_a_spelling_of_nothing() -> None:
-    # "fed" is the Federal Reserve and SIFMA convention; the US federal
-    # convention is a different one. One word for both would be a trap.
-    assert WeekendShift("fed") == WeekendShift.SUN_FORWARD
-    assert WeekendShift("sifma") == WeekendShift.SUN_FORWARD
-    with pytest.raises(FastiError, match="unknown WeekendShift 'federal'"):
-        WeekendShift("federal")
+def test_no_shift_is_spelled_by_naming_an_institution() -> None:
+    # A shift is named for what it does. "fed" and "sifma" used to reach
+    # SUN_FORWARD and no longer do: an institution is not a rule, and the
+    # US federal convention is the other one, so "federal" sitting a
+    # keystroke from "fed" was a trap. None of them resolve now.
+    for spelling in ("fed", "sifma", "federal"):
+        with pytest.raises(FastiError, match=f"unknown WeekendShift '{spelling}'"):
+            WeekendShift(spelling)
 
 
 def test_two_vocabularies_may_share_a_spelling_without_sharing_a_meaning() -> None:
@@ -155,7 +156,7 @@ def test_a_spelling_is_accepted_wherever_the_class_is() -> None:
 
     everywhere: list[Any] = [
         Calendar("Acme", ["sat"]).weekend,
-        Rule.fixed(7, 4, shift="fed"),
+        Rule.fixed(7, 4, shift="sunforward"),
         Rule.easter(1, method="julian"),
         Schedule(
             datetime.date(2025, 1, 15),
