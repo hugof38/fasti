@@ -1053,10 +1053,7 @@ mod tests {
                 FixedDate::new(Month::Dec, 31).shift(WeekendShift::Forward),
             )],
         };
-        assert!(NYE.is_holiday(ymd(2024, Month::Jan, 1)));
-        // Dec 31 2022 was a Saturday → observed Monday Jan 2 2023.
-        assert!(NYE.is_holiday(ymd(2023, Month::Jan, 2)));
-        // And a chained pair straddling the boundary: Sat Dec 31 2022
+        // A chained pair straddling the boundary: Sat Dec 31 2022
         // takes Monday Jan 2, pushing Sun Jan 1's substitute to
         // Tuesday Jan 3 — the Tuesday decision reads into both years.
         const NYE_AND_NY: Calendar<'static> = Calendar {
@@ -1067,6 +1064,9 @@ mod tests {
                 Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::Forward)),
             ],
         };
+        assert!(NYE.is_holiday(ymd(2024, Month::Jan, 1)));
+        // Dec 31 2022 was a Saturday → observed Monday Jan 2 2023.
+        assert!(NYE.is_holiday(ymd(2023, Month::Jan, 2)));
         assert!(NYE_AND_NY.is_holiday(ymd(2023, Month::Jan, 2)));
         assert!(NYE_AND_NY.is_holiday(ymd(2023, Month::Jan, 3)));
         assert!(NYE_AND_NY.is_business_day(ymd(2023, Month::Jan, 4)));

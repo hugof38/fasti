@@ -45,7 +45,11 @@ fn natural(cal: &Calendar<'_>, d: Date) -> bool {
 
 /// Any rule whose natural date is `d` and whose variant matches `pred`.
 fn mover(cal: &Calendar<'_>, d: Date, pred: impl Fn(WeekendShift) -> bool) -> bool {
-    cal.is_weekend(d) && cal.rules.iter().any(|r| pred(shift_of(r)) && r.is_holiday(d))
+    cal.is_weekend(d)
+        && cal
+            .rules
+            .iter()
+            .any(|r| pred(shift_of(r)) && r.is_holiday(d))
 }
 
 /// Every holiday (natural or substitute) in `lo..=hi` according to the
@@ -59,7 +63,8 @@ fn reference(cal: &Calendar<'_>, lo: Date, hi: Date) -> BTreeSet<Date> {
         }
     }
     // Walk every ISO Saturday whose weekend can spill into the range.
-    let first_sat = (lo.serial().saturating_sub(7)..)
+    let spill = lo.serial().saturating_sub(7);
+    let first_sat = (spill..spill + 7)
         .map(|s| Date::from_serial(s).unwrap())
         .find(|d| d.weekday() == Weekday::Sat)
         .unwrap();
@@ -81,7 +86,10 @@ fn reference(cal: &Calendar<'_>, lo: Date, hi: Date) -> BTreeSet<Date> {
         let sat_chain = mover(cal, sat, |s| matches!(s, WeekendShift::Forward));
         let sun_chain = mover(cal, sun, |s| matches!(s, WeekendShift::Forward));
         let sun_single = mover(cal, sun, |s| {
-            matches!(s, WeekendShift::SunForward | WeekendShift::SatBackSunForward)
+            matches!(
+                s,
+                WeekendShift::SunForward | WeekendShift::SatBackSunForward
+            )
         });
 
         let mon = sat.add_days(2);
