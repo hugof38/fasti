@@ -311,9 +311,13 @@ impl Slot {
 /// The days a substitute decision for one date reads, and what a pass
 /// over the rules found on each.
 ///
-/// Only Friday, Monday and Tuesday can be substitute days: a weekend
-/// owes at most two days off, and a day off travels at most two steps,
-/// so the day that sent one is never more than three days away.
+/// Substitutes take the first free weekday in their direction, so the
+/// observed days form first-come-first-served runs — the same
+/// next-free-slot rule as a parking lot or a linear-probing hash
+/// table. Whether one day is taken is decided by reading its run:
+/// a weekend owes at most two days off and a day off travels at most
+/// two steps, so the run around any day spans at most four.
+/// Only Friday, Monday and Tuesday can be substitute days.
 #[derive(Debug, Clone, Copy)]
 struct Observance {
     /// The day asked about, and whether a rule names it outright.
@@ -449,9 +453,11 @@ impl Observance {
 
     /// [`Calendar::is_holiday`] for a day a substitute can land on.
     ///
-    /// The Tuesday is reached whenever the Monday is taken, which a
-    /// holiday of the Monday's own does as readily as the weekend's
-    /// first day off.
+    /// First-fit occupancy: the days the weekend owes fill the free
+    /// weekdays after it in order, so the n-th weekday is off exactly
+    /// when the days owed plus the days before it already taken reach
+    /// n. The Monday is first; the Tuesday is reached by two owed, or
+    /// by one owed over a Monday a holiday of its own has taken.
     ///
     /// A substitute needing the Wednesday is not granted. Japan's Golden
     /// Week is the one convention that gets there, chaining through
@@ -463,19 +469,16 @@ impl Observance {
             return true;
         }
         match weekday {
-            // The Saturday ahead, stepping back.
+            // The Saturday ahead, stepping back on to the Friday.
             Weekday::Fri => self.ahead.found,
-            // The first day off the weekend just gone owes.
+            // At least one day owed: the Monday is the first free slot.
             Weekday::Mon => self.saturday.found || self.sunday.found,
-            Weekday::Tue => match (self.saturday.found, self.sunday.found) {
-                // Two owed: the Monday took the first, this is the second.
-                (true, true) => true,
-                // Nothing owed, so nothing reaches the Tuesday.
-                (false, false) => false,
-                // One day off owed: it comes here only if a holiday of
-                // the Monday's own has taken the Monday.
-                _ => self.monday.found,
-            },
+            // The Tuesday is the second: days owed plus the Monday
+            // already taken must reach two.
+            Weekday::Tue => {
+                let owed = self.saturday.found as u8 + self.sunday.found as u8;
+                owed + self.monday.found as u8 >= 2
+            }
             // `around` yields nothing for any other weekday.
             _ => false,
         }
