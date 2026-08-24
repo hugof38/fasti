@@ -121,6 +121,13 @@ impl Calendar<'_> {
     /// - [`WeekendShift::None`] (France, TARGET): a weekend holiday is
     ///   simply lost.
     ///
+    /// A chain is bounded at the Tuesday: a weekend owes at most two
+    /// days off. Conventions that probe deeper — Japan's Public
+    /// Holiday Law Art. 3 sends Golden Week 2026's substitute for
+    /// Sunday May 3 past the May 4 and May 5 holidays to Wednesday
+    /// May 6 — belong in a [`Rule::Custom`] naming the observed days
+    /// outright, as `QuantLib` encodes them.
+    ///
     /// ```
     /// use fasti::{Date, Month, calendars};
     /// let uk = calendars::uk::SETTLEMENT;
@@ -805,6 +812,48 @@ mod tests {
         assert!(MIXED.is_holiday(ymd(2026, Month::Jul, 6)));
         assert!(MIXED.is_business_day(ymd(2026, Month::Jul, 7)));
         assert!(SWAPPED.is_holiday(ymd(2026, Month::Jul, 7)));
+    }
+
+    #[test]
+    fn conventions_deeper_than_the_supported_chain_use_custom_rules() {
+        // Japan's Public Holiday Law Art. 3 moves a Sunday holiday to
+        // the next day that is not itself a holiday — an unbounded
+        // probe. Golden Week 2026: May 3 is a Sunday, May 4 and May 5
+        // are holidays, so the substitute legally lands Wednesday
+        // May 6. No WeekendShift expresses that (see the NYSE evidence
+        // for why unbounded probing must not be the default); the
+        // supported chain stops at the Tuesday, and the convention is
+        // written as a Custom rule naming the observed day outright —
+        // QuantLib's `d == 6 && m == May && (w == Mon|Tue|Wed)` shape.
+        const NAIVE: Calendar<'static> = Calendar {
+            name: "Golden Week, shifts only",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::May, 3).shift(WeekendShift::SunForward)),
+                Rule::Fixed(FixedDate::new(Month::May, 4)),
+                Rule::Fixed(FixedDate::new(Month::May, 5)),
+            ],
+        };
+        fn constitution_day_observed(d: Date) -> bool {
+            d.month() as u8 == Month::May as u8
+                && d.day() == 6
+                && matches!(d.weekday(), Weekday::Mon | Weekday::Tue | Weekday::Wed)
+        }
+        const WITH_CUSTOM: Calendar<'static> = Calendar {
+            name: "Golden Week",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::May, 3)),
+                Rule::Fixed(FixedDate::new(Month::May, 4)),
+                Rule::Fixed(FixedDate::new(Month::May, 5)),
+                Rule::Custom(constitution_day_observed),
+            ],
+        };
+        // The documented limit: shifts alone do not reach the Wednesday.
+        assert!(!NAIVE.is_holiday(ymd(2026, Month::May, 6)));
+        // The documented vehicle does.
+        assert!(WITH_CUSTOM.is_holiday(ymd(2026, Month::May, 6)));
+        assert!(WITH_CUSTOM.is_business_day(ymd(2026, Month::May, 7)));
     }
 
     // ---- range edges -----------------------------------------------------
