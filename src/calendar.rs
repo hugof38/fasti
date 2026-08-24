@@ -13,8 +13,65 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use crate::{
-    BusinessDayConvention, Date, DateRange, Period, Rule, TimeError, Weekday, Weekend, WeekendShift,
+    BusinessDayConvention, Date, DateRange, Period, Rule, TimeError, Weekday, Weekend,
+    WeekendShift, Year,
 };
+
+/// The strongest forward step any holiday takes off one weekend day,
+/// ordered so that two rules on the same day combine with [`Ord::max`]:
+/// chaining subsumes a single step subsumes nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ForwardStep {
+    /// No holiday on this day steps forward.
+    None,
+    /// A single fixed step (`SunForward`, `SatBackSunForward`).
+    Single,
+    /// Steps forward and chains past taken days (`Forward`).
+    Chaining,
+}
+
+impl ForwardStep {
+    /// How a forward-moving holiday under `shift` travels; the
+    /// chains-or-not split belongs to the variant itself.
+    fn of(shift: WeekendShift) -> Self {
+        if shift.chains() {
+            Self::Chaining
+        } else {
+            Self::Single
+        }
+    }
+}
+
+/// What the rules say about one day of the window around a query date:
+/// whether a rule names it outright, and — when it is a weekend day —
+/// which way the holiday steps off it.
+#[derive(Debug, Clone, Copy)]
+struct DayFacts {
+    /// A describable rule names this day as a natural holiday.
+    natural: bool,
+    /// How a weekend holiday on this day steps forward, if one does.
+    forward: ForwardStep,
+    /// A weekend holiday on this day steps back to a substitute.
+    steps_back: bool,
+}
+
+impl DayFacts {
+    const NONE: Self = Self {
+        natural: false,
+        forward: ForwardStep::None,
+        steps_back: false,
+    };
+
+    /// A holiday on this day grants a substitute one step forward.
+    fn steps_forward(self) -> bool {
+        !matches!(self.forward, ForwardStep::None)
+    }
+
+    /// ... and that substitute chains past a taken Monday.
+    fn chains(self) -> bool {
+        matches!(self.forward, ForwardStep::Chaining)
+    }
+}
 
 /// A holiday calendar: a [`Weekend`] configuration plus a sequence of
 /// [`Rule`]s naming holidays' natural dates.
@@ -54,10 +111,34 @@ impl Calendar<'_> {
     /// weekend. Does not consider weekends.
     ///
     /// Rules name natural dates; a [`WeekendShift`] names only a
-    /// direction. Turning that into a date is the calendar's job,
-    /// because a substitute may not land on a day another holiday has
-    /// already taken — the reason Christmas on a Saturday sends Boxing
-    /// Day's substitute to the Tuesday.
+    /// direction, and turning that into a date is the calendar's job.
+    /// How far the substitute travels is a property of the convention,
+    /// not a universal rule:
+    ///
+    /// - [`WeekendShift::Forward`] (UK / Commonwealth) **chains**: a
+    ///   substitute whose Monday is already taken — by a holiday of the
+    ///   Monday's own, or by the weekend's first substitute — moves on
+    ///   to the Tuesday. Christmas 2021 (a Saturday) takes the Monday
+    ///   and sends Boxing Day's substitute to the Tuesday.
+    /// - [`WeekendShift::SunForward`] and
+    ///   [`WeekendShift::SatBackSunForward`] (Fed / SIFMA and US
+    ///   federal / NYSE) take a **single fixed step** — Sunday to
+    ///   Monday, Saturday to Friday — whether or not another holiday is
+    ///   already there. When it is, the two coincide and a day off is
+    ///   lost; nothing moves on. NYSE's closings record states the rule
+    ///   as exactly one step (Rule 51), and its own history bears it
+    ///   out: Christmas 1954 and 1965 fell on Saturdays with the
+    ///   Friday already closed for Christmas Eve, and the exchange
+    ///   traded on both Thursday Dec 23rds.
+    /// - [`WeekendShift::None`] (France, TARGET): a weekend holiday is
+    ///   simply lost.
+    ///
+    /// A chain is bounded at the Tuesday: a weekend owes at most two
+    /// days off. Conventions that probe deeper — Japan's Public
+    /// Holiday Law Art. 3 sends Golden Week 2026's substitute for
+    /// Sunday May 3 past the May 4 and May 5 holidays to Wednesday
+    /// May 6 — belong in a [`Rule::Custom`] naming the observed days
+    /// outright, as `QuantLib` encodes them.
     ///
     /// ```
     /// use fasti::{Date, Month, calendars};
@@ -67,83 +148,154 @@ impl Calendar<'_> {
     /// assert!(uk.is_holiday(Date::from_ymd(2021, Month::Dec, 25)?));
     /// assert!(uk.is_holiday(Date::from_ymd(2021, Month::Dec, 27)?));
     /// assert!(uk.is_holiday(Date::from_ymd(2021, Month::Dec, 28)?));
+    ///
+    /// // NYSE observed nothing for Saturday Jan 1 2022 — SunForward
+    /// // steps only a Sunday, and never backwards.
+    /// let nyse = calendars::us::NYSE;
+    /// assert!(!nyse.is_holiday(Date::from_ymd(2021, Month::Dec, 31)?));
     /// # Ok::<(), fasti::TimeError>(())
     /// ```
     #[must_use]
     pub fn is_holiday(&self, date: Date) -> bool {
-        self.is_natural_holiday(date) || self.is_substitute(date)
-    }
-
-    /// `true` iff a rule names `date` outright, before any shift.
-    fn is_natural_holiday(&self, date: Date) -> bool {
-        self.rules.iter().any(|r| r.is_holiday(date))
-    }
-
-    /// `true` iff `date` is the substitute day for a weekend holiday.
-    ///
-    /// A weekend owes at most two days off, so there are three places
-    /// one can land — the Monday and Tuesday going forwards, the
-    /// Friday going back — and they are checked rather than searched
-    /// for. `QuantLib` hardcodes the same three across its US, UK and
-    /// Canadian calendars.
-    ///
-    /// The Tuesday is reached whenever the Monday is taken, which a
-    /// holiday of the Monday's own does as readily as the weekend's
-    /// first day off: Christmas on a Sunday lands there while Boxing
-    /// Day keeps the Monday.
-    ///
-    /// A substitute needing the Wednesday is not granted. Japan's
-    /// Golden Week is the one convention that gets there, chaining
-    /// through three consecutive holidays. No [`WeekendShift`] names a
-    /// chain, and one pinned to a single date is data rather than a
-    /// policy: it belongs in a [`Rule::Custom`] naming the observed day
-    /// outright, as `QuantLib` does with `d == 6 && m == May && (w ==
-    /// Monday || w == Tuesday || w == Wednesday)`.
-    fn is_substitute(&self, date: Date) -> bool {
-        let shifts = |r: &Rule| !matches!(r.weekend_shift(), WeekendShift::None);
-        if self.is_weekend(date) || !self.rules.iter().any(shifts) {
+        // Every describable rule names at most one date per year, so
+        // instead of asking each rule "is this date yours?" (three
+        // year/month/day decompositions per rule), derive the year once
+        // and ask each rule "what date do you name this year?" (one
+        // date construction per rule). Only `Rule::Custom` cannot
+        // answer that and keeps being probed per date.
+        if self.rules.is_empty() {
+            // No rules, no holidays — spare the weekends-only and null
+            // calendars the year derivation entirely.
             return false;
         }
-        match date.weekday() {
-            // The Saturday ahead, stepping back.
-            Weekday::Fri => date.add_days(1).is_ok_and(|sat| self.moves(sat, -1)),
-            // The first day off the weekend just gone owes.
-            Weekday::Mon => self.owed_by_weekend(date.add_days(-2)) >= 1,
-            // Only reached when the Monday is taken.
+        let weekday = date.weekday();
+        let on_weekend = self.weekend.contains(weekday);
+
+        // Window of natural-date offsets (relative to `date`) that can
+        // influence the answer: the date itself, plus whatever days the
+        // substitute arm for this weekday reads. A weekend day never
+        // hosts a substitute, so it needs the natural check only.
+        let (lo, hi): (i32, i32) = if on_weekend {
+            (0, 0)
+        } else {
+            match weekday {
+                // The Saturday ahead may step back onto this Friday.
+                Weekday::Fri => (0, 1),
+                // The weekend just gone may step onto this Monday.
+                Weekday::Mon => (-2, 0),
+                // Reads back to the Saturday three days ago.
+                Weekday::Tue => (-3, 0),
+                _ => (0, 0),
+            }
+        };
+
+        let year = date.year();
+        let mut facts = [DayFacts::NONE; 5];
+        let has_custom = self.scan_year(date, year, lo, hi, &mut facts);
+        // The window can straddle a year boundary, and then each rule
+        // names a date on both sides of it — scan the neighbour too. A
+        // natural-only window ({0}) lies in `year` by definition.
+        if lo < 0 || hi > 0 {
+            let day_of_year = i32::from(date.day_of_year());
+            if day_of_year + lo < 1
+                && let Ok(prev) = Year::new(year.get() - 1)
+            {
+                self.scan_year(date, prev, lo, hi, &mut facts);
+            }
+            if day_of_year + hi > i32::from(year.length())
+                && let Ok(next) = Year::new(year.get() + 1)
+            {
+                self.scan_year(date, next, lo, hi, &mut facts);
+            }
+        }
+
+        if facts[3].natural || (has_custom && self.custom_names(date)) {
+            return true;
+        }
+        if on_weekend {
+            return false;
+        }
+        match weekday {
+            // The Saturday ahead, stepping back — one fixed step,
+            // whatever already sits on the Friday.
+            Weekday::Fri => facts[4].steps_back,
+            // A forward step from either weekend day lands here: the
+            // Sunday's single step, or the Saturday's first free
+            // weekday (`Forward` is the only variant that moves a
+            // Saturday forwards).
+            Weekday::Mon => facts[2].steps_forward() || facts[1].steps_forward(),
+            // Only a chaining substitute pushed off a taken Monday
+            // reaches the Tuesday; a single-step substitute finding its
+            // Monday taken coincides with the taker instead.
             Weekday::Tue => {
-                let monday_already_a_holiday = date
-                    .add_days(-1)
-                    .is_ok_and(|mon| self.is_natural_holiday(mon));
-                match self.owed_by_weekend(date.add_days(-3)) {
-                    0 => false,
-                    // Taken by a holiday of its own, so the one day
-                    // owed comes here instead.
-                    1 => monday_already_a_holiday,
-                    // Taken by the first day off; this is the second.
-                    _ => true,
+                let (sat, sun, mon) = (facts[0], facts[1], facts[2]);
+                if !(sat.chains() || sun.chains()) {
+                    return false;
                 }
+                let monday_taken = mon.natural
+                    || (has_custom && date.add_days(-1).is_ok_and(|m| self.custom_names(m)));
+                // The Sunday's substitute is pushed here when the
+                // Monday is a holiday of its own or the Saturday's
+                // substitute took it; the Saturday's only when the
+                // Monday holds a holiday of its own. Nothing is pushed
+                // past the Tuesday: a weekend owes at most two days
+                // off, and the second is never displaced further.
+                (sun.chains() && (monday_taken || sat.steps_forward()))
+                    || (sat.chains() && monday_taken)
             }
             _ => false,
         }
     }
 
-    /// The days off owed by the weekend starting at `saturday`: one for
-    /// each of its two days carrying a holiday that steps forward.
-    fn owed_by_weekend(&self, saturday: Result<Date, TimeError>) -> usize {
-        let Ok(saturday) = saturday else {
-            return 0;
-        };
-        usize::from(self.moves(saturday, 1))
-            + usize::from(saturday.add_days(1).is_ok_and(|sun| self.moves(sun, 1)))
+    /// One pass over the rules for `year`, recording which days of the
+    /// `lo..=hi` window (offsets from `date`, index `offset + 3`) carry
+    /// a natural holiday and which way it steps off a weekend.
+    ///
+    /// `Rule::Custom` expands to nothing here and must be probed via
+    /// [`custom_names`](Self::custom_names) instead; the return value
+    /// says whether the calendar holds one, so callers without any can
+    /// skip those probes.
+    fn scan_year(
+        &self,
+        date: Date,
+        year: Year,
+        lo: i32,
+        hi: i32,
+        facts: &mut [DayFacts; 5],
+    ) -> bool {
+        let mut has_custom = false;
+        for rule in self.rules {
+            let Some(natural) = rule.natural_date_in(year) else {
+                has_custom |= matches!(rule, Rule::Custom(_));
+                continue;
+            };
+            let offset = natural.days_since(date);
+            if offset < lo || offset > hi {
+                continue;
+            }
+            // `offset` is in −3..=1, so `offset + 3` indexes 0..=4.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let facts = &mut facts[(offset + 3) as usize];
+            facts.natural = true;
+            let weekday = natural.weekday();
+            if self.weekend.contains(weekday) {
+                let shift = rule.weekend_shift();
+                match shift.direction(weekday) {
+                    Some(1) => facts.forward = facts.forward.max(ForwardStep::of(shift)),
+                    Some(-1) => facts.steps_back = true,
+                    _ => {}
+                }
+            }
+        }
+        has_custom
     }
 
-    /// `true` iff `day` is a weekend day carrying a holiday that steps
-    /// `step`.
-    fn moves(&self, day: Date, step: i32) -> bool {
-        self.is_weekend(day)
-            && self.rules.iter().any(|r| {
-                r.weekend_shift().direction(day.weekday()) == Some(step) && r.is_holiday(day)
-            })
+    /// `true` iff a [`Rule::Custom`] predicate claims `date`. Cheap for
+    /// the common case: a calendar without one scans discriminants only.
+    fn custom_names(&self, date: Date) -> bool {
+        self.rules
+            .iter()
+            .any(|r| matches!(r, Rule::Custom(f) if f(date)))
     }
 
     /// `true` iff `date` is neither a weekend nor a holiday.
@@ -632,6 +784,268 @@ mod tests {
     }
 
     #[test]
+    fn a_single_step_substitute_does_not_chain_past_a_taken_monday() {
+        // Jul 5 2026 is a Sunday, Jul 6 a Monday holiday of its own.
+        // Under the US conventions the Sunday holiday takes its single
+        // step onto the Monday, coincides with the holiday already
+        // there, and the day off is lost — the Tuesday stays open.
+        // (NYSE's closings record: one fixed step, no notion of "free".)
+        for shift in [WeekendShift::SunForward, WeekendShift::SatBackSunForward] {
+            let blocked = CalendarBuilder::new("Blocked single-step", Weekend::SAT_SUN)
+                .with_rule(Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(shift)))
+                .with_rule(Rule::Fixed(FixedDate::new(Month::Jul, 6)));
+            let cal = blocked.view();
+            assert!(cal.is_holiday(ymd(2026, Month::Jul, 6)), "{shift:?}");
+            assert!(cal.is_business_day(ymd(2026, Month::Jul, 7)), "{shift:?}");
+        }
+        // The same shape under the chaining UK convention reaches the
+        // Tuesday — the difference is the rule's variant, nothing else.
+        let chained = CalendarBuilder::new("Blocked chaining", Weekend::SAT_SUN)
+            .with_rule(Rule::Fixed(
+                FixedDate::new(Month::Jul, 5).shift(WeekendShift::Forward),
+            ))
+            .with_rule(Rule::Fixed(FixedDate::new(Month::Jul, 6)));
+        assert!(chained.view().is_holiday(ymd(2026, Month::Jul, 7)));
+    }
+
+    #[test]
+    fn chaining_is_per_rule_in_a_mixed_calendar() {
+        // Jul 4 2026 Sat with the chaining shift, Jul 5 Sun with the
+        // single-step shift. The Saturday's substitute takes the
+        // Monday; the Sunday's single step lands on the same Monday
+        // and coincides rather than being pushed to the Tuesday.
+        const MIXED: Calendar<'static> = Calendar {
+            name: "Mixed",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::SunForward)),
+            ],
+        };
+        // Swapped variants: the Sunday chains and is pushed past the
+        // Monday the Saturday's single-step... does not exist (no
+        // variant steps a Saturday forward without chaining), so the
+        // Sunday's chain is pushed only by a natural Monday holiday.
+        const SWAPPED: Calendar<'static> = Calendar {
+            name: "Swapped",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Jul, 6)),
+            ],
+        };
+        assert!(MIXED.is_holiday(ymd(2026, Month::Jul, 6)));
+        assert!(MIXED.is_business_day(ymd(2026, Month::Jul, 7)));
+        assert!(SWAPPED.is_holiday(ymd(2026, Month::Jul, 7)));
+    }
+
+    #[test]
+    fn a_saturday_chain_is_pushed_past_a_natural_monday_holiday() {
+        // Jul 4 2026 is a Saturday with the chaining shift, Jul 6 a
+        // Monday holiday of its own, nothing on the Sunday: the
+        // Saturday's substitute alone is pushed to the Tuesday.
+        const CAL: Calendar<'static> = Calendar {
+            name: "Sat chain, Mon natural",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Jul, 6)),
+            ],
+        };
+        assert!(CAL.is_holiday(ymd(2026, Month::Jul, 6)));
+        assert!(CAL.is_holiday(ymd(2026, Month::Jul, 7)));
+        assert!(CAL.is_business_day(ymd(2026, Month::Jul, 8)));
+    }
+
+    #[test]
+    fn a_custom_rule_on_the_monday_pushes_a_chain_like_any_holiday() {
+        // The Monday blocker in the Tuesday decision must see Custom
+        // rules too: every July 6 is claimed by a predicate here.
+        fn july_sixth(d: Date) -> bool {
+            d.month() == Month::Jul && d.day() == 6
+        }
+        const CAL: Calendar<'static> = Calendar {
+            name: "Custom Monday",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::Forward)),
+                Rule::Custom(july_sixth),
+            ],
+        };
+        // Jul 5 2026 (Sun) chains past the Custom-claimed Monday.
+        assert!(CAL.is_holiday(ymd(2026, Month::Jul, 6)));
+        assert!(CAL.is_holiday(ymd(2026, Month::Jul, 7)));
+    }
+
+    #[test]
+    fn two_rules_on_one_day_keep_the_stronger_step() {
+        // A union can put a chaining and a single-step rule on the same
+        // natural date; the day then chains — whichever order the
+        // rules appear in.
+        const CHAIN_FIRST: Calendar<'static> = Calendar {
+            name: "Chain first",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::SunForward)),
+                Rule::Fixed(FixedDate::new(Month::Jul, 6)),
+            ],
+        };
+        const CHAIN_SECOND: Calendar<'static> = Calendar {
+            name: "Chain second",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::SunForward)),
+                Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Jul, 6)),
+            ],
+        };
+        // Jul 5 2026 (Sun) → Monday taken → the chain reaches Tuesday.
+        for cal in [CHAIN_FIRST, CHAIN_SECOND] {
+            assert!(cal.is_holiday(ymd(2026, Month::Jul, 7)), "{}", cal.name);
+        }
+    }
+
+    #[test]
+    fn only_fixed_rules_carry_a_shift() {
+        // A OneOff naming a Saturday outright grants no substitute —
+        // shifts belong to FixedDate rules alone.
+        let cal = CalendarBuilder::new("Weekend one-off", Weekend::SAT_SUN)
+            .with_rule(Rule::OneOff(OneOff::new(ymd(2026, Month::Jul, 4))));
+        assert!(cal.view().is_holiday(ymd(2026, Month::Jul, 4)));
+        assert!(cal.view().is_business_day(ymd(2026, Month::Jul, 3)));
+        assert!(cal.view().is_business_day(ymd(2026, Month::Jul, 6)));
+    }
+
+    #[test]
+    fn conventions_deeper_than_the_supported_chain_use_custom_rules() {
+        // Japan's Public Holiday Law Art. 3 moves a Sunday holiday to
+        // the next day that is not itself a holiday — an unbounded
+        // probe. Golden Week 2026: May 3 is a Sunday, May 4 and May 5
+        // are holidays, so the substitute legally lands Wednesday
+        // May 6. No WeekendShift expresses that (see the NYSE evidence
+        // for why unbounded probing must not be the default); the
+        // supported chain stops at the Tuesday, and the convention is
+        // written as a Custom rule naming the observed day outright —
+        // QuantLib's `d == 6 && m == May && (w == Mon|Tue|Wed)` shape.
+        const NAIVE: Calendar<'static> = Calendar {
+            name: "Golden Week, shifts only",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::May, 3).shift(WeekendShift::SunForward)),
+                Rule::Fixed(FixedDate::new(Month::May, 4)),
+                Rule::Fixed(FixedDate::new(Month::May, 5)),
+            ],
+        };
+        fn constitution_day_observed(d: Date) -> bool {
+            d.month() == Month::May
+                && d.day() == 6
+                && matches!(d.weekday(), Weekday::Mon | Weekday::Tue | Weekday::Wed)
+        }
+        const WITH_CUSTOM: Calendar<'static> = Calendar {
+            name: "Golden Week",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::May, 3)),
+                Rule::Fixed(FixedDate::new(Month::May, 4)),
+                Rule::Fixed(FixedDate::new(Month::May, 5)),
+                Rule::Custom(constitution_day_observed),
+            ],
+        };
+        // The documented limit: shifts alone do not reach the Wednesday.
+        assert!(!NAIVE.is_holiday(ymd(2026, Month::May, 6)));
+        // The documented vehicle does.
+        assert!(WITH_CUSTOM.is_holiday(ymd(2026, Month::May, 6)));
+        assert!(WITH_CUSTOM.is_business_day(ymd(2026, Month::May, 7)));
+    }
+
+    // ---- range edges -----------------------------------------------------
+    //
+    // `Date::MIN` and `Date::MAX` are both Tuesdays, and a Tuesday's
+    // substitute decision reads three days back — past the start of the
+    // supported range at one end.
+
+    #[test]
+    fn min_is_a_tuesday_whose_window_leaves_the_range() {
+        // Dec 30 1900 was a Sunday; were it representable, this rule
+        // would owe a chained substitute on Tuesday Jan 1 1901. It is
+        // not, so the calendar must answer false — not panic, not
+        // misread another year's Dec 30.
+        const OWES_AT_MIN: Calendar<'static> = Calendar {
+            name: "Owes at MIN",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Dec, 30).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Dec, 31).shift(WeekendShift::Forward)),
+            ],
+        };
+        assert_eq!(Date::MIN.weekday(), Weekday::Tue);
+        assert!(!OWES_AT_MIN.is_holiday(Date::MIN));
+        // And one that owes nothing at all.
+        assert!(!crate::calendars::WEEKENDS_ONLY.is_holiday(Date::MIN));
+        assert!(crate::calendars::WEEKENDS_ONLY.is_business_day(Date::MIN));
+    }
+
+    #[test]
+    fn max_is_a_tuesday_that_can_be_owed_a_chained_substitute() {
+        // Dec 28 2199 is a Saturday, Dec 29 a Sunday, both in range:
+        // the weekend owes two days off and the second is Date::MAX.
+        const OWES_AT_MAX: Calendar<'static> = Calendar {
+            name: "Owes at MAX",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Dec, 28).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Dec, 29).shift(WeekendShift::Forward)),
+            ],
+        };
+        // A Friday probe toward the Saturday past Date::MAX must not
+        // fail either: Dec 31 2199 is the last day there is.
+        const SAT_BACK: Calendar<'static> = Calendar {
+            name: "SatBack at MAX",
+            weekend: Weekend::SAT_SUN,
+            rules: &[Rule::Fixed(
+                FixedDate::new(Month::Jan, 1).shift(WeekendShift::SatBackSunForward),
+            )],
+        };
+        assert_eq!(Date::MAX.weekday(), Weekday::Tue);
+        assert!(OWES_AT_MAX.is_holiday(Date::from_ymd(2199, Month::Dec, 30).unwrap()));
+        assert!(OWES_AT_MAX.is_holiday(Date::MAX));
+        // Fri Dec 27 2199: Sat Dec 28 is no one's holiday; false.
+        assert!(!SAT_BACK.is_holiday(Date::from_ymd(2199, Month::Dec, 27).unwrap()));
+        assert!(!SAT_BACK.is_holiday(Date::MAX));
+    }
+
+    #[test]
+    fn shifts_only_move_days_this_calendar_calls_a_weekend() {
+        // Under a Fri/Sat weekend, a Saturday holiday stepping back
+        // lands on the weekend Friday — a substitute never lands on a
+        // weekend day, so the day off is lost (not pushed to Thursday).
+        const FRI_SAT_BACK: Calendar<'static> = Calendar {
+            name: "FriSat SatBack",
+            weekend: Weekend::FRI_SAT,
+            rules: &[Rule::Fixed(
+                FixedDate::new(Month::Jul, 4).shift(WeekendShift::SatBackSunForward),
+            )],
+        };
+        // A Sunday holiday is not on this weekend at all: it keeps its
+        // natural date (an ordinary business day here) and no
+        // substitute is granted.
+        const FRI_SAT_SUN: Calendar<'static> = Calendar {
+            name: "FriSat SunForward",
+            weekend: Weekend::FRI_SAT,
+            rules: &[Rule::Fixed(
+                FixedDate::new(Month::Jul, 5).shift(WeekendShift::SunForward),
+            )],
+        };
+        // Jul 4 2026 is a Saturday; Jul 2 Thu / Jul 3 Fri.
+        assert!(FRI_SAT_BACK.is_business_day(ymd(2026, Month::Jul, 2)));
+        assert!(!FRI_SAT_BACK.is_holiday(ymd(2026, Month::Jul, 3)));
+        // Jul 5 2026 is a Sunday.
+        assert!(FRI_SAT_SUN.is_holiday(ymd(2026, Month::Jul, 5)));
+        assert!(FRI_SAT_SUN.is_business_day(ymd(2026, Month::Jul, 6)));
+    }
+
+    #[test]
     fn a_substitute_may_cross_a_year_boundary() {
         const NEW_YEAR: Calendar<'static> = Calendar {
             name: "New Year",
@@ -642,6 +1056,37 @@ mod tests {
         };
         // Jan 1 2022 was a Saturday → observed Friday Dec 31 2021.
         assert!(NEW_YEAR.is_holiday(ymd(2021, Month::Dec, 31)));
+    }
+
+    #[test]
+    fn a_forward_substitute_may_cross_into_the_next_year() {
+        // The mirror image: the natural date lies in the year before
+        // its substitute. Dec 31 2023 was a Sunday → observed Monday
+        // Jan 1 2024.
+        const NYE: Calendar<'static> = Calendar {
+            name: "New Year's Eve",
+            weekend: Weekend::SAT_SUN,
+            rules: &[Rule::Fixed(
+                FixedDate::new(Month::Dec, 31).shift(WeekendShift::Forward),
+            )],
+        };
+        // A chained pair straddling the boundary: Sat Dec 31 2022
+        // takes Monday Jan 2, pushing Sun Jan 1's substitute to
+        // Tuesday Jan 3 — the Tuesday decision reads into both years.
+        const NYE_AND_NY: Calendar<'static> = Calendar {
+            name: "New Year's Eve + New Year",
+            weekend: Weekend::SAT_SUN,
+            rules: &[
+                Rule::Fixed(FixedDate::new(Month::Dec, 31).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::Forward)),
+            ],
+        };
+        assert!(NYE.is_holiday(ymd(2024, Month::Jan, 1)));
+        // Dec 31 2022 was a Saturday → observed Monday Jan 2 2023.
+        assert!(NYE.is_holiday(ymd(2023, Month::Jan, 2)));
+        assert!(NYE_AND_NY.is_holiday(ymd(2023, Month::Jan, 2)));
+        assert!(NYE_AND_NY.is_holiday(ymd(2023, Month::Jan, 3)));
+        assert!(NYE_AND_NY.is_business_day(ymd(2023, Month::Jan, 4)));
     }
 
     proptest! {

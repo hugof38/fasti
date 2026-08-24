@@ -96,6 +96,26 @@ impl NthWeekday {
         let occurrence = (date.day() - 1) / 7 + 1;
         occurrence == self.n.get()
     }
+
+    /// The natural date this rule names in `year`: the Nth occurrence
+    /// of the weekday in the month, or [`None`] when the year is
+    /// inactive or a fifth occurrence does not exist.
+    // Widening u8 -> i32 casts; `as` because `From` is not const.
+    #[allow(clippy::cast_lossless)]
+    pub(crate) const fn natural_date_in(self, year: Year) -> Option<Date> {
+        if !self.years.contains(year) {
+            return None;
+        }
+        let Ok(first) = Date::from_ymd(year.get(), self.month, 1) else {
+            return None;
+        };
+        let to_first = (self.weekday.get() as i32 - first.weekday().get() as i32).rem_euclid(7);
+        let day_of_month = 1 + to_first + 7 * (self.n.get() as i32 - 1);
+        if day_of_month > self.month.length(year) as i32 {
+            return None;
+        }
+        super::date_ok(first.add_days(day_of_month - 1))
+    }
 }
 
 #[cfg(test)]

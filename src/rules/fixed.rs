@@ -7,16 +7,35 @@ use crate::{Date, Month, Weekday, Year, YearRange};
 /// Which way a fixed-date holiday moves when its natural date falls on
 /// a Saturday or Sunday.
 ///
-/// There is one rule for every variant: the holiday is observed on the
-/// **first free weekday in that direction** — free meaning no other
-/// holiday and no other holiday's substitute is already there. The
-/// variants differ only in which weekend day moves, and which way.
-/// A weekend is two days, and two rules naming one day are still one
-/// holiday, so at most two substitutes ever queue.
+/// The variants differ in which weekend day moves, which way — and in
+/// what happens when the target day is already taken, because that is
+/// a property of each jurisdiction's convention, not a universal rule:
 ///
-/// Only [`Calendar`](crate::Calendar) can apply that rule, since only
-/// it can see what the other rules have taken; see
-/// [`Calendar::is_holiday`](crate::Calendar::is_holiday).
+/// - [`Forward`](Self::Forward) **chains**: the substitute lands on
+///   the first weekday no other holiday (or substitute) has taken.
+///   The UK convention — Christmas on a Saturday takes the Monday and
+///   sends Boxing Day's substitute past it to the Tuesday, as the
+///   published 2021 bank holidays show.
+/// - [`SunForward`](Self::SunForward) and
+///   [`SatBackSunForward`](Self::SatBackSunForward) take a **single
+///   fixed step**. If another holiday already sits on the target day,
+///   the two coincide (one day off, not two) and nothing moves on.
+///   That is the stated NYSE rule — one step, no notion of "free"
+///   (NYSE Rule 51, per the exchange's own closings record) — and the
+///   Fed/SIFMA and US federal practice.
+///
+/// A weekend is two days, and two rules naming one day are still one
+/// holiday, so at most two substitutes ever queue; the chain is
+/// bounded at the Tuesday. Conventions that probe deeper — Japan's
+/// Public Holiday Law Art. 3 moves a Sunday holiday past *any* run of
+/// holidays, landing Golden Week 2026's substitute on the Wednesday —
+/// are data about a specific holiday cluster, not a weekend-shift
+/// policy, and belong in a [`Rule::Custom`](crate::Rule::Custom)
+/// naming the observed days outright.
+///
+/// Only [`Calendar`](crate::Calendar) can resolve a chaining
+/// substitute, since only it can see what the other rules have taken;
+/// see [`Calendar::is_holiday`](crate::Calendar::is_holiday).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum WeekendShift {
@@ -24,17 +43,25 @@ pub enum WeekendShift {
     /// TARGET.
     #[default]
     None,
-    /// Both days move forwards — the UK and Commonwealth substitute day.
+    /// Both days move forwards, chaining past taken days — the UK and
+    /// Commonwealth substitute day.
     Forward,
-    /// Sunday moves forwards, Saturday does not — the Fed and SIFMA
-    /// convention.
+    /// Sunday moves forwards one step, Saturday does not — the Fed and
+    /// SIFMA convention.
     SunForward,
-    /// Saturday moves backwards, Sunday forwards — the US federal
-    /// convention.
+    /// Saturday moves backwards one step, Sunday forwards one step —
+    /// the US federal convention.
     SatBackSunForward,
 }
 
 impl WeekendShift {
+    /// `true` iff this variant's substitute chains past a taken day
+    /// rather than taking a single fixed step — the semantic split
+    /// documented above, kept next to the variants it classifies.
+    pub(crate) const fn chains(self) -> bool {
+        matches!(self, Self::Forward)
+    }
+
     /// Which way a holiday falling on `day` steps, if it steps at all —
     /// the whole table, and the only thing the variants differ by.
     pub(crate) fn direction(self, day: Weekday) -> Option<i32> {
@@ -138,6 +165,16 @@ impl FixedDate {
     #[must_use]
     pub fn is_holiday(&self, date: Date) -> bool {
         self.years.contains(date.year()) && date.month() == self.month && date.day() == self.day
+    }
+
+    /// The natural date this rule names in `year`: its month/day when
+    /// the year is active, [`None`] otherwise (a Feb 29 rule names
+    /// nothing in a non-leap year).
+    pub(crate) const fn natural_date_in(self, year: Year) -> Option<Date> {
+        if !self.years.contains(year) {
+            return None;
+        }
+        super::date_ok(Date::from_ymd(year.get(), self.month, self.day))
     }
 }
 
