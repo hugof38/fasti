@@ -152,6 +152,13 @@ convention. `"federal"` is a spelling of nothing: the US federal
 convention is `SAT_BACK_SUN_FORWARD`, and one word standing for two
 different answers would be a trap.
 
+The string spelling is parsed on every call, so in a loop that runs
+millions of times it is worth passing the member instead — measured on
+a CI runner, `advance` costs 904 ns with `"modifiedfollowing"` and
+520 ns with `BusinessDayConvention.MODIFIED_FOLLOWING`.
+`benches/compare.py` re-measures this, and everything else claimed
+about speed here, on your own machine.
+
 ## Equality and pickling
 
 `Calendar` and `Rule` compare **structurally** — two values are equal
