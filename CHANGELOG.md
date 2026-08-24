@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged for every date in 1901..=2199.
 - `Date::year` derives the year arithmetically instead of binary
   searching the cumulative-days table.
+- `FixedDate::is_holiday`, `NthWeekday::is_holiday`,
+  `LastWeekday::is_holiday` and `EasterOffset::is_holiday` are now
+  `const fn`, and each is defined as `natural_date(date.year()) ==
+  Some(date)` rather than testing the date's components, so a rule
+  describes its dates in one place. Answers are unchanged.
 
 ## [0.1.0] - 2026-08-21
 

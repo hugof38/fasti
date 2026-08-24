@@ -137,24 +137,11 @@ impl EasterOffset {
     /// Only `date.year()` is checked; offsets extreme enough to cross a
     /// year boundary need [`Rule::Custom`](super::Rule::Custom).
     #[must_use]
-    pub fn is_holiday(&self, date: Date) -> bool {
-        let year = date.year();
-        if !self.years.contains(year) {
-            return false;
+    pub const fn is_holiday(&self, date: Date) -> bool {
+        match self.natural_date(date.year()) {
+            Some(named) => named.serial() == date.serial(),
+            None => false,
         }
-        // Lookup returns Easter Monday; offsets are Sunday-relative.
-        let em_doy = easter_monday(year, self.method);
-        let Ok(jan1) = Date::from_ymd(year.get(), Month::Jan, 1) else {
-            return false;
-        };
-        // em_doy − 2 = zero-based offset of Easter Sunday from Jan 1.
-        let Ok(easter_sun) = jan1.add_days(i32::from(em_doy) - 2) else {
-            return false;
-        };
-        let Ok(observed) = easter_sun.add_days(i32::from(self.days)) else {
-            return false;
-        };
-        observed == date
     }
 
     /// The one date this rule names in `year`, or [`None`] if the rule is

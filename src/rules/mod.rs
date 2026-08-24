@@ -137,8 +137,6 @@ impl Rule {
 mod tests {
     extern crate alloc;
 
-    use proptest::prelude::*;
-
     use super::*;
     use crate::{Month, Ordinal, Weekday, Year};
 
@@ -233,26 +231,6 @@ mod tests {
                 matches!(rule.natural_date(year), Occurrence::Opaque),
                 "{year}"
             );
-        }
-    }
-
-    proptest! {
-        /// `natural_date` and `is_holiday` are duals: a rule marks a
-        /// date iff that is the date it names in the date's year.
-        #[test]
-        fn natural_date_and_is_holiday_agree(serial in 0u32..=Date::MAX.serial()) {
-            let date = Date::from_serial(serial).unwrap();
-            for rule in built_in_rules() {
-                if matches!(rule.natural_date(date.year()), Occurrence::Opaque) {
-                    continue;
-                }
-                prop_assert_eq!(
-                    rule.is_holiday(date),
-                    rule.natural_date(date.year()) == Occurrence::On(date),
-                    "{}",
-                    date,
-                );
-            }
         }
     }
 

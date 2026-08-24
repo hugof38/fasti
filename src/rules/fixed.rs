@@ -136,8 +136,11 @@ impl FixedDate {
 
     /// `true` iff `date` is this holiday's natural date.
     #[must_use]
-    pub fn is_holiday(&self, date: Date) -> bool {
-        self.years.contains(date.year()) && date.month() == self.month && date.day() == self.day
+    pub const fn is_holiday(&self, date: Date) -> bool {
+        match self.natural_date(date.year()) {
+            Some(named) => named.serial() == date.serial(),
+            None => false,
+        }
     }
 
     /// The one date this rule names in `year`, or [`None`] if the rule

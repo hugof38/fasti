@@ -70,20 +70,10 @@ impl LastWeekday {
     /// `true` iff `date` is the last occurrence of this weekday in its
     /// month (and the month / year match the rule).
     #[must_use]
-    pub fn is_holiday(&self, date: Date) -> bool {
-        if !self.years.contains(date.year()) {
-            return false;
-        }
-        if date.month() as u8 != self.month as u8 {
-            return false;
-        }
-        if date.weekday() as u8 != self.weekday as u8 {
-            return false;
-        }
-        // Last occurrence iff stepping forward 7 days leaves the month.
-        match date.add_days(7) {
-            Ok(next) => next.month() as u8 != self.month as u8,
-            Err(_) => true,
+    pub const fn is_holiday(&self, date: Date) -> bool {
+        match self.natural_date(date.year()) {
+            Some(named) => named.serial() == date.serial(),
+            None => false,
         }
     }
 

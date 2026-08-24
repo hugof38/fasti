@@ -82,19 +82,11 @@ impl NthWeekday {
     /// `true` iff `date` is the Nth occurrence of this weekday in this
     /// month of its year.
     #[must_use]
-    pub fn is_holiday(&self, date: Date) -> bool {
-        if !self.years.contains(date.year()) {
-            return false;
+    pub const fn is_holiday(&self, date: Date) -> bool {
+        match self.natural_date(date.year()) {
+            Some(named) => named.serial() == date.serial(),
+            None => false,
         }
-        if date.month() as u8 != self.month as u8 {
-            return false;
-        }
-        if date.weekday() as u8 != self.weekday as u8 {
-            return false;
-        }
-        // Day-of-month d → occurrence (d − 1) / 7 + 1.
-        let occurrence = (date.day() - 1) / 7 + 1;
-        occurrence == self.n.get()
     }
 
     /// The one date this rule names in `year`, or [`None`] if the rule

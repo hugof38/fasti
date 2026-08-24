@@ -33,7 +33,10 @@ impl OneOff {
     /// `true` iff `date` equals the rule's observed date.
     #[must_use]
     pub const fn is_holiday(&self, date: Date) -> bool {
-        self.date.serial() == date.serial()
+        match self.natural_date(date.year()) {
+            Some(named) => named.serial() == date.serial(),
+            None => false,
+        }
     }
 
     /// The rule's date if it falls in `year`, else [`None`].
