@@ -12,12 +12,9 @@ the crate. `fasti` on PyPI is an unrelated FastAPI project manager, and
 `fasti-py` is refused as too similar to it — PyPI strips a `py` affix
 before comparing names.
 
-That project also installs its own top-level `fasti` package, so having
-both in one environment would leave whichever was installed second. It
-has published two `0.0.0.dev` releases and nothing since, and matching
-the crate name is worth more here than insuring against a collision with
-a placeholder — but if you need both, install them in separate
-environments.
+That project also installs its own top-level `fasti` package, so an
+environment holding both keeps whichever was installed second. If you
+need both, install them in separate environments.
 
 ```console
 $ pip install fasti-dates
