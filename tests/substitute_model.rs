@@ -63,9 +63,14 @@ fn reference(cal: &Calendar<'_>, lo: Date, hi: Date) -> BTreeSet<Date> {
         }
     }
     // Walk every ISO Saturday whose weekend can spill into the range.
+    // Both ends need slack, and for opposite reasons: a weekend before
+    // `lo` moves holidays forward into it, and a Saturday after `hi`
+    // moves one back onto it under `SatBackSunForward`. Missing the
+    // upper spill is a false negative exactly on `hi`.
     let spill = Date::from_serial(lo.serial().saturating_sub(7)).unwrap();
+    let last = hi.add_days(7).unwrap_or(Date::MAX);
     let mut sat = spill.next_weekday(Weekday::Sat).unwrap();
-    while sat.serial() <= hi.serial() {
+    while sat.serial() <= last.serial() {
         let sun = sat.add_days(1).unwrap();
 
         // Backward: a single fixed step from the Saturday.

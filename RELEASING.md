@@ -103,7 +103,14 @@ The Python release path has never executed: `release-python.yml` only
 reaches `main` with the bindings themselves, so nothing in it has run
 beyond YAML parsing. The parts most likely to break are the ones CI
 never exercises — 3.14t wheels inside a manylinux container, aarch64
-under QEMU, and the macOS x86\_64 runner.
+under QEMU, and the macOS wheels.
+
+The `py-v0.2.0` release found one of those: `macos-13` had been retired,
+so both jobs asking for it queued for a runner that no longer exists and
+never failed, they just never started. macOS x86\_64 is cross-compiled
+from the Arm runner now. A job that sits in *Waiting for a runner* while
+its siblings finish is that shape of problem — a dead label, not a slow
+queue.
 
 Run it manually first, from Actions → *Release (Python)* → *Run
 workflow*, on `main`. `verify` and `publish` are gated on the ref being
