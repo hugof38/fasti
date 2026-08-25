@@ -118,7 +118,7 @@ def test_every_public_name_is_documented() -> None:
 def test_the_version_is_the_one_in_the_manifest() -> None:
     from importlib.metadata import version
 
-    assert fasti.__version__ == version("fasti-py")
+    assert fasti.__version__ == version("fasti-dates")
     manifest = pathlib.Path(__file__).parents[1] / "Cargo.toml"
     if not manifest.exists():  # pragma: no cover - only in a trimmed sdist
         return

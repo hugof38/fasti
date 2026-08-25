@@ -1,7 +1,7 @@
 # Releasing
 
 Two artifacts, two tag patterns, one version number. The crate goes to
-crates.io on `v*`; `fasti-py` goes to PyPI on `py-v*`. The patterns do
+crates.io on `v*`; `fasti-dates` goes to PyPI on `py-v*`. The patterns do
 not overlap — `py-v0.2.0` does not match `v*` — so tagging one never
 fires the other, and each workflow refuses to publish if its tag
 disagrees with its own manifest.
@@ -11,7 +11,7 @@ reported version identifies the same code whichever side of the boundary
 it was seen from, which is worth more than the freedom to let them
 drift.
 
-| | crate | `fasti-py` |
+| | crate | `fasti-dates` |
 |---|---|---|
 | tag | `v0.2.0` | `py-v0.2.0` |
 | workflow | `release.yml` | `release-python.yml` |
@@ -23,14 +23,16 @@ drift.
 
 Both are one-time and both live outside the repository.
 
-1. **A pending publisher on PyPI.** `fasti-py` does not exist there yet,
-   and trusted publishing normally attaches to a project that does, so
-   the first release needs PyPI → *Your projects* → *Publishing* → *Add
-   a pending publisher*:
+1. **A pending publisher on PyPI.** `fasti-dates` does not exist there
+   yet, and trusted publishing normally attaches to a project that does,
+   so the first release needs PyPI → *Your projects* → *Publishing* →
+   *Add a pending publisher*. The name is not `fasti-py`: PyPI strips a
+   `py` affix before comparing names, so that one collides with the
+   unrelated `fasti` already on the index and is refused.
 
    | field | value |
    |---|---|
-   | PyPI Project Name | `fasti-py` |
+   | PyPI Project Name | `fasti-dates` |
    | Owner | `hugof38` |
    | Repository name | `fasti` |
    | Workflow name | `release-python.yml` |
@@ -88,7 +90,7 @@ merged.
 
    ```bash
    cargo add fasti@0.2.0 --dry-run
-   python -m venv /tmp/v && /tmp/v/bin/pip install fasti-py==0.2.0
+   python -m venv /tmp/v && /tmp/v/bin/pip install fasti-dates==0.2.0
    /tmp/v/bin/python -c "import fasti; print(fasti.__version__)"
    ```
 

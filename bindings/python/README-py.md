@@ -1,17 +1,26 @@
-# fasti-py
+# fasti-dates
 
-[![PyPI](https://img.shields.io/pypi/v/fasti-py.svg)](https://pypi.org/project/fasti-py/)
+[![PyPI](https://img.shields.io/pypi/v/fasti-dates.svg)](https://pypi.org/project/fasti-dates/)
 
 Python bindings for [fasti](https://github.com/hugof38/fasti) — dates,
 calendars, business-day conventions and day-count fractions for
 financial code, in native Rust with no floating-point arithmetic
 anywhere.
 
-The distribution is `fasti-py` because `fasti` on PyPI is an unrelated
-project. The import name is `fasti`.
+The distribution is `fasti-dates`; the import name is `fasti`, matching
+the crate. `fasti` on PyPI is an unrelated FastAPI project manager, and
+`fasti-py` is refused as too similar to it — PyPI strips a `py` affix
+before comparing names.
+
+That project also installs its own top-level `fasti` package, so having
+both in one environment would leave whichever was installed second. It
+has published two `0.0.0.dev` releases and nothing since, and matching
+the crate name is worth more here than insuring against a collision with
+a placeholder — but if you need both, install them in separate
+environments.
 
 ```console
-$ pip install fasti-py
+$ pip install fasti-dates
 ```
 
 Wheels are `abi3` from CPython 3.10 up, so one wheel per platform covers

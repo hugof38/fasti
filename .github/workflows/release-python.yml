@@ -1,6 +1,6 @@
 name: Release (Python)
 
-# Publishes fasti-py to PyPI when a py-v* tag is pushed. The crate's own
+# Publishes fasti-dates to PyPI when a py-v* tag is pushed. The crate's own
 # release train is v*, and the two patterns do not overlap: py-v0.2.0 is
 # not matched by v*. The tag is the trigger, but the version of record is
 # the one in bindings/python/Cargo.toml.

@@ -56,11 +56,12 @@ same capability surface with:
 ## Python
 
 The bindings live in [`bindings/python`](./bindings/python) and ship as
-`fasti-py` on PyPI (`fasti` was taken by an unrelated project); the
-import name is `fasti`.
+`fasti-dates` on PyPI; the import name is `fasti`, matching the crate.
+(`fasti` itself is an unrelated project there, and PyPI refuses
+`fasti-py` as too similar to it.)
 
 ```console
-$ pip install fasti-py
+$ pip install fasti-dates
 ```
 
 ```python

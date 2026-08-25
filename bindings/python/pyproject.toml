@@ -3,7 +3,7 @@ requires = ["maturin>=1.9,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "fasti-py"
+name = "fasti-dates"
 description = "Dates, calendars, business-day conventions and day-count fractions for financial code. Python bindings for the fasti Rust crate."
 readme = "README-py.md"
 requires-python = ">=3.10"
@@ -46,7 +46,7 @@ dynamic = ["version"]
 [project.urls]
 Repository = "https://github.com/hugof38/fasti"
 Documentation = "https://github.com/hugof38/fasti/blob/main/bindings/python/README-py.md"
-# The repository changelog: fasti-py has no separate one yet, and the
+# The repository changelog: fasti-dates has no separate one yet, and the
 # binding's entries live there under the version that carried them.
 Changelog = "https://github.com/hugof38/fasti/blob/main/CHANGELOG.md"
 Issues = "https://github.com/hugof38/fasti/issues"

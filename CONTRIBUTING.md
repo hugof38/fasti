@@ -78,7 +78,7 @@ design constraints. The short version:
 
 ## Python bindings
 
-`bindings/python` holds the `fasti-py` distribution (import name
+`bindings/python` holds the `fasti-dates` distribution (import name
 `fasti`). It is **its own cargo workspace with its own `Cargo.lock`**, so
 pyo3 never reaches the core crate's MSRV job, lockfile or `cargo deny`
 run; the root manifest excludes it from the packaged `.crate`. Working
@@ -121,7 +121,7 @@ Two independent trains, whose tag patterns do not overlap:
 | Tag | Workflow | Publishes | Version of record |
 |---|---|---|---|
 | `v*` | `release.yml` | the crate, to crates.io | `Cargo.toml` |
-| `py-v*` | `release-python.yml` | `fasti-py`, to PyPI | `bindings/python/Cargo.toml` |
+| `py-v*` | `release-python.yml` | `fasti-dates`, to PyPI | `bindings/python/Cargo.toml` |
 
 Both carry the same version number, so a bug report naming one
 identifies the same code on either side of the boundary. The full

@@ -287,6 +287,6 @@ jobs:
           tar xzf bindings/python/dist/*.tar.gz -C "$RUNNER_TEMP/from-sdist"
           python -m venv "$RUNNER_TEMP/venv"
           "$RUNNER_TEMP/venv/bin/pip" install pytest
-          "$RUNNER_TEMP/venv/bin/pip" install --no-binary fasti-py bindings/python/dist/*.tar.gz
-          cd "$RUNNER_TEMP/from-sdist"/fasti_py-*
+          "$RUNNER_TEMP/venv/bin/pip" install --no-binary fasti-dates bindings/python/dist/*.tar.gz
+          cd "$RUNNER_TEMP/from-sdist"/fasti_dates-*
           "$RUNNER_TEMP/venv/bin/pytest" bindings/python/tests
