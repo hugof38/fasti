@@ -1,0 +1,22 @@
+[package]
+name = "fasti-dates"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[workspace]
+
+[lib]
+name = "_fasti"
+crate-type = ["cdylib"]
+
+# The shipped wheel carries no debug information: it is 300 KB of a 1.1 MB
+# extension, and a release wheel is not where anyone debugs.
+[profile.release]
+strip = true
+
+[dependencies]
+fasti = { path = "../.." }
+pyo3 = { version = "0.29", features = ["abi3-py310", "extension-module"] }

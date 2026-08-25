@@ -1,0 +1,185 @@
+name: Release (Python)
+
+# Publishes fasti-dates to PyPI when a py-v* tag is pushed. The crate's own
+# release train is v*, and the two patterns do not overlap: py-v0.2.0 is
+# not matched by v*. The tag is the trigger, but the version of record is
+# the one in bindings/python/Cargo.toml.
+# workflow_dispatch runs everything except the upload, so the fifteen
+# artifacts can be proven to build before a tag commits to a version
+# number that PyPI will never release back.
+on:
+  push:
+    tags: ["py-v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  verify:
+    name: verify tag
+    # Nothing to verify on a manual run: there is no tag to disagree
+    # with the manifest, and skipping this skips publish with it.
+    if: startsWith(github.ref, 'refs/tags/py-v')
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - id: check
+        working-directory: bindings/python
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#py-v}"
+          manifest=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::tag py-v$tag does not match Cargo.toml version $manifest"
+            exit 1
+          fi
+          echo "version=$manifest" >> "$GITHUB_OUTPUT"
+
+  gates:
+    name: gates
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bindings/python
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: pip install . pytest mypy
+      - run: pytest
+      - run: mypy
+
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+          working-directory: bindings/python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-sdist
+          path: bindings/python/dist/*.tar.gz
+
+  # One abi3 wheel per platform covers CPython 3.10 and up.
+  wheels:
+    name: wheel (${{ matrix.target }} ${{ matrix.manylinux || matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, target: x86_64, manylinux: auto }
+          - { runner: ubuntu-latest, target: aarch64, manylinux: auto }
+          - { runner: ubuntu-latest, target: x86_64, manylinux: musllinux_1_2 }
+          - { runner: ubuntu-latest, target: aarch64, manylinux: musllinux_1_2 }
+          - { runner: macos-13, target: x86_64 }
+          - { runner: macos-14, target: aarch64 }
+          - { runner: windows-latest, target: x64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --locked --out dist
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          working-directory: bindings/python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-abi3-${{ matrix.target }}-${{ matrix.manylinux || matrix.runner }}
+          path: bindings/python/dist/*.whl
+
+  # abi3 is a no-op on a free-threaded interpreter, so 3.14t needs a
+  # wheel of its own on every platform.
+  wheels-free-threaded:
+    name: wheel 3.14t (${{ matrix.target }} ${{ matrix.manylinux || matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, target: x86_64, manylinux: auto }
+          - { runner: ubuntu-latest, target: aarch64, manylinux: auto }
+          - { runner: ubuntu-latest, target: x86_64, manylinux: musllinux_1_2 }
+          - { runner: ubuntu-latest, target: aarch64, manylinux: musllinux_1_2 }
+          - { runner: macos-13, target: x86_64 }
+          - { runner: macos-14, target: aarch64 }
+          - { runner: windows-latest, target: x64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14t"
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --locked --out dist --interpreter 3.14t
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          working-directory: bindings/python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-ft-${{ matrix.target }}-${{ matrix.manylinux || matrix.runner }}
+          path: bindings/python/dist/*.whl
+
+  audit:
+    name: audit artifacts
+    needs: [sdist, wheels, wheels-free-threaded]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+      - run: pip install abi3audit twine
+      - run: twine check --strict dist/*
+      # Only the abi3 wheels claim the stable ABI; the 3.14t ones are
+      # version-specific and abi3audit is not asked about them.
+      - name: Every abi3 wheel keeps to the stable ABI
+        run: |
+          set -euo pipefail
+          ls dist/
+          for wheel in dist/*abi3*.whl; do
+            abi3audit --strict "$wheel"
+          done
+
+  publish:
+    name: publish to PyPI
+    needs: [verify, gates, audit]
+    # Belt and braces: verify is already tag-gated, and a skipped
+    # dependency skips this job, but an upload is worth saying twice.
+    if: startsWith(github.ref, 'refs/tags/py-v')
+    runs-on: ubuntu-latest
+    # Trusted publishing: PyPI mints a short-lived token from this
+    # workflow's OIDC identity, so there is no stored secret. The
+    # environment carries the protection rules.
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1

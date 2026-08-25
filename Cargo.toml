@@ -1,7 +1,7 @@
 [package]
 name = "fasti"
 description = "Dates, calendars, business-day conventions and day-count fractions for financial code. Native Rust, no_std, float-free; designed after QuantLib's ql/time."
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.90"
 license = "Apache-2.0 OR MIT"
@@ -9,6 +9,10 @@ repository = "https://github.com/hugof38/fasti"
 readme = "README.md"
 keywords = ["date", "calendar", "business-day", "day-count", "no-std"]
 categories = ["date-and-time", "finance", "no-std"]
+# The Python bindings are their own cargo workspace with their own
+# lockfile, so pyo3 never reaches this crate's MSRV job, lockfile or
+# cargo-deny run — and never ships inside the .crate either.
+exclude = ["/bindings"]
 authors = ["fasti contributors"]
 
 [features]

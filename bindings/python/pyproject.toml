@@ -1,0 +1,73 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "fasti-dates"
+description = "Dates, calendars, business-day conventions and day-count fractions for financial code. Python bindings for the fasti Rust crate."
+readme = "README-py.md"
+requires-python = ">=3.10"
+license = "Apache-2.0 OR MIT"
+# maturin refuses ".." in a license glob, and a copy at this directory's
+# root would collide with the repository's own in the sdist.
+license-files = [
+    "licenses/LICENSE-APACHE",
+    "licenses/LICENSE-MIT",
+    # The compiled crate carries QuantLib-derived tables; the notice
+    # travels with the binary, as it does in the .crate.
+    "licenses/THIRD-PARTY-NOTICES",
+]
+authors = [{ name = "fasti contributors" }]
+keywords = ["date", "calendar", "business-day", "day-count", "finance"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    # abi3 is a CPython ABI; PyPy cannot load these wheels.
+    "Programming Language :: Python :: Implementation :: CPython",
+    # Beta rather than stable: the free-threaded build is exercised by the
+    # suite on every change, but the package as a whole is still 0.1.
+    "Programming Language :: Python :: Free Threading :: 2 - Beta",
+    "Programming Language :: Rust",
+    "Topic :: Office/Business :: Financial",
+    "Typing :: Typed",
+]
+# The version of record is the one in Cargo.toml.
+dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/hugof38/fasti"
+Documentation = "https://github.com/hugof38/fasti/blob/main/bindings/python/README-py.md"
+# The repository changelog: fasti-dates has no separate one yet, and the
+# binding's entries live there under the version that carried them.
+Changelog = "https://github.com/hugof38/fasti/blob/main/CHANGELOG.md"
+Issues = "https://github.com/hugof38/fasti/issues"
+
+[dependency-groups]
+dev = ["pytest>=8", "mypy>=1.11"]
+
+[tool.maturin]
+python-source = "python"
+# The sdist has to carry the core crate, so its root is the repository
+# root and this directory's files are hoisted onto it. Hence
+# README-py.md rather than README.md: the crate's own README lands on
+# that name, and a wheel built from the sdist would then describe the
+# crate instead of the binding.
+module-name = "fasti._fasti"
+# One abi3 wheel covers 3.10 and up; the floor is set by the pyo3 feature.
+features = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+strict = true
+files = ["python", "tests"]
