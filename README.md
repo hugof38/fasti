@@ -41,6 +41,37 @@ same capability surface with:
   the crate from outside, so the public API is exercised the way a
   dependent sees it.
 
+The constraints do not cost speed. Walking `is_business_day` across a
+century of dates (36 525 days) takes ~1.7 ms for `us::SETTLEMENT` and
+~4.2 ms for NYSE, the heaviest built-in — roughly 48 ns and 116 ns per
+day, evaluated from const rules with no allocation and no runtime
+setup. Reproduce with `cargo bench --bench calendar`; those are
+medians from one 2.1 GHz Xeon core, so read them as an order of
+magnitude, not a promise.
+
+## Comparison
+
+**Dates and times** — [`chrono`], [`jiff`], [`time`]. Use them. fasti
+is not competing: it has no clock, no time zones, and no resolution
+finer than a day. None of the three knows what a business day is.
+
+**Business days** — [`bdays`], [`workdays`]. These answer *is this a
+holiday* and *add five business days*, and stop there: no day-count
+fractions, no business-day conventions past the basics, no schedule
+generation.
+
+**Quant libraries** — [`RustQuant_time`] covers much of the same
+ground, with wider calendar coverage, as one crate of a broader
+quantitative-finance framework. fasti is deliberately narrower: one
+job, exact rationals instead of `f64`, and no `std`.
+
+[`chrono`]: https://crates.io/crates/chrono
+[`jiff`]: https://crates.io/crates/jiff
+[`time`]: https://crates.io/crates/time
+[`bdays`]: https://crates.io/crates/bdays
+[`workdays`]: https://crates.io/crates/workdays
+[`RustQuant_time`]: https://crates.io/crates/RustQuant_time
+
 ## What's in the box
 
 | Area | Types |
@@ -53,12 +84,25 @@ same capability surface with:
 | Day counts | `DayCount`: ACT/360, ACT/365F, 30/360 (Bond Basis, US, 30E/360, 30E/360 ISDA), ACT/ACT (ISDA and schedule-aware ICMA) — all returning `Fraction` |
 | Schedules | `Schedule` / `ScheduleBuilder`: forward/backward/zero generation, stubs, end-of-month preservation |
 
+Four jurisdictions ship today. If yours is not among them you are not
+blocked: the built-ins hold no privileged position — `uk::SETTLEMENT`
+is a `pub const Calendar` assembled from the same public `Rule` values
+you have, and about sixty of them describe England and Wales, Jubilees
+and all. Calendars get added as people need them; the issue template
+asks for a published source, because that is what lets a calendar be
+reviewed rather than trusted. The list stays short deliberately — a
+holiday table is a standing obligation, and state funerals and
+coronations arrive without notice.
+
+Built-ins apply their modern holiday regime across the whole supported
+range, following QuantLib: UK dates before 1978 are the present-day
+rule projected backwards, not what was observed at the time.
+
 ## Python
 
 The bindings live in [`bindings/python`](./bindings/python) and ship as
 `fasti-dates` on PyPI; the import name is `fasti`, matching the crate.
-(`fasti` itself is an unrelated project there, and PyPI refuses
-`fasti-py` as too similar to it.)
+(The `fasti` name on PyPI is taken by an unrelated project.)
 
 ```console
 $ pip install fasti-dates
@@ -79,13 +123,13 @@ Dates cross as `datetime.date` and year fractions come back as
 
 ```toml
 [dependencies]
-fasti = "0.1"
+fasti = "0.2"
 
 # Optional features (both off by default):
 #   serde  — Serialize/Deserialize on the data types
 #   chrono — From/TryFrom conversions with chrono::NaiveDate,
 #            chrono::Weekday, and chrono::Month
-fasti = { version = "0.1", features = ["serde", "chrono"] }
+fasti = { version = "0.2", features = ["serde", "chrono"] }
 ```
 
 The minimum supported Rust version is **1.90** (edition 2024). CI
@@ -136,6 +180,24 @@ fn main() -> Result<(), fasti::TimeError> {
 }
 ```
 
+Output — note that the January 2028 coupon lands on the 18th (the 15th
+is a Saturday, and the Monday behind it is Martin Luther King Jr. Day),
+and that the periods spanning a leap boundary are the ones a `double`
+would have to round:
+
+```text
+2025-01-15 -> 2025-07-15: 181/365
+2025-07-15 -> 2026-01-15: 184/365
+2026-01-15 -> 2026-07-15: 181/365
+2026-07-15 -> 2027-01-15: 184/365
+2027-01-15 -> 2027-07-15: 181/365
+2027-07-15 -> 2028-01-18: 13685/26718
+2028-01-18 -> 2028-07-17: 181/366
+2028-07-17 -> 2029-01-16: 2227/4453
+2029-01-16 -> 2029-07-16: 181/365
+2029-07-16 -> 2030-01-15: 183/365
+```
+
 Run the fuller example:
 
 ```bash
@@ -173,7 +235,10 @@ report. The issue template for them asks for the published source the
 fix will be checked against, because that is what makes such a bug
 fixable in one pass. For anything that looks like a vulnerability, read
 [`SECURITY.md`](./SECURITY.md) first — it also explains why wrong
-holiday data deliberately is not one.
+holiday data, deliberately planted or not, is out of scope there: an
+inaccurate holiday table is a correctness bug, so it belongs in a
+public issue where others can check it against the source, not in a
+private advisory.
 
 ## License
 
