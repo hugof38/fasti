@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [py-0.2.1] - 2026-08-25
+
+`fasti-dates` only; the crate stays at 0.2.0. The two numbers are kept
+equal where they can be, but a change to the bindings' own README is not
+a reason to republish an identical crate, and PyPI will not let a
+released description be edited — a new version is the only way to change
+what the project page shows.
+
+### Removed
+
+- The README's "Vocabularies" section. The behaviour it described is
+  unchanged: every argument taking a member still takes a string, and
+  matching still ignores case and punctuation.
+
 ## [0.2.0] - 2026-08-24
 
 Two artifacts at one version: the crate on crates.io and `fasti-dates` on

@@ -11,6 +11,15 @@ reported version identifies the same code whichever side of the boundary
 it was seen from, which is worth more than the freedom to let them
 drift.
 
+They are allowed to drift for a fix that only exists on one side. A
+change to the bindings' README is the standard case: PyPI bakes the
+description into every uploaded file and will not let a released one be
+edited, so correcting the project page means publishing a new version,
+and republishing a byte-identical crate to crates.io to keep the numbers
+matching would be noise for Rust users. Bump the manifest that changed,
+tag its train alone, and let the numbers differ until the next release
+that touches both.
+
 | | crate | `fasti-dates` |
 |---|---|---|
 | tag | `v0.2.0` | `py-v0.2.0` |
