@@ -57,8 +57,8 @@ TypeError: fasti takes a datetime.date, not a datetime.datetime: ...
   value compares, hashes and pickles.
 
 The operators the crate defines are spelled the Python way, and only
-those: a date steps by a period, and the two vocabularies the crate
-orders are the two that sort.
+those: a date steps by a period, and the two enums the crate orders —
+`Weekday` and `Frequency` — are the two that sort.
 
 ```python
 >>> import datetime
@@ -135,40 +135,6 @@ crate is a property here, a method there is a method here.** So
 calls. It is not the usual Python instinct — the usual instinct is that
 anything cheap is a property — but it means you can read the Rust docs and
 know what to type without a second table.
-
-## Vocabularies
-
-Conventions, weekdays, frequencies, weekend shifts, Easter methods and
-generation rules are classes with constants — and every argument that
-takes one also takes a string. Matching ignores case and punctuation, so
-`"ModifiedFollowing"`, `"modified_following"` and `"modified following"`
-are one spelling. The canonical spelling is what prints, pickles and
-appears in errors.
-
-```python
->>> from fasti import BusinessDayConvention, WeekendShift
->>> BusinessDayConvention("mod_following") is BusinessDayConvention.MODIFIED_FOLLOWING
-False
->>> BusinessDayConvention("mod_following") == BusinessDayConvention.MODIFIED_FOLLOWING
-True
->>> WeekendShift("SunForward")
-WeekendShift.SUN_FORWARD
-
-```
-
-The spellings describe the thing, never a market that uses it. A shift
-is `SUN_FORWARD` or `SAT_BACK_SUN_FORWARD`; it is not "the Fed one",
-because an institution is not a rule and its convention can change
-without this library hearing about it. The US federal convention is in
-fact `SAT_BACK_SUN_FORWARD`, so a `"fed"` spelling would have sat one
-keystroke from a `"federal"` that means something else.
-
-The string spelling is parsed on every call, so in a loop that runs
-millions of times it is worth passing the member instead — measured on
-a CI runner, `advance` costs 904 ns with `"modifiedfollowing"` and
-520 ns with `BusinessDayConvention.MODIFIED_FOLLOWING`.
-`benches/compare.py` re-measures this, and everything else claimed
-about speed here, on your own machine.
 
 ## Equality and pickling
 
