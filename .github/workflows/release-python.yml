@@ -49,7 +49,7 @@ jobs:
         working-directory: bindings/python
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.10"
       - uses: dtolnay/rust-toolchain@stable
@@ -129,7 +129,7 @@ jobs:
           - { runner: windows-latest, target: x64 }
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14t"
       - uses: PyO3/maturin-action@v1
@@ -149,7 +149,7 @@ jobs:
     needs: [sdist, wheels, wheels-free-threaded]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - uses: actions/download-artifact@v4
