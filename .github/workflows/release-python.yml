@@ -71,7 +71,7 @@ jobs:
           command: sdist
           args: --out dist
           working-directory: bindings/python
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-sdist
           path: bindings/python/dist/*.tar.gz
@@ -103,7 +103,7 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
           working-directory: bindings/python
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-abi3-${{ matrix.target }}-${{ matrix.manylinux || matrix.runner }}
           path: bindings/python/dist/*.whl
@@ -139,7 +139,7 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
           working-directory: bindings/python
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-ft-${{ matrix.target }}-${{ matrix.manylinux || matrix.runner }}
           path: bindings/python/dist/*.whl
