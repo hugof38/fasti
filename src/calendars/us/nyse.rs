@@ -29,12 +29,12 @@ use crate::{
 /// | Hurricane Sandy (Oct 29–30 2012) | 2× `Rule::Fixed` with year filter |
 /// | September 11 (Sep 11–14 2001) | 4× `Rule::Fixed` with year filter |
 /// | 1968 Paperwork Crisis Wednesdays | Custom weekly pattern |
-pub const NYSE: Calendar<'static> = Calendar {
-    name: "New York stock exchange",
-    weekend: Weekend::SAT_SUN,
-    rules: &[
+pub const NYSE: Calendar<'static> = Calendar::new(
+    "New York stock exchange",
+    Weekend::SAT_SUN,
+    &[
         // New Year's Day — SunForward only.
-        Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::SunForward)),
+        Rule::Fixed(FixedDate::literal(Month::Jan, 1).shift(WeekendShift::SunForward)),
         // MLK — 3rd Monday of January, since 1998 (NYSE-specific).
         Rule::NthWeekday(
             NthWeekday::new(Ordinal::Third, Weekday::Mon, Month::Jan)
@@ -42,7 +42,7 @@ pub const NYSE: Calendar<'static> = Calendar {
         ),
         // Washington's Birthday (pre-1971): Feb 22 + full shift.
         Rule::Fixed(
-            FixedDate::new(Month::Feb, 22)
+            FixedDate::literal(Month::Feb, 22)
                 .shift(WeekendShift::SatBackSunForward)
                 .years(YearRange::literal_through(1970)),
         ),
@@ -55,7 +55,7 @@ pub const NYSE: Calendar<'static> = Calendar {
         Rule::Easter(EasterOffset::good_friday()),
         // Memorial Day (pre-1971): May 30 + full shift.
         Rule::Fixed(
-            FixedDate::new(Month::May, 30)
+            FixedDate::literal(Month::May, 30)
                 .shift(WeekendShift::SatBackSunForward)
                 .years(YearRange::literal_through(1970)),
         ),
@@ -65,55 +65,55 @@ pub const NYSE: Calendar<'static> = Calendar {
         ),
         // Juneteenth (since 2022).
         Rule::Fixed(
-            FixedDate::new(Month::Jun, 19)
+            FixedDate::literal(Month::Jun, 19)
                 .shift(WeekendShift::SatBackSunForward)
                 .from_year(Year::literal(2022)),
         ),
         // Independence Day.
-        Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::SatBackSunForward)),
+        Rule::Fixed(FixedDate::literal(Month::Jul, 4).shift(WeekendShift::SatBackSunForward)),
         // Labor Day.
         Rule::NthWeekday(NthWeekday::new(Ordinal::First, Weekday::Mon, Month::Sep)),
         // Thanksgiving.
         Rule::NthWeekday(NthWeekday::new(Ordinal::Fourth, Weekday::Thu, Month::Nov)),
         // Christmas.
-        Rule::Fixed(FixedDate::new(Month::Dec, 25).shift(WeekendShift::SatBackSunForward)),
+        Rule::Fixed(FixedDate::literal(Month::Dec, 25).shift(WeekendShift::SatBackSunForward)),
         // Presidential election days.
         Rule::Custom(election_day),
         // Hurricane Sandy — Oct 29 and Oct 30, 2012.
         Rule::Fixed(
             // Hurricane Sandy day 1 (2012-10-29).
-            FixedDate::new(Month::Oct, 29)
+            FixedDate::literal(Month::Oct, 29)
                 .shift(WeekendShift::None)
                 .years(YearRange::literal_between(2012, 2012)),
         ),
         Rule::Fixed(
             // Hurricane Sandy day 2 (2012-10-30).
-            FixedDate::new(Month::Oct, 30)
+            FixedDate::literal(Month::Oct, 30)
                 .shift(WeekendShift::None)
                 .years(YearRange::literal_between(2012, 2012)),
         ),
         // September 11 2001 attacks — markets closed Sep 11 through Sep 14.
         Rule::Fixed(
             // September 11 day 1 (2001-09-11) — attacks.
-            FixedDate::new(Month::Sep, 11)
+            FixedDate::literal(Month::Sep, 11)
                 .shift(WeekendShift::None)
                 .years(YearRange::literal_between(2001, 2001)),
         ),
         Rule::Fixed(
             // September 11 day 2 (2001-09-12).
-            FixedDate::new(Month::Sep, 12)
+            FixedDate::literal(Month::Sep, 12)
                 .shift(WeekendShift::None)
                 .years(YearRange::literal_between(2001, 2001)),
         ),
         Rule::Fixed(
             // September 11 day 3 (2001-09-13).
-            FixedDate::new(Month::Sep, 13)
+            FixedDate::literal(Month::Sep, 13)
                 .shift(WeekendShift::None)
                 .years(YearRange::literal_between(2001, 2001)),
         ),
         Rule::Fixed(
             // September 11 day 4 (2001-09-14) — markets reopened Monday 17th.
-            FixedDate::new(Month::Sep, 14)
+            FixedDate::literal(Month::Sep, 14)
                 .shift(WeekendShift::None)
                 .years(YearRange::literal_between(2001, 2001)),
         ),
@@ -141,7 +141,7 @@ pub const NYSE: Calendar<'static> = Calendar {
         // 1968 Paperwork Crisis: every Wednesday Jun 12 – Dec 31.
         Rule::Custom(paperwork_crisis_1968),
     ],
-};
+);
 
 /// NYSE election-day closures: every year through 1968, then 1972/1976/1980.
 /// Matches `QuantLib`'s simplified "first Tuesday of November, day ≤ 7" rule,

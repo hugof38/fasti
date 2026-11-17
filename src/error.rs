@@ -4,8 +4,12 @@
 //! coerced; every refusal surfaces as a [`TimeError`].
 
 /// Errors produced by `fasti` constructors.
+///
+/// Marked `#[non_exhaustive]`: new variants may arrive in minor
+/// releases, so a `match` on it needs a wildcard arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum TimeError {
     /// A [`Year`](crate::Year) was constructed outside the supported range
     /// 1901–2199.
@@ -45,16 +49,15 @@ pub enum TimeError {
     NonCanonicalPeriod,
     /// A [`Fraction`](crate::Fraction) was constructed with a
     /// zero denominator.
-    #[error("year fraction denominator must be non-zero")]
+    #[error("fraction denominator must be non-zero")]
     ZeroDenominator,
     /// An [`ActActICMA`](crate::ActActICMA) reference period did not have
-    /// its start strictly before its end, or a bound schedule had fewer
-    /// than two dates.
+    /// its start strictly before its end.
     #[error("reference period start must be strictly before its end")]
     InvalidReferencePeriod,
-    /// [`Fraction`](crate::Fraction) arithmetic inside a day-count
-    /// computation overflowed the `i64`/`u64` representation.
-    #[error("year-fraction arithmetic overflowed")]
+    /// [`Fraction`](crate::Fraction) arithmetic overflowed the
+    /// `i64`/`u64` representation (or `i64` when scaling an amount).
+    #[error("fraction arithmetic overflowed")]
     FractionOverflow,
     /// A day count was bound to a [`Schedule`](crate::Schedule) whose
     /// tenor disagrees with the convention's coupon frequency.
@@ -77,4 +80,22 @@ pub enum TimeError {
     /// strictly monotonically increasing after business-day adjustment.
     #[error("schedule dates are not strictly monotonic after adjustment")]
     ScheduleNotMonotonic,
+    /// A day count was bound to a [`Schedule`](crate::Schedule) with
+    /// fewer than two dates, so it has no period to accrue over.
+    #[error("schedule has fewer than two dates")]
+    ScheduleTooShort,
+    /// A [`Period`](crate::Period) string was not a signed integer
+    /// followed by one of `D`, `W`, `M`, `Y` (for example `6M`).
+    #[error("period string is not in `<n><D|W|M|Y>` form, e.g. `6M`")]
+    InvalidPeriodString,
+    /// A name passed to a `FromStr` implementation — a
+    /// [`Frequency`](crate::Frequency) or a
+    /// [`BusinessDayConvention`](crate::BusinessDayConvention) — matched
+    /// no member.
+    #[error("name does not match any known member")]
+    UnknownName,
+    /// A [`Weekend`](crate::Weekend) bit mask set bits beyond the seven
+    /// weekdays.
+    #[error("weekend mask must only use the low seven bits")]
+    InvalidWeekendMask,
 }

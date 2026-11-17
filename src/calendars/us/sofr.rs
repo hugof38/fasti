@@ -31,12 +31,12 @@ use crate::{
 /// | Thanksgiving | 4th Thu of November |
 /// | Christmas | Dec 25 + SatBack/SunForward |
 /// | Special closings | Custom: 2018-12-5, 2012-10-30, 2004-06-11 |
-pub const SOFR: Calendar<'static> = Calendar {
-    name: "SOFR fixing calendar",
-    weekend: Weekend::SAT_SUN,
-    rules: &[
+pub const SOFR: Calendar<'static> = Calendar::new(
+    "SOFR fixing calendar",
+    Weekend::SAT_SUN,
+    &[
         // New Year's Day — SunForward.
-        Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::SunForward)),
+        Rule::Fixed(FixedDate::literal(Month::Jan, 1).shift(WeekendShift::SunForward)),
         // MLK — since 1983.
         Rule::NthWeekday(
             NthWeekday::new(Ordinal::Third, Weekday::Mon, Month::Jan)
@@ -44,7 +44,7 @@ pub const SOFR: Calendar<'static> = Calendar {
         ),
         // Washington's Birthday (pre-1971).
         Rule::Fixed(
-            FixedDate::new(Month::Feb, 22)
+            FixedDate::literal(Month::Feb, 22)
                 .shift(WeekendShift::SatBackSunForward)
                 .years(YearRange::literal_through(1970)),
         ),
@@ -57,7 +57,7 @@ pub const SOFR: Calendar<'static> = Calendar {
         Rule::Easter(EasterOffset::good_friday()),
         // Memorial Day (pre-1971).
         Rule::Fixed(
-            FixedDate::new(Month::May, 30)
+            FixedDate::literal(Month::May, 30)
                 .shift(WeekendShift::SatBackSunForward)
                 .years(YearRange::literal_through(1970)),
         ),
@@ -67,12 +67,12 @@ pub const SOFR: Calendar<'static> = Calendar {
         ),
         // Juneteenth (2022+).
         Rule::Fixed(
-            FixedDate::new(Month::Jun, 19)
+            FixedDate::literal(Month::Jun, 19)
                 .shift(WeekendShift::SatBackSunForward)
                 .from_year(Year::literal(2022)),
         ),
         // Independence Day.
-        Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::SatBackSunForward)),
+        Rule::Fixed(FixedDate::literal(Month::Jul, 4).shift(WeekendShift::SatBackSunForward)),
         // Labor Day.
         Rule::NthWeekday(NthWeekday::new(Ordinal::First, Weekday::Mon, Month::Sep)),
         // Columbus Day (1971+).
@@ -82,7 +82,7 @@ pub const SOFR: Calendar<'static> = Calendar {
         ),
         // Veterans Day (pre-1971): SunForward.
         Rule::Fixed(
-            FixedDate::new(Month::Nov, 11)
+            FixedDate::literal(Month::Nov, 11)
                 .shift(WeekendShift::SunForward)
                 .years(YearRange::literal_through(1970)),
         ),
@@ -93,20 +93,20 @@ pub const SOFR: Calendar<'static> = Calendar {
         ),
         // Veterans Day (1978+): SunForward.
         Rule::Fixed(
-            FixedDate::new(Month::Nov, 11)
+            FixedDate::literal(Month::Nov, 11)
                 .shift(WeekendShift::SunForward)
                 .from_year(Year::literal(1978)),
         ),
         // Thanksgiving.
         Rule::NthWeekday(NthWeekday::new(Ordinal::Fourth, Weekday::Thu, Month::Nov)),
         // Christmas.
-        Rule::Fixed(FixedDate::new(Month::Dec, 25).shift(WeekendShift::SatBackSunForward)),
+        Rule::Fixed(FixedDate::literal(Month::Dec, 25).shift(WeekendShift::SatBackSunForward)),
         // Special historic closings — same set as Government Bond.
         Rule::OneOff(OneOff::new(Date::literal(2004, Month::Jun, 11))), // Reagan funeral
         Rule::OneOff(OneOff::new(Date::literal(2012, Month::Oct, 30))), // Hurricane Sandy day 2
         Rule::OneOff(OneOff::new(Date::literal(2018, Month::Dec, 5))),  // Bush funeral
     ],
-};
+);
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

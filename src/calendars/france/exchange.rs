@@ -19,20 +19,20 @@ use crate::{Calendar, EasterOffset, FixedDate, Month, Rule, Weekend, WeekendShif
 /// | Saint-Sylvestre / New Year's Eve | Dec 31 |
 ///
 /// Dec 26 is an Euronext exchange convention, not a French civil holiday.
-pub const EXCHANGE: Calendar<'static> = Calendar {
-    name: "France exchange",
-    weekend: Weekend::SAT_SUN,
-    rules: &[
-        Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::None)),
+pub const EXCHANGE: Calendar<'static> = Calendar::new(
+    "France exchange",
+    Weekend::SAT_SUN,
+    &[
+        Rule::Fixed(FixedDate::literal(Month::Jan, 1).shift(WeekendShift::None)),
         Rule::Easter(EasterOffset::good_friday()),
         Rule::Easter(EasterOffset::easter_monday()),
-        Rule::Fixed(FixedDate::new(Month::May, 1).shift(WeekendShift::None)),
-        Rule::Fixed(FixedDate::new(Month::Dec, 24).shift(WeekendShift::None)),
-        Rule::Fixed(FixedDate::new(Month::Dec, 25).shift(WeekendShift::None)),
-        Rule::Fixed(FixedDate::new(Month::Dec, 26).shift(WeekendShift::None)),
-        Rule::Fixed(FixedDate::new(Month::Dec, 31).shift(WeekendShift::None)),
+        Rule::Fixed(FixedDate::literal(Month::May, 1).shift(WeekendShift::None)),
+        Rule::Fixed(FixedDate::literal(Month::Dec, 24).shift(WeekendShift::None)),
+        Rule::Fixed(FixedDate::literal(Month::Dec, 25).shift(WeekendShift::None)),
+        Rule::Fixed(FixedDate::literal(Month::Dec, 26).shift(WeekendShift::None)),
+        Rule::Fixed(FixedDate::literal(Month::Dec, 31).shift(WeekendShift::None)),
     ],
-};
+);
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

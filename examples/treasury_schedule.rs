@@ -1,87 +1,103 @@
-//! Build a coupon schedule for a 5-year semiannual US Treasury note
-//! and print each period's accrual against the actual/actual ISDA
-//! day-count convention.
+//! Coupons and accrued interest for a 5-year semiannual US Treasury
+//! note, the way Treasuries actually accrue.
 //!
 //! Run with:
 //!
 //! ```bash
-//! cargo run -p fasti --example treasury_schedule
+//! cargo run --example treasury_schedule
 //! ```
 //!
 //! What this demonstrates:
 //!
-//! 1. Pick the `us::SETTLEMENT` calendar — the standard "is the bond
-//!    market open" calendar in `QuantLib`'s vocabulary.
-//! 2. Build a backward-generated semiannual schedule from issue to
-//!    maturity. Backward is conventional for bonds: any irregular
-//!    accrual period lands at the front (closest to issue), not the
-//!    back. Coupon dates are anchored on the maturity date.
-//! 3. Apply `ModifiedFollowing` to interior coupon dates (move to the
-//!    next business day, but never cross a month boundary) and leave
-//!    maturity `Unadjusted` (the bond legally pays on its stated
-//!    maturity date).
-//! 4. Walk `Schedule::periods()` and price each accrual using
-//!    `ActActISDA`.
-
-#![allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+//! 1. Treasuries accrue on the **unadjusted** coupon grid: the 15th of
+//!    January and July, whatever day of the week it is. So the
+//!    accrual schedule keeps `ScheduleBuilder`'s defaults, which are
+//!    bond conventions: `Unadjusted` dates, generated backward from
+//!    maturity.
+//! 2. Interest is counted ACT/ACT ICMA, bound to that schedule. Every
+//!    regular period is then exactly half a year, so every coupon is
+//!    exactly half the annual coupon: $21,250.00 on $1mm at 4.25%.
+//! 3. Payment is a separate question: a coupon date that is not a
+//!    business day pays on the next one, without changing the
+//!    accrual. The January 2028 coupon pays on the 18th.
+//! 4. Money is computed once, in integer cents, with an explicit
+//!    rounding mode (`Fraction::scale`).
+//! 5. Accrued interest for a trade settling T+1 business day.
 
 use fasti::{
-    ActActISDA, BusinessDayConvention, Date, DayCount, Month, Period, ScheduleBuilder, TimeError,
-    calendars::us,
+    ActActICMA, BusinessDayConvention, Date, Fraction, Frequency, Month, Period, RoundingMode,
+    ScheduleBuilder, TimeError, calendars::us,
 };
 
-/// 5-year, semiannual, 4.25% Treasury issued 2025-01-15 maturing
-/// 2030-01-15 on a $1,000,000 face.
-const FACE_CENTS: u128 = 100_000_000;
-const COUPON_BPS: u128 = 425;
+/// 4.25% on a $1,000,000 face, in cents.
+const FACE_CENTS: i64 = 100_000_000;
+
+fn dollars(cents: i64) -> String {
+    format!("{}.{:02}", cents / 100, cents % 100)
+}
 
 fn main() -> Result<(), TimeError> {
     let issue = Date::from_ymd(2025, Month::Jan, 15)?;
     let maturity = Date::from_ymd(2030, Month::Jan, 15)?;
+    let rate = Fraction::new(425, 10_000)?;
+    let calendar = us::GOVERNMENT_BOND;
 
-    let schedule = ScheduleBuilder::new(issue, maturity, Period::Months(6), us::SETTLEMENT)
-        .backwards()
-        .with_convention(BusinessDayConvention::ModifiedFollowing)
-        .with_termination_convention(BusinessDayConvention::Unadjusted)
-        .build()?;
+    // The accrual grid: unadjusted coupon dates, backward from maturity.
+    // These are ScheduleBuilder's defaults, which are bond conventions.
+    let schedule = ScheduleBuilder::new(issue, maturity, Period::Months(6), calendar).build()?;
+    let day_count = ActActICMA::new(Frequency::Semiannual).bind(&schedule)?;
 
-    println!("Treasury 4.25% {issue} -> {maturity}, semiannual, US settlement calendar");
+    println!("UST 4.25% {issue} -> {maturity}, semiannual, ACT/ACT ICMA, $1,000,000 face\n");
     println!(
-        "{} coupon dates ({} accrual periods)\n",
-        schedule.len(),
-        schedule.len() - 1,
+        "{:>3}  {:<12}  {:<12}  {:<12}  {:>8}  {:>12}",
+        "#", "accrues from", "to", "paid on", "fraction", "coupon ($)",
     );
-    println!(
-        "{:>3}  {:<12}  {:<12}  {:>16}  {:>14}",
-        "#", "start", "end", "yf (act/act)", "coupon ($)",
-    );
-    println!("{}", "-".repeat(64));
+    println!("{}", "-".repeat(70));
 
-    let dc = ActActISDA;
-    let mut total_cents: u128 = 0;
+    let mut total = 0;
     for (i, period) in schedule.periods().enumerate() {
-        let (num, den) = dc.year_fraction(period.start, period.end).parts();
-        // coupon = face × rate × year_fraction, all in integer cents.
-        let cents = FACE_CENTS * COUPON_BPS * num as u128 / (10_000 * u128::from(den));
-        total_cents += cents;
+        let fraction = day_count.try_year_fraction(period.start, period.end)?;
+        let factor = rate
+            .checked_mul(fraction)
+            .ok_or(TimeError::FractionOverflow)?;
+        let coupon = factor.scale(FACE_CENTS, RoundingMode::HalfEven)?;
+        total += coupon;
+        let paid = calendar.adjust(period.end, BusinessDayConvention::Following)?;
         println!(
-            "{:>3}  {:<12}  {:<12}  {:>7} / {:<6}  {:>10}.{:02}",
+            "{:>3}  {:<12}  {:<12}  {:<12}  {:>8}  {:>12}",
             i + 1,
             period.start,
             period.end,
-            num,
-            den,
-            cents / 100,
-            cents % 100,
+            paid,
+            fraction.to_string(),
+            dollars(coupon),
         );
     }
-    println!("{}", "-".repeat(64));
-    println!(
-        "{:>49}  ${:>9}.{:02}",
-        "total coupons:",
-        total_cents / 100,
-        total_cents % 100,
-    );
+    println!("{}", "-".repeat(70));
+    println!("{:>60}  {:>12}\n", "total coupons:", dollars(total));
 
+    // Accrued interest for a trade on Tuesday 2026-11-17, settling T+1.
+    let trade = Date::from_ymd(2026, Month::Nov, 17)?;
+    let settlement = calendar.add_business_days(trade, 1)?;
+    // The coupon period containing settlement: the last coupon date on
+    // or before it. On a coupon date itself, accrued interest is zero.
+    let Some(period) = schedule
+        .periods()
+        .find(|p| p.start <= settlement && settlement < p.end)
+    else {
+        println!("{settlement} is outside the bond's life");
+        return Ok(());
+    };
+    let accrued_fraction = day_count.try_year_fraction(period.start, settlement)?;
+    let accrued = rate
+        .checked_mul(accrued_fraction)
+        .ok_or(TimeError::FractionOverflow)?
+        .scale(FACE_CENTS, RoundingMode::HalfEven)?;
+    println!(
+        "traded {trade}, settles {settlement}: accrued from {} = {} of a year, ${}",
+        period.start,
+        accrued_fraction,
+        dollars(accrued),
+    );
     Ok(())
 }

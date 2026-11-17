@@ -260,3 +260,23 @@ def test_a_weekend_accepts_any_spelling_of_a_weekday() -> None:
         Calendar("Acme", ["someday"])
     with pytest.raises(TypeError, match="expected a Weekday"):
         Calendar("Acme", [6])  # type: ignore[list-item]
+
+
+def test_add_business_days_counts_business_days_not_calendar_days() -> None:
+    friday = datetime.date(2026, 11, 20)
+    assert us.SETTLEMENT.add_business_days(friday, 2) == datetime.date(2026, 11, 24)
+    # Thanksgiving, Thursday Nov 26, is skipped.
+    assert us.SETTLEMENT.add_business_days(datetime.date(2026, 11, 25), 1) == datetime.date(
+        2026, 11, 27
+    )
+    assert us.SETTLEMENT.add_business_days(friday, -1) == datetime.date(2026, 11, 19)
+    assert us.SETTLEMENT.previous_business_day(friday) == datetime.date(2026, 11, 19)
+
+
+def test_a_union_judges_each_calendar_on_its_own() -> None:
+    # New Year's Day 2023 was a Sunday, so the UK took Monday Jan 2. A
+    # market closed on Jan 2 must not push that substitute to Jan 3.
+    jan2 = Calendar("Jan 2", ["sat", "sun"], [Rule.fixed(1, 2)])
+    joint = uk.SETTLEMENT.union(jan2)
+    assert joint.is_holiday(datetime.date(2023, 1, 2))
+    assert not joint.is_holiday(datetime.date(2023, 1, 3))

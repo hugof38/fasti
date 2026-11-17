@@ -18,15 +18,15 @@ use crate::{
 /// | Labor Day | 1st Mon of September |
 /// | Thanksgiving | 4th Thu of November |
 /// | Christmas | Dec 25 + SunForward |
-pub const NERC: Calendar<'static> = Calendar {
-    name: "North American Energy Reliability Council",
-    weekend: Weekend::SAT_SUN,
-    rules: &[
+pub const NERC: Calendar<'static> = Calendar::new(
+    "North American Energy Reliability Council",
+    Weekend::SAT_SUN,
+    &[
         // New Year's Day — Jan 1, Sunday→Monday only.
-        Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::SunForward)),
+        Rule::Fixed(FixedDate::literal(Month::Jan, 1).shift(WeekendShift::SunForward)),
         // Memorial Day (pre-1971): May 30 with full weekend shift.
         Rule::Fixed(
-            FixedDate::new(Month::May, 30)
+            FixedDate::literal(Month::May, 30)
                 .shift(WeekendShift::SatBackSunForward)
                 .years(YearRange::literal_through(1970)),
         ),
@@ -35,15 +35,15 @@ pub const NERC: Calendar<'static> = Calendar {
             LastWeekday::new(Weekday::Mon, Month::May).from_year(Year::literal(1971)),
         ),
         // Independence Day — Jul 4, Sunday→Monday only.
-        Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::SunForward)),
+        Rule::Fixed(FixedDate::literal(Month::Jul, 4).shift(WeekendShift::SunForward)),
         // Labor Day — 1st Monday of September.
         Rule::NthWeekday(NthWeekday::new(Ordinal::First, Weekday::Mon, Month::Sep)),
         // Thanksgiving — 4th Thursday of November.
         Rule::NthWeekday(NthWeekday::new(Ordinal::Fourth, Weekday::Thu, Month::Nov)),
         // Christmas — Dec 25, Sunday→Monday only.
-        Rule::Fixed(FixedDate::new(Month::Dec, 25).shift(WeekendShift::SunForward)),
+        Rule::Fixed(FixedDate::literal(Month::Dec, 25).shift(WeekendShift::SunForward)),
     ],
-};
+);
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

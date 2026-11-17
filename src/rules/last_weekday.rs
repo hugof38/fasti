@@ -91,6 +91,7 @@ impl LastWeekday {
     /// of the weekday in the month, or [`None`] when the year is
     /// inactive.
     // Widening u8 -> i32 casts; `as` because `From` is not const.
+    #[inline]
     #[allow(clippy::cast_lossless)]
     pub(crate) const fn natural_date_in(self, year: Year) -> Option<Date> {
         if !self.years.contains(year) {

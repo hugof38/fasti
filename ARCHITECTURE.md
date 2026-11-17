@@ -40,8 +40,14 @@ the constraint wins unless the design discussion says otherwise.
   the whole enum `const`-constructible so built-in calendars can live
   in `pub const` values.
 - `Weekend` is a bitmask over weekdays and lives outside the rule list.
-- `Calendar<'a>` is a borrowed, `Copy` view. The owned form is
+- `Calendar<'a>` is a borrowed, `Copy` view with private fields,
+  built by `const fn Calendar::new`. The owned form is
   `CalendarBuilder`, which exposes `view() -> Calendar<'_>`.
+- A joint calendar (`CalendarBuilder::union`) keeps each member's rules
+  and weekend apart and asks each member separately, as `QuantLib`'s
+  `JointCalendar` does. Concatenating rule lists is wrong: one member's
+  holiday would push another's chaining substitute onto a day neither
+  closes.
 
 ## Day-count conventions
 
@@ -88,15 +94,17 @@ the constraint wins unless the design discussion says otherwise.
   Reversed inputs (`end < start`) produce a negative fraction that
   mirrors the ordered one; `yf(a, b) + yf(b, a) == 0` is a tested
   invariant.
-- Callers that need to scale an amount compute
-  `amount * rate * num / (scale * den)` with checked integer ops, in
-  that order, to avoid intermediate overflow. The `i64`/`u64` width
-  gives ample headroom for cross-year ACT/ACT compositions;
-  intermediates inside `Fraction::checked_add`, `Fraction::checked_mul`,
-  and `cmp_cross` widen to `i128`.
+- Callers scale an amount with `Fraction::scale(amount, RoundingMode)`:
+  the product `amount * num` is formed in `i128` and divided once, so
+  rounding happens exactly once and only where the caller names the
+  mode. Fold the rate into the fraction first (`rate.checked_mul(yf)`).
+  Intermediates inside `Fraction::checked_add`, `Fraction::checked_mul`,
+  and `cmp_cross` likewise widen to `i128`.
 - The type is named `Fraction` (not `YearFraction`) because the same
-  algebra serves day-count fractions and downstream uses such as rates
-  lifted to scalar multipliers.
+  algebra serves day-count fractions and the rates multiplied into
+  them. It is not a general scalar: repeated products such as
+  compounding `(1 + r·τ)` exhaust `i64/u64` within a few steps, and
+  pricing is out of scope.
 
 ## Supported date range
 

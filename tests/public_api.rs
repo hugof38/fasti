@@ -162,7 +162,7 @@ fn calendar_builder_composes_every_rule_variant() -> Result<(), TimeError> {
     }
 
     let owned = CalendarBuilder::new("Test Market", Weekend::SAT_SUN)
-        .with_rule(Rule::Fixed(FixedDate::new(Month::Jan, 1)))
+        .with_rule(Rule::Fixed(FixedDate::literal(Month::Jan, 1)))
         .with_rule(Rule::NthWeekday(NthWeekday::new(
             Ordinal::Third,
             Weekday::Mon,
@@ -183,7 +183,7 @@ fn calendar_builder_composes_every_rule_variant() -> Result<(), TimeError> {
 
     let cal = owned.view();
     // `union` names the joint calendar after both sides.
-    assert_eq!(cal.name, "Test Market + US settlement");
+    assert_eq!(cal.name(), "Test Market + US settlement");
     assert!(cal.is_holiday(Date::from_ymd(2026, Month::Jan, 1)?));
     assert!(cal.is_holiday(Date::from_ymd(2026, Month::Jan, 19)?)); // 3rd Mon
     assert!(cal.is_holiday(Date::from_ymd(2026, Month::May, 25)?)); // last Mon
