@@ -4,7 +4,7 @@
 //! after [QuantLib's `ql/time`](https://github.com/lballabio/QuantLib/tree/master/ql/time).
 //! Runtime deps: [`thiserror`] only; `#![no_std]`-compatible with `alloc`.
 //! Opt-in features: `serde` (validated formats: dates as `"YYYY-MM-DD"`,
-//! periods as `"6M"`) and `chrono` (conversions).
+//! periods as `"6M"`) and `jiff` (conversions).
 //!
 //! # Where to start
 //!
@@ -40,13 +40,13 @@ extern crate alloc;
 mod business_day;
 mod calendar;
 pub mod calendars;
-#[cfg(feature = "chrono")]
-mod chrono_interop;
 mod date;
 mod daycount;
 mod easter;
 mod error;
 mod fraction;
+#[cfg(feature = "jiff")]
+mod jiff_interop;
 mod names;
 mod period;
 mod rules;

@@ -25,6 +25,23 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
 - `TimeError` is `#[non_exhaustive]`. `ActActICMA::bind` on a schedule
   with fewer than two dates now returns `ScheduleTooShort`.
 
+### Changed
+
+- `Date::to_ymd`, `Date::year` and the accessors built on them decompose
+  a serial with the Neri–Schneider algorithm — branch-free, table-free
+  integer arithmetic — instead of a year-table search. Results are
+  identical (checked exhaustively against a day-by-day walk of the whole
+  supported range); calendar evaluation is roughly 25–35% faster, e.g. a
+  century of `is_business_day` on NYSE drops from ~4.9 ms to ~3.3 ms on
+  the benchmark machine. No API change, no new dependency.
+
+### Removed
+
+- The `chrono` feature. chrono is unmaintained
+  ([RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543))
+  with no safe upgrade. Convert from chrono through year, month and day
+  (`Date::from_ymd`), or move to jiff, as the advisory recommends.
+
 ### Fixed
 
 - Deserializing untrusted input can no longer panic the library.
@@ -50,6 +67,11 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
 
 ### Added
 
+- A `jiff` feature: `TryFrom<jiff::civil::Date> for Date`,
+  `From<Date> for jiff::civil::Date`, and `Weekday` conversions both
+  ways. jiff has no month type; months cross as numbers
+  (`Month::try_from_u8`, `Month::get`). Built with jiff's default
+  features off, so it stays `no_std`.
 - `Calendar::add_business_days(date, n)` for settlement lags. This is
   what QuantLib's `advance` does with a `Days` unit; fasti's `advance`
   with `Period::Days` counts calendar days, as its docs now say loudly.
