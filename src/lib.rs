@@ -3,7 +3,7 @@
 //! `fasti` is a standalone Rust time library for financial code, designed
 //! after [QuantLib's `ql/time`](https://github.com/lballabio/QuantLib/tree/master/ql/time).
 //! Runtime deps: [`thiserror`] only; `#![no_std]`-compatible with `alloc`.
-//! Opt-in features: `serde` (derives) and `chrono` (conversions).
+//! Opt-in features: `serde` (derives) and `jiff` (conversions).
 //!
 //! # Design principles
 //!
@@ -35,13 +35,13 @@ extern crate alloc;
 mod business_day;
 mod calendar;
 pub mod calendars;
-#[cfg(feature = "chrono")]
-mod chrono_interop;
 mod date;
 mod daycount;
 mod easter;
 mod error;
 mod fraction;
+#[cfg(feature = "jiff")]
+mod jiff_interop;
 mod period;
 mod rules;
 mod schedule;

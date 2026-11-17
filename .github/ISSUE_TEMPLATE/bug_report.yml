@@ -52,5 +52,5 @@ body:
       label: Features enabled
       options:
         - label: "`serde`"
-        - label: "`chrono`"
+        - label: "`jiff`"
         - label: "built as `no_std` (no default features on a bare-metal target)"

@@ -42,6 +42,45 @@ const MONTH_OFFSETS_NONLEAP: [u32; 13] =
 /// As [`MONTH_OFFSETS_NONLEAP`], for a leap year.
 const MONTH_OFFSETS_LEAP: [u32; 13] = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366];
 
+/// Days from 0000-03-01 (proleptic Gregorian) to 1901-01-01, i.e. the
+/// serial-0 date expressed in Neri–Schneider's computational calendar.
+const COMPUTATIONAL_EPOCH: u32 = 694_266;
+
+/// Serial → `(year, month, day)` by the Neri–Schneider algorithm
+/// (C. Neri and L. Schneider, "Euclidean affine functions and their
+/// application to calendar algorithms", *Software: Practice and
+/// Experience* 53(4), 2023). Branch-free and table-free: the
+/// computational calendar starts each year on March 1, so the leap day
+/// is the last day of the year, and every division is by a constant.
+///
+/// Ranges, for `serial` in `0..=MAX_SERIAL`: `n < 803_474`, so
+/// `4 * n + 3` fits `u32`; `year_of_century_mul < 2^32 * 100` is held in
+/// `u64`; `day_of_comp_year` is `0..=365`, `month` `3..=14`, `day`
+/// `0..=30`. The final narrowings are therefore exact. Exhaustively
+/// pinned by `civil_matches_day_by_day_walk`.
+#[allow(clippy::cast_possible_truncation)]
+const fn civil(serial: u32) -> (u16, u8, u8) {
+    let n = serial + COMPUTATIONAL_EPOCH;
+    // Century and day-of-century.
+    let n1 = 4 * n + 3;
+    let century = n1 / 146_097;
+    let day_of_century = (n1 % 146_097) / 4;
+    // Year-of-century and day-of-year via one 64-bit multiply.
+    let n2 = 4 * day_of_century + 3;
+    let p2 = 2_939_745 * (n2 as u64);
+    let year_of_century = (p2 >> 32) as u32;
+    let day_of_comp_year = (p2 as u32) / 2_939_745 / 4;
+    // Month and day-of-month from the day-of-year.
+    let n3 = 2_141 * day_of_comp_year + 197_913;
+    let month = n3 >> 16;
+    let day = (n3 & 0xFFFF) / 2_141;
+    // Jan and Feb belong to the previous computational year.
+    let jan_or_feb = day_of_comp_year >= 306;
+    let year = 100 * century + year_of_century + jan_or_feb as u32;
+    let month = if jan_or_feb { month - 12 } else { month };
+    (year as u16, month as u8, (day + 1) as u8)
+}
+
 // ---- Year ---------------------------------------------------------------
 
 /// A year in the range 1901..=2199.
@@ -507,25 +546,7 @@ impl Date {
     /// The [`Year`] component.
     #[must_use]
     pub const fn year(self) -> Year {
-        // A Gregorian cycle is 146 097 days over 400 years, so the
-        // serial names its own year index to within one (pinned
-        // exhaustively by `year_is_correct_for_every_serial`); the
-        // loops absorb the remainder. The upward loop needs no bounds
-        // check: `CUMULATIVE`'s final entry is one past the last valid
-        // day, so it never compares `<=` a valid serial. `serial * 400`
-        // peaks below 44 million — no overflow.
-        let serial = self.0;
-        // `serial * 400 / 146_097 < NUM_YEARS` for every valid serial, so
-        // the `u32 -> u16` narrowing is safe and the index in bounds.
-        #[allow(clippy::cast_possible_truncation)]
-        let mut idx = (serial * 400 / 146_097) as u16;
-        while CUMULATIVE[idx as usize + 1] <= serial {
-            idx += 1;
-        }
-        while CUMULATIVE[idx as usize] > serial {
-            idx -= 1;
-        }
-        Year(EPOCH_YEAR + idx)
+        Year(civil(self.0).0)
     }
 
     /// Decompose into `(year, month, day-of-month)`.
@@ -539,36 +560,22 @@ impl Date {
     /// ```
     #[must_use]
     pub const fn to_ymd(self) -> (Year, Month, u8) {
-        let y = self.year();
-        let year_idx = (y.0 - EPOCH_YEAR) as usize;
-        let doy = self.0 - CUMULATIVE[year_idx];
-        let offsets = if y.is_leap() {
-            &MONTH_OFFSETS_LEAP
-        } else {
-            &MONTH_OFFSETS_NONLEAP
-        };
-        let mut m: usize = 0;
-        while m + 1 < 13 && offsets[m + 1] <= doy {
-            m += 1;
-        }
-        let month = match m {
-            0 => Month::Jan,
-            1 => Month::Feb,
-            2 => Month::Mar,
-            3 => Month::Apr,
-            4 => Month::May,
-            5 => Month::Jun,
-            6 => Month::Jul,
-            7 => Month::Aug,
-            8 => Month::Sep,
-            9 => Month::Oct,
-            10 => Month::Nov,
+        let (year, month, day) = civil(self.0);
+        let month = match month {
+            1 => Month::Jan,
+            2 => Month::Feb,
+            3 => Month::Mar,
+            4 => Month::Apr,
+            5 => Month::May,
+            6 => Month::Jun,
+            7 => Month::Jul,
+            8 => Month::Aug,
+            9 => Month::Sep,
+            10 => Month::Oct,
+            11 => Month::Nov,
             _ => Month::Dec,
         };
-        // `doy - offsets[m] + 1` is bounded 1..=31, so the `as u8` narrowing is safe.
-        #[allow(clippy::cast_possible_truncation)]
-        let day_of_month = (doy - offsets[m] + 1) as u8;
-        (y, month, day_of_month)
+        (Year(year), month, day)
     }
 
     /// The [`Month`] component.
@@ -1126,31 +1133,32 @@ mod tests {
     }
 
     #[test]
-    fn year_is_correct_for_every_serial() {
-        // Exhaustive: walk the whole range once, tracking the expected
-        // year incrementally, so `year`'s estimate-plus-correction is
-        // pinned at every day — boundaries included — along with the
-        // doc comment's claim that the 400-year-cycle estimate is off
-        // by at most one year index (which also keeps the unclamped
-        // table index in bounds).
-        let mut expected: u16 = EPOCH_YEAR;
-        let mut next_year_start: u32 = CUMULATIVE[1];
+    fn civil_matches_day_by_day_walk() {
+        // Exhaustive and independent of the algorithm under test: walk
+        // the whole range one day at a time with a naive
+        // (year, month, day) counter, and require `civil`, `to_ymd`,
+        // `year` and the `from_ymd` inverse to agree at every serial.
+        let (mut y, mut m, mut d) = (EPOCH_YEAR, 1u8, 1u8);
         for serial in 0..=MAX_SERIAL {
-            if serial == next_year_start {
-                expected += 1;
-                next_year_start = CUMULATIVE[(expected - EPOCH_YEAR) as usize + 1];
+            assert_eq!(civil(serial), (y, m, d), "serial {serial}");
+            let date = Date::from_serial(serial).unwrap();
+            let (year, month, day) = date.to_ymd();
+            assert_eq!((year.get(), month.get(), day), (y, m, d));
+            assert_eq!(date.year().get(), y);
+            assert_eq!(Date::from_ymd(y, month, d).unwrap(), date);
+
+            let month_len = Month::try_from_u8(m).unwrap().length(Year::new(y).unwrap());
+            d += 1;
+            if d > month_len {
+                d = 1;
+                m += 1;
+                if m > 12 {
+                    m = 1;
+                    y += 1;
+                }
             }
-            assert_eq!(
-                Date::from_serial(serial).unwrap().year().get(),
-                expected,
-                "serial {serial}",
-            );
-            let estimate = serial * 400 / 146_097;
-            assert!(
-                estimate.abs_diff(u32::from(expected - EPOCH_YEAR)) <= 1,
-                "serial {serial}: estimate {estimate} not within one of the true index",
-            );
         }
+        assert_eq!((y, m, d), (END_YEAR + 1, 1, 1));
     }
 
     #[test]
