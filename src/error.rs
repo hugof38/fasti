@@ -74,10 +74,8 @@ pub enum TimeError {
     #[error("schedule stub date is out of (effective, termination) range")]
     StubDateOutOfRange,
     /// [`Schedule`](crate::Schedule) dates were not strictly increasing:
-    /// a date list passed to `TryFrom` was out of order or repeated a
-    /// date, or a builder's business-day adjustment rolled the
-    /// effective date onto or past the termination date. Interior
-    /// dates that adjustment collapses are merged, not refused.
+    /// an out-of-order `TryFrom` list, or an effective date adjusted onto
+    /// or past termination.
     #[error("schedule dates are not strictly monotonic after adjustment")]
     ScheduleNotMonotonic,
 }

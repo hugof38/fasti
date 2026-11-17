@@ -528,18 +528,12 @@ impl<'cal> ScheduleBuilder<'cal> {
     /// [`TimeError::EffectiveAfterTermination`],
     /// [`TimeError::ZeroTenor`], or [`TimeError::StubDateOutOfRange`]
     /// for inconsistent inputs, and
-    /// [`TimeError::ScheduleNotMonotonic`] only when business-day
-    /// adjustment rolls the effective date onto or past the
-    /// termination date, leaving no period at all.
+    /// [`TimeError::ScheduleNotMonotonic`] if adjustment rolls the
+    /// effective date onto or past the termination date.
     ///
-    /// Generated dates that adjustment rolls onto the same business
-    /// day are merged rather than refused, as `QuantLib` does: the
-    /// effective and termination dates are always kept, and an
-    /// interior date is dropped when it lands on or before the date
-    /// kept before it, or on or after the termination date. The
-    /// periods either side of a dropped date join into one, so a
-    /// daily schedule rolled with `Following` has a single
-    /// Friday-to-Monday period over each weekend.
+    /// Dates that adjustment rolls onto one business day are merged, as
+    /// in `QuantLib`: a daily `Following` schedule has one Friday-to-Monday
+    /// period per weekend.
     ///
     /// ```
     /// use fasti::{Date, Frequency, Month, Period, ScheduleBuilder, calendars};
@@ -551,7 +545,7 @@ impl<'cal> ScheduleBuilder<'cal> {
     /// )
     /// .forwards()
     /// .build()?;
-    /// // Saturday and Sunday both roll to Monday 6th; one date remains.
+    /// // Saturday and Sunday both roll to Monday the 6th.
     /// let days: Vec<u8> = s.iter().map(|d| d.day()).collect();
     /// assert_eq!(days, [3, 6, 7, 8]);
     /// # Ok::<(), fasti::TimeError>(())
@@ -773,12 +767,8 @@ impl Generator {
     }
 }
 
-/// Turns a generated, unadjusted lattice into a schedule's adjusted
-/// dates: the business-day pass, the stub references that go with it,
-/// and the merge of whatever the pass collapsed. One step, owned here,
-/// because all three follow from the same two conventions — the last
-/// date uses the terminal one, every other date the interior one — and
-/// that asymmetry is what lets a date roll past an unadjusted maturity.
+/// Adjusts a generated lattice: the last date under the terminal
+/// convention, every other date and the front stub under the interior one.
 #[derive(Debug, Clone, Copy)]
 struct BdcAdjuster<'a> {
     calendar: Calendar<'a>,
@@ -799,30 +789,20 @@ impl<'a> BdcAdjuster<'a> {
         }
     }
 
-    /// Adjust `dates` and the stub references beside them, then merge
-    /// collisions. See [`merge_collisions`](Self::merge_collisions).
+    /// Adjust dates and stubs, then merge what adjustment collapsed.
     fn adjust_lattice(
         &self,
         dates: Vec<Date>,
         stubs: StubReferences,
     ) -> Result<(Vec<Date>, StubReferences), TimeError> {
-        // Stub boundaries roll under the convention that governs their
-        // side, matching the coupon date they stand in for.
+        let roll = |d: Option<Date>, c| d.map(|d| self.calendar.adjust(d, c)).transpose();
         let stubs = StubReferences {
-            front: stubs
-                .front
-                .map(|d| self.calendar.adjust(d, self.interior))
-                .transpose()?,
-            back: stubs
-                .back
-                .map(|d| self.calendar.adjust(d, self.terminal))
-                .transpose()?,
+            front: roll(stubs.front, self.interior)?,
+            back: roll(stubs.back, self.terminal)?,
         };
-        let adjusted = self.apply(dates)?;
-        Ok(Self::merge_collisions(adjusted, stubs))
+        Ok(Self::merge_collisions(self.apply(dates)?, stubs))
     }
 
-    /// The per-index business-day pass alone.
     fn apply(&self, dates: Vec<Date>) -> Result<Vec<Date>, TimeError> {
         let Some(last_idx) = dates.len().checked_sub(1) else {
             return Ok(dates);
@@ -839,60 +819,32 @@ impl<'a> BdcAdjuster<'a> {
         Ok(adjusted)
     }
 
-    /// Merge the periods that business-day adjustment has collapsed,
-    /// following `QuantLib`'s `Schedule`, which skips a generated date
-    /// that adjusts onto its predecessor and trims the ends the same way.
+    /// Drop the dates adjustment rolled onto their predecessor or onto or
+    /// past the last date, joining the periods around them (`QuantLib`
+    /// skips them the same way). Interior dates share one monotone
+    /// convention, so `dedup` catches every tie; only the terminal
+    /// convention can roll a date strictly past the end.
     ///
-    /// The first and last dates are kept. An interior date is dropped
-    /// when it is on or before the last date kept, or on or after the
-    /// last date. Interior dates share one monotone convention, so the
-    /// first case is always a tie; the second can be strict, because the
-    /// termination date may carry a different convention (an
-    /// `Unadjusted` Sunday maturity behind a penultimate date rolled to
-    /// Monday).
-    ///
-    /// Stub references follow the period they describe:
-    ///
-    /// - A date dropped next to the first date was a tie with it, so the
-    ///   first period had zero length. It is gone with its stub; the
-    ///   period that replaces it was regular.
-    /// - When the date before the last is dropped, the new last period
-    ///   starts one lattice step earlier, and the dropped date is
-    ///   exactly that step's boundary: it becomes the back reference, or
-    ///   no reference at all when it ties with the last date.
-    ///
-    /// A schedule whose ends cross is returned untouched for
-    /// [`Schedule::new`] to refuse.
+    /// A front stub whose period collapsed to nothing goes with it. When
+    /// dates past the end are dropped, the first of them is the lattice
+    /// step the new last period accrues against. Crossed ends are left
+    /// for [`Schedule::new`] to refuse.
     fn merge_collisions(dates: Vec<Date>, stubs: StubReferences) -> (Vec<Date>, StubReferences) {
         let (Some(&first), Some(&last)) = (dates.first(), dates.last()) else {
             return (dates, stubs);
         };
-        if dates.len() < 3 || first >= last {
+        if first >= last {
             return (dates, stubs);
         }
-        let mut kept = Vec::with_capacity(dates.len());
-        kept.push(first);
-        let mut front = stubs.front;
-        let mut tail_boundary = None;
-        for &d in &dates[1..dates.len() - 1] {
-            let previous = kept.last().copied().unwrap_or(first);
-            if d >= last {
-                // Monotone interior: the first such date is the boundary
-                // one step after the last date kept.
-                tail_boundary.get_or_insert(d);
-            } else if d <= previous {
-                if kept.len() == 1 {
-                    front = None;
-                }
-            } else {
-                kept.push(d);
-            }
-        }
-        kept.push(last);
-        let back = match tail_boundary {
-            Some(boundary) => (boundary != last).then_some(boundary),
+        let interior = &dates[1..dates.len() - 1];
+        let front = stubs.front.filter(|_| interior.first() != Some(&first));
+        let back = match interior.iter().find(|&&d| d >= last) {
+            Some(&step) => (step != last).then_some(step),
             None => stubs.back,
         };
+        let mut kept: Vec<Date> = dates.iter().copied().filter(|&d| d < last).collect();
+        kept.dedup();
+        kept.push(last);
         (kept, StubReferences { front, back })
     }
 }
@@ -1947,9 +1899,6 @@ mod tests {
     #[test]
     fn merge_collisions_drops_ties_and_dates_past_the_end() {
         let d = |day| ymd(2025, Month::Feb, day);
-        // Ties with the kept predecessor go; so does anything on or
-        // after the last date, whose first instance becomes the back
-        // reference boundary.
         let (dates, stubs) = BdcAdjuster::merge_collisions(
             vec![d(3), d(3), d(4), d(4), d(5), d(10), d(10), d(7)],
             StubReferences::default(),
@@ -1957,7 +1906,6 @@ mod tests {
         assert_eq!(dates, vec![d(3), d(4), d(5), d(7)]);
         assert_eq!(stubs.back, Some(d(10)));
         assert_eq!(stubs.front, None);
-        // Ends that cross are left for `Schedule::new` to refuse.
         let crossed = vec![d(7), d(6), d(5)];
         assert_eq!(
             BdcAdjuster::merge_collisions(crossed.clone(), StubReferences::default()).0,
@@ -1967,8 +1915,7 @@ mod tests {
 
     #[test]
     fn daily_schedule_is_the_business_days_between_its_ends() {
-        // Jan 2025 on US Settlement: New Year's Day (Wed), MLK Day
-        // (Mon 20th), four weekends; Feb 1 is a Saturday maturity.
+        // New Year's Day, MLK Day, four weekends; a Saturday maturity.
         let (effective, termination) = (ymd(2025, Month::Jan, 1), ymd(2025, Month::Feb, 1));
         for convention in ROLLING {
             for rule in [DateGenerationRule::Forward, DateGenerationRule::Backward] {
@@ -2004,9 +1951,7 @@ mod tests {
 
     #[test]
     fn penultimate_date_rolled_past_an_unadjusted_maturity_is_dropped() {
-        // Maturity Sunday Feb 2, kept unadjusted; Saturday rolls to
-        // Monday Feb 3, past it. The last period becomes Fri..Sun,
-        // accruing against the Fri..Mon lattice step it replaces.
+        // Saturday rolls to Monday, past the unadjusted Sunday maturity.
         let s = daily(ymd(2025, Month::Jan, 27), ymd(2025, Month::Feb, 2))
             .with_convention(BusinessDayConvention::Following)
             .with_termination_convention(BusinessDayConvention::Unadjusted)
@@ -2026,8 +1971,7 @@ mod tests {
 
     #[test]
     fn penultimate_date_tying_with_maturity_leaves_a_regular_last_period() {
-        // Maturity Sunday Feb 2 rolled Following to Monday Feb 3;
-        // Saturday Feb 1 rolls onto the same Monday.
+        // Saturday and the Sunday maturity both roll to Monday.
         let s = daily(ymd(2025, Month::Jan, 27), ymd(2025, Month::Feb, 2))
             .with_convention(BusinessDayConvention::Following)
             .with_termination_convention(BusinessDayConvention::Following)
@@ -2043,8 +1987,7 @@ mod tests {
 
     #[test]
     fn front_stub_that_adjusts_onto_the_effective_date_vanishes() {
-        // Effective Saturday Jan 4, first regular date Sunday Jan 5:
-        // both roll to Monday Jan 6, so the stub has no length left.
+        // Saturday effective and Sunday stub date both roll to Monday.
         let s = ScheduleBuilder::new(
             ymd(2025, Month::Jan, 4),
             ymd(2025, Month::Feb, 2),
@@ -2065,8 +2008,7 @@ mod tests {
 
     #[test]
     fn ends_that_meet_after_adjustment_are_still_refused() {
-        // Saturday effective rolls to Monday, past a Sunday maturity
-        // kept unadjusted: no period survives.
+        // Saturday effective rolls past the unadjusted Sunday maturity.
         let r = daily(ymd(2025, Month::Jan, 4), ymd(2025, Month::Jan, 5))
             .with_convention(BusinessDayConvention::Following)
             .with_termination_convention(BusinessDayConvention::Unadjusted)
@@ -2087,9 +2029,8 @@ mod tests {
     }
 
     proptest! {
-        /// Short tenors on a real calendar always build once the ends
-        /// survive adjustment, and every invariant a schedule promises
-        /// still holds after merging.
+        /// Short tenors build whenever the ends survive adjustment, and
+        /// merging keeps every schedule invariant.
         #[test]
         fn short_tenors_build_and_stay_valid(
             x in 1u32..(Date::MAX.serial() - 1_000),
