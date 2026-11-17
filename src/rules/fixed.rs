@@ -2,7 +2,7 @@
 //! year (e.g. July 4), optionally rolled to a nearby business day when
 //! the natural date lands on a weekend.
 
-use crate::{Date, Month, Weekday, Year, YearRange};
+use crate::{Date, Month, TimeError, Weekday, Year, YearRange};
 
 /// Which way a fixed-date holiday moves when its natural date falls on
 /// a Saturday or Sunday.
@@ -85,7 +85,7 @@ impl WeekendShift {
 /// use fasti::{Date, FixedDate, Month, WeekendShift};
 ///
 /// // US Independence Day: July 4 with the federal weekend shift.
-/// let rule = FixedDate::new(Month::Jul, 4).shift(WeekendShift::SatBackSunForward);
+/// let rule = FixedDate::literal(Month::Jul, 4).shift(WeekendShift::SatBackSunForward);
 /// assert!(rule.is_holiday(Date::from_ymd(2024, Month::Jul, 4)?));
 ///
 /// // 2026: July 4 is a Saturday. The rule still matches the natural
@@ -96,6 +96,7 @@ impl WeekendShift {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(try_from = "FixedDateData"))]
 pub struct FixedDate {
     month: Month,
     day: u8,
@@ -103,16 +104,79 @@ pub struct FixedDate {
     years: YearRange,
 }
 
+/// Serde shadow of [`FixedDate`], validated through
+/// [`FixedDate::new`] on the way in.
+#[cfg(feature = "serde")]
+#[derive(serde::Deserialize)]
+struct FixedDateData {
+    month: Month,
+    day: u8,
+    shift: WeekendShift,
+    years: YearRange,
+}
+
+#[cfg(feature = "serde")]
+impl TryFrom<FixedDateData> for FixedDate {
+    type Error = TimeError;
+
+    fn try_from(stored: FixedDateData) -> Result<Self, Self::Error> {
+        Ok(Self::new(stored.month, stored.day)?
+            .shift(stored.shift)
+            .years(stored.years))
+    }
+}
+
 impl FixedDate {
     /// Construct a fixed-date rule with no weekend shift, covering all
     /// supported years; refine with [`shift`](Self::shift) etc.
-    #[must_use]
-    pub const fn new(month: Month, day: u8) -> Self {
-        Self {
+    ///
+    /// Refuses a day that no year has in `month` with
+    /// [`TimeError::DayOutOfRange`]. Feb 29 is accepted and matches in
+    /// leap years only. For `const` calendars use
+    /// [`literal`](Self::literal).
+    ///
+    /// ```
+    /// use fasti::{FixedDate, Month, TimeError};
+    /// assert!(FixedDate::new(Month::Feb, 29).is_ok());
+    /// assert_eq!(FixedDate::new(Month::Apr, 31), Err(TimeError::DayOutOfRange));
+    /// assert_eq!(FixedDate::new(Month::Jan, 0), Err(TimeError::DayOutOfRange));
+    /// ```
+    pub const fn new(month: Month, day: u8) -> Result<Self, TimeError> {
+        // The longest the month ever is: a leap year's length.
+        let longest = month.length(Year::literal(2000));
+        if day == 0 || day > longest {
+            return Err(TimeError::DayOutOfRange);
+        }
+        Ok(Self {
             month,
             day,
             shift: WeekendShift::None,
             years: YearRange::ALWAYS,
+        })
+    }
+
+    /// As [`new`](Self::new), for `const` calendars: a day that no year
+    /// has in `month` is a compile error. Called at run time with one,
+    /// this panics.
+    ///
+    /// ```
+    /// use fasti::{FixedDate, Month};
+    /// const BASTILLE_DAY: FixedDate = FixedDate::literal(Month::Jul, 14);
+    /// assert_eq!(BASTILLE_DAY.day(), 14);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use fasti::{FixedDate, Month};
+    /// // Compile error: no year has a Feb 30.
+    /// const BAD: FixedDate = FixedDate::literal(Month::Feb, 30);
+    /// ```
+    #[must_use]
+    #[allow(clippy::panic)]
+    pub const fn literal(month: Month, day: u8) -> Self {
+        match Self::new(month, day) {
+            Ok(rule) => rule,
+            // Reached only at const-eval time for literals.
+            Err(_) => panic!("FixedDate::literal: day does not exist in that month"),
         }
     }
 
@@ -197,7 +261,7 @@ mod tests {
             WeekendShift::SunForward,
             WeekendShift::Forward,
         ] {
-            let rule = FixedDate::new(Month::Jul, 4).shift(shift);
+            let rule = FixedDate::literal(Month::Jul, 4).shift(shift);
             assert!(rule.is_holiday(ymd(2024, Month::Jul, 4)), "{shift:?}");
             // 2026-07-04 is a Saturday.
             assert!(rule.is_holiday(ymd(2026, Month::Jul, 4)), "{shift:?}");
@@ -208,14 +272,14 @@ mod tests {
 
     #[test]
     fn does_not_match_another_month_or_day() {
-        let rule = FixedDate::new(Month::Jul, 4);
+        let rule = FixedDate::literal(Month::Jul, 4);
         assert!(!rule.is_holiday(ymd(2024, Month::Aug, 4)));
         assert!(!rule.is_holiday(ymd(2024, Month::Jul, 5)));
     }
 
     #[test]
     fn leap_day_rule_matches_only_in_leap_years() {
-        let rule = FixedDate::new(Month::Feb, 29);
+        let rule = FixedDate::literal(Month::Feb, 29);
         assert!(rule.is_holiday(ymd(2024, Month::Feb, 29)));
         assert!(!rule.is_holiday(ymd(2025, Month::Feb, 28)));
     }
@@ -223,7 +287,7 @@ mod tests {
     #[test]
     fn year_range_filter() {
         // Juneteenth from 2021 onwards.
-        let rule = FixedDate::new(Month::Jun, 19).from_year(Year::new(2021).unwrap());
+        let rule = FixedDate::literal(Month::Jun, 19).from_year(Year::new(2021).unwrap());
         assert!(!rule.is_holiday(ymd(2020, Month::Jun, 19)));
         assert!(rule.is_holiday(ymd(2021, Month::Jun, 19)));
         assert!(rule.is_holiday(ymd(2030, Month::Jun, 19)));
@@ -235,14 +299,14 @@ mod tests {
 
     #[test]
     fn bounded_year_range() {
-        let rule = FixedDate::new(Month::Feb, 22).years(YearRange::literal_through(1970));
+        let rule = FixedDate::literal(Month::Feb, 22).years(YearRange::literal_through(1970));
         assert!(rule.is_holiday(ymd(1970, Month::Feb, 22)));
         assert!(!rule.is_holiday(ymd(1971, Month::Feb, 22)));
     }
 
     #[test]
     fn accessors_round_trip() {
-        let rule = FixedDate::new(Month::Dec, 25);
+        let rule = FixedDate::literal(Month::Dec, 25);
         assert_eq!(rule.month(), Month::Dec);
         assert_eq!(rule.day(), 25);
         assert_eq!(rule.weekend_shift(), WeekendShift::None);

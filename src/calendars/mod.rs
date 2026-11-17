@@ -29,11 +29,7 @@ pub use target::TARGET;
 /// assert!(calendars::WEEKENDS_ONLY.is_business_day(sat.add_days(2)?));
 /// # Ok::<(), fasti::TimeError>(())
 /// ```
-pub const WEEKENDS_ONLY: Calendar<'static> = Calendar {
-    name: "Weekends only",
-    weekend: Weekend::SAT_SUN,
-    rules: &[],
-};
+pub const WEEKENDS_ONLY: Calendar<'static> = Calendar::new("Weekends only", Weekend::SAT_SUN, &[]);
 
 /// No weekend, no holidays — every day is a business day, as in
 /// `QuantLib`'s `NullCalendar`. Adjustment is always the identity.
@@ -44,11 +40,7 @@ pub const WEEKENDS_ONLY: Calendar<'static> = Calendar {
 /// assert!(calendars::NULL_CALENDAR.is_business_day(sun));
 /// # Ok::<(), fasti::TimeError>(())
 /// ```
-pub const NULL_CALENDAR: Calendar<'static> = Calendar {
-    name: "Null calendar",
-    weekend: Weekend::NONE,
-    rules: &[],
-};
+pub const NULL_CALENDAR: Calendar<'static> = Calendar::new("Null calendar", Weekend::NONE, &[]);
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

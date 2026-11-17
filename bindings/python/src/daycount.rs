@@ -61,7 +61,12 @@ impl PyDayCount {
             Convention::Act360 => f(&Act360),
             Convention::Act365Fixed => f(&Act365Fixed),
             Convention::ActActISDA => f(&ActActISDA),
-            Convention::ActActICMA(frequency, None) => f(&ActActICMA::new(frequency.0)),
+            Convention::ActActICMA(_, None) => {
+                return Err(FastiError::new_err(
+                    "unbound ACT/ACT ICMA cannot tell which coupon period two dates \
+                     belong to; call bind(schedule), or year_fraction_with_reference",
+                ));
+            }
             Convention::ActActICMA(frequency, Some(schedule)) => f(&ActActICMA::new(frequency.0)
                 .bind(schedule.inner())
                 .or_raise()?),
@@ -144,6 +149,9 @@ impl PyDayCount {
 
     /// The convention's short name, as the crate spells it.
     fn name(&self) -> PyResult<&'static str> {
+        if let Convention::ActActICMA(frequency, None) = &self.0 {
+            return Ok(ActActICMA::new(frequency.0).name());
+        }
         self.apply(|dc| dc.name())
     }
 

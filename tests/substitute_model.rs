@@ -40,14 +40,14 @@ fn shift_of(rule: &Rule) -> WeekendShift {
 }
 
 fn natural(cal: &Calendar<'_>, d: Date) -> bool {
-    cal.rules.iter().any(|r| r.is_holiday(d))
+    cal.rules().iter().any(|r| r.is_holiday(d))
 }
 
 /// Any rule whose natural date is `d` and whose variant matches `pred`.
 fn mover(cal: &Calendar<'_>, d: Date, pred: impl Fn(WeekendShift) -> bool) -> bool {
     cal.is_weekend(d)
         && cal
-            .rules
+            .rules()
             .iter()
             .any(|r| pred(shift_of(r)) && r.is_holiday(d))
 }
@@ -135,7 +135,7 @@ fn assert_agrees(cal: &Calendar<'_>, lo: Date, hi: Date) {
             cal.is_holiday(d),
             expected.contains(&d),
             "{}: is_holiday({d}) disagrees with the reference model",
-            cal.name,
+            cal.name(),
         );
     }
 }
@@ -174,46 +174,44 @@ fn synthetic_chaining_calendars_agree_with_the_model() {
         (
             "UK Christmas/Boxing Day pair",
             &[
-                Rule::Fixed(FixedDate::new(Month::Dec, 25).shift(WeekendShift::Forward)),
-                Rule::Fixed(FixedDate::new(Month::Dec, 26).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::literal(Month::Dec, 25).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::literal(Month::Dec, 26).shift(WeekendShift::Forward)),
             ],
         ),
         (
             "chained pair straddling the year boundary",
             &[
-                Rule::Fixed(FixedDate::new(Month::Dec, 31).shift(WeekendShift::Forward)),
-                Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::literal(Month::Dec, 31).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::literal(Month::Jan, 1).shift(WeekendShift::Forward)),
             ],
         ),
         (
             "chain blocked by a natural Monday-capable holiday",
             &[
-                Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::Forward)),
-                Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::Forward)),
-                Rule::Fixed(FixedDate::new(Month::Jul, 6)),
+                Rule::Fixed(FixedDate::literal(Month::Jul, 4).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::literal(Month::Jul, 5).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::literal(Month::Jul, 6)),
             ],
         ),
         (
             "mixed variants sharing a weekend",
             &[
-                Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::Forward)),
-                Rule::Fixed(FixedDate::new(Month::Jul, 5).shift(WeekendShift::SunForward)),
+                Rule::Fixed(FixedDate::literal(Month::Jul, 4).shift(WeekendShift::Forward)),
+                Rule::Fixed(FixedDate::literal(Month::Jul, 5).shift(WeekendShift::SunForward)),
             ],
         ),
         (
             "single step next to a blocker, plus a backward step",
             &[
-                Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::SatBackSunForward)),
-                Rule::Fixed(FixedDate::new(Month::Jan, 2)),
+                Rule::Fixed(
+                    FixedDate::literal(Month::Jan, 1).shift(WeekendShift::SatBackSunForward),
+                ),
+                Rule::Fixed(FixedDate::literal(Month::Jan, 2)),
             ],
         ),
     ];
     for (name, rules) in shapes {
-        let cal = Calendar {
-            name,
-            weekend: Weekend::SAT_SUN,
-            rules,
-        };
+        let cal = Calendar::new(name, Weekend::SAT_SUN, rules);
         assert_agrees(&cal, Date::MIN, Date::MAX);
     }
 }
@@ -232,8 +230,11 @@ mod random_calendars {
     }
 
     fn any_fixed_rule() -> impl Strategy<Value = Rule> {
-        (1u8..=12, 1u8..=31, any_shift()).prop_map(|(m, d, shift)| {
-            Rule::Fixed(FixedDate::new(Month::try_from_u8(m).unwrap(), d).shift(shift))
+        // Days a month never has are refused at construction, so draw
+        // only days that exist in some year.
+        (1u8..=12, 1u8..=31, any_shift()).prop_filter_map("day exists", |(m, d, shift)| {
+            let rule = FixedDate::new(Month::try_from_u8(m).unwrap(), d).ok()?;
+            Some(Rule::Fixed(rule.shift(shift)))
         })
     }
 

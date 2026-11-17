@@ -33,12 +33,12 @@ use crate::{
 /// | Thanksgiving | 4th Thu of November |
 /// | Christmas | Dec 25 + SatBack/SunForward |
 /// | Special closings | Custom: 2018-12-5, 2012-10-30, 2004-06-11 |
-pub const GOVERNMENT_BOND: Calendar<'static> = Calendar {
-    name: "US government bond market",
-    weekend: Weekend::SAT_SUN,
-    rules: &[
+pub const GOVERNMENT_BOND: Calendar<'static> = Calendar::new(
+    "US government bond market",
+    Weekend::SAT_SUN,
+    &[
         // New Year's Day — SunForward only.
-        Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::SunForward)),
+        Rule::Fixed(FixedDate::literal(Month::Jan, 1).shift(WeekendShift::SunForward)),
         // MLK — 3rd Monday of January, since 1983.
         Rule::NthWeekday(
             NthWeekday::new(Ordinal::Third, Weekday::Mon, Month::Jan)
@@ -46,7 +46,7 @@ pub const GOVERNMENT_BOND: Calendar<'static> = Calendar {
         ),
         // Washington's Birthday (pre-1971): Feb 22 + full shift.
         Rule::Fixed(
-            FixedDate::new(Month::Feb, 22)
+            FixedDate::literal(Month::Feb, 22)
                 .shift(WeekendShift::SatBackSunForward)
                 .years(YearRange::literal_through(1970)),
         ),
@@ -61,7 +61,7 @@ pub const GOVERNMENT_BOND: Calendar<'static> = Calendar {
         Rule::Custom(good_friday_post_1996),
         // Memorial Day (pre-1971): May 30 + full shift.
         Rule::Fixed(
-            FixedDate::new(Month::May, 30)
+            FixedDate::literal(Month::May, 30)
                 .shift(WeekendShift::SatBackSunForward)
                 .years(YearRange::literal_through(1970)),
         ),
@@ -71,12 +71,12 @@ pub const GOVERNMENT_BOND: Calendar<'static> = Calendar {
         ),
         // Juneteenth (2022+): Jun 19 + full shift.
         Rule::Fixed(
-            FixedDate::new(Month::Jun, 19)
+            FixedDate::literal(Month::Jun, 19)
                 .shift(WeekendShift::SatBackSunForward)
                 .from_year(Year::literal(2022)),
         ),
         // Independence Day.
-        Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::SatBackSunForward)),
+        Rule::Fixed(FixedDate::literal(Month::Jul, 4).shift(WeekendShift::SatBackSunForward)),
         // Labor Day.
         Rule::NthWeekday(NthWeekday::new(Ordinal::First, Weekday::Mon, Month::Sep)),
         // Columbus Day (1971+).
@@ -86,7 +86,7 @@ pub const GOVERNMENT_BOND: Calendar<'static> = Calendar {
         ),
         // Veterans Day (pre-1971): Nov 11 + SunForward.
         Rule::Fixed(
-            FixedDate::new(Month::Nov, 11)
+            FixedDate::literal(Month::Nov, 11)
                 .shift(WeekendShift::SunForward)
                 .years(YearRange::literal_through(1970)),
         ),
@@ -97,20 +97,20 @@ pub const GOVERNMENT_BOND: Calendar<'static> = Calendar {
         ),
         // Veterans Day (1978+): Nov 11 + SunForward.
         Rule::Fixed(
-            FixedDate::new(Month::Nov, 11)
+            FixedDate::literal(Month::Nov, 11)
                 .shift(WeekendShift::SunForward)
                 .from_year(Year::literal(1978)),
         ),
         // Thanksgiving.
         Rule::NthWeekday(NthWeekday::new(Ordinal::Fourth, Weekday::Thu, Month::Nov)),
         // Christmas.
-        Rule::Fixed(FixedDate::new(Month::Dec, 25).shift(WeekendShift::SatBackSunForward)),
+        Rule::Fixed(FixedDate::literal(Month::Dec, 25).shift(WeekendShift::SatBackSunForward)),
         // Special historic closings.
         Rule::OneOff(OneOff::new(Date::literal(2004, Month::Jun, 11))), // Reagan funeral
         Rule::OneOff(OneOff::new(Date::literal(2012, Month::Oct, 30))), // Hurricane Sandy day 2
         Rule::OneOff(OneOff::new(Date::literal(2018, Month::Dec, 5))),  // Bush funeral
     ],
-};
+);
 
 /// Good Friday from 1996 onward, except when day-of-month ≤ 7 — the
 /// first-Friday NFP release makes it an early close, not a holiday

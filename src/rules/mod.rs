@@ -102,7 +102,7 @@ mod tests {
     #[test]
     fn rule_dispatches_to_each_variant() {
         let rules = [
-            Rule::Fixed(FixedDate::new(Month::Jul, 4)),
+            Rule::Fixed(FixedDate::literal(Month::Jul, 4)),
             Rule::NthWeekday(NthWeekday::new(Ordinal::Third, Weekday::Mon, Month::Jan)),
             Rule::LastWeekday(LastWeekday::new(Weekday::Mon, Month::May)),
             Rule::Easter(EasterOffset::easter_monday()),
@@ -134,12 +134,12 @@ mod tests {
     fn expansion_cases() -> [Rule; 12] {
         use crate::{FixedDate, LastWeekday, NthWeekday, OneOff, WeekendShift, YearRange};
         [
-            Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::SatBackSunForward)),
-            Rule::Fixed(FixedDate::new(Month::Feb, 29)),
+            Rule::Fixed(FixedDate::literal(Month::Jul, 4).shift(WeekendShift::SatBackSunForward)),
+            Rule::Fixed(FixedDate::literal(Month::Feb, 29)),
             Rule::Fixed(
-                FixedDate::new(Month::Jan, 1).years(YearRange::literal_between(1971, 1977)),
+                FixedDate::literal(Month::Jan, 1).years(YearRange::literal_between(1971, 1977)),
             ),
-            Rule::Fixed(FixedDate::new(Month::Dec, 31).shift(WeekendShift::Forward)),
+            Rule::Fixed(FixedDate::literal(Month::Dec, 31).shift(WeekendShift::Forward)),
             Rule::NthWeekday(NthWeekday::new(Ordinal::Third, Weekday::Mon, Month::Jan)),
             Rule::NthWeekday(NthWeekday::new(Ordinal::Fifth, Weekday::Sun, Month::Feb)),
             Rule::LastWeekday(LastWeekday::new(Weekday::Mon, Month::May)),
@@ -176,7 +176,7 @@ mod tests {
     }
 
     // Const-constructibility check; module scope for clippy::items_after_statements.
-    const JULY_FOURTH: Rule = Rule::Fixed(FixedDate::new(Month::Jul, 4));
+    const JULY_FOURTH: Rule = Rule::Fixed(FixedDate::literal(Month::Jul, 4));
     const MLK: Rule = Rule::NthWeekday(NthWeekday::new(Ordinal::Third, Weekday::Mon, Month::Jan));
     const GOOD_FRIDAY: Rule = Rule::Easter(EasterOffset::good_friday());
     const RULES: &[Rule] = &[JULY_FOURTH, MLK, GOOD_FRIDAY];

@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Fixes from an independent usability review. Several are breaking; the
+crate is pre-1.0 and they close silent-wrong-answer paths.
+
+### Breaking
+
+- `serde`: `Date` serializes as `"YYYY-MM-DD"` and `Period` as `"6M"`.
+  The 0.2 forms (an integer serial, `{"Months": 6}`) are still read.
+- `ActActICMA` no longer implements `DayCount`. Unbound, it returned one
+  full coupon for any two dates, even a day apart. Use
+  `ActActICMA::bind(&schedule)`, or `year_fraction_with_reference`.
+- `Calendar`'s fields are private. Build one with `const fn
+  Calendar::new(name, weekend, rules)` and read it with `name()`,
+  `weekend()`, `rules()`.
+- `FixedDate::new` returns `Result` and refuses a day no year has in the
+  month (Feb 30). `FixedDate::literal` is the `const` form.
+- `TimeError` is `#[non_exhaustive]`. `ActActICMA::bind` on a schedule
+  with fewer than two dates now returns `ScheduleTooShort`.
+
+### Fixed
+
+- Deserializing untrusted input can no longer panic the library.
+  `Date`, `Year`, `Weekend`, `YearRange`, `FixedDate`, `Fraction` and
+  the dates inside a `Schedule` are validated on the way in; before,
+  `{"date": 200000}` loaded and then panicked on first use.
+- `CalendarBuilder::union` evaluates each joined calendar on its own, as
+  QuantLib's `JointCalendar` does. Concatenating rule lists let one
+  calendar's holiday push another's weekend substitute onto a day
+  neither closes: UK joined with a Jan 2 holiday marked Jan 3, 2023 (and
+  42 other dates) as a holiday. Each member also keeps its own weekend.
+- The README Quickstart and `examples/treasury_schedule.rs` accrued a
+  Treasury on ACT/ACT ISDA over adjusted dates. They now use ACT/ACT
+  ICMA on the unadjusted grid with payment dates rolled separately, so
+  every coupon on $1mm at 4.25% is exactly $21,250.00. The example also
+  computes accrued interest for a T+1 settlement.
+- `BoundActActICMA` no longer turns an arithmetic failure into a silent
+  zero mid-sum; `try_year_fraction` reports it.
+- `Date::literal` and `Year::literal` documented a compile error even
+  at run time; the docs now say they panic outside a `const`.
+- `Date`'s `Display` honours width and alignment, so dates line up in
+  tables.
+
+### Added
+
+- `Calendar::add_business_days(date, n)` for settlement lags. This is
+  what QuantLib's `advance` does with a `Days` unit; fasti's `advance`
+  with `Period::Days` counts calendar days, as its docs now say loudly.
+- `Fraction::scale(amount, RoundingMode)` (amount × fraction, rounded
+  once, via `i128`), `Fraction::round`, `checked_mul_int`,
+  `From<i64>`, and `RoundingMode` (floor, ceiling, toward/away from
+  zero, half away from zero, half even).
+- `FromStr` for `Period` (`"6M"`), `Frequency`,
+  `BusinessDayConvention` and `DateGenerationRule`, ignoring case and
+  punctuation as the Python bindings do.
+- `BoundActActICMA::try_year_fraction`, `ActActICMA::name`,
+  `Calendar::is_joint`, `Weekend::bits` / `from_bits`,
+  `FixedDate::literal`, `TryFrom<u16> for Year`, and the `TimeError`
+  variants `ScheduleTooShort`, `InvalidPeriodString`, `UnknownName`,
+  `InvalidWeekendMask`.
+- Python: `Calendar.add_business_days` and
+  `Calendar.previous_business_day`. Unbound `DayCount.act_act_icma`
+  raises on `year_fraction` instead of returning a full coupon.
+
+### Deprecated
+
+- `Calendar::prev_business_day`, renamed `previous_business_day` to
+  match `Schedule::previous_date`. (Python keeps both names.)
+
 ## [py-0.2.1] - 2026-08-25
 
 `fasti-dates` only; the crate stays at 0.2.0. The two numbers are kept

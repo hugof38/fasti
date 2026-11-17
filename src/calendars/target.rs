@@ -28,28 +28,28 @@ use crate::{Calendar, Date, EasterOffset, FixedDate, Month, OneOff, Rule, Weeken
 /// assert!(calendars::TARGET.is_business_day(Date::from_ymd(2024, Month::Jul, 4)?));
 /// # Ok::<(), fasti::TimeError>(())
 /// ```
-pub const TARGET: Calendar<'static> = Calendar {
-    name: "TARGET",
-    weekend: Weekend::SAT_SUN,
-    rules: &[
+pub const TARGET: Calendar<'static> = Calendar::new(
+    "TARGET",
+    Weekend::SAT_SUN,
+    &[
         // New Year's Day.
-        Rule::Fixed(FixedDate::new(Month::Jan, 1)),
+        Rule::Fixed(FixedDate::literal(Month::Jan, 1)),
         // Good Friday.
         Rule::Easter(EasterOffset::good_friday().from_year(Year::literal(2000))),
         // Easter Monday.
         Rule::Easter(EasterOffset::easter_monday().from_year(Year::literal(2000))),
         // Labour Day.
-        Rule::Fixed(FixedDate::new(Month::May, 1).from_year(Year::literal(2000))),
+        Rule::Fixed(FixedDate::literal(Month::May, 1).from_year(Year::literal(2000))),
         // Christmas.
-        Rule::Fixed(FixedDate::new(Month::Dec, 25)),
+        Rule::Fixed(FixedDate::literal(Month::Dec, 25)),
         // Day of Goodwill.
-        Rule::Fixed(FixedDate::new(Month::Dec, 26).from_year(Year::literal(2000))),
+        Rule::Fixed(FixedDate::literal(Month::Dec, 26).from_year(Year::literal(2000))),
         // Euro changeover and millennium closings — three years only.
         Rule::OneOff(OneOff::new(Date::literal(1998, Month::Dec, 31))),
         Rule::OneOff(OneOff::new(Date::literal(1999, Month::Dec, 31))),
         Rule::OneOff(OneOff::new(Date::literal(2001, Month::Dec, 31))),
     ],
-};
+);
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

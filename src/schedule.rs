@@ -59,6 +59,23 @@ pub enum DateGenerationRule {
     Zero,
 }
 
+impl core::str::FromStr for DateGenerationRule {
+    type Err = TimeError;
+
+    /// Parse `"Forward"`, `"Backward"` or `"Zero"`, ignoring case and
+    /// punctuation.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        crate::names::lookup(
+            s,
+            &[
+                (Self::Forward, &["Forward"]),
+                (Self::Backward, &["Backward"]),
+                (Self::Zero, &["Zero"]),
+            ],
+        )
+    }
+}
+
 /// Parallel lists of business-day-adjusted dates in chronological
 /// order, each of length `periods + 1`: the coupon dates, and the
 /// reference dates of the regular coupon grid.
@@ -460,6 +477,9 @@ impl<'cal> ScheduleBuilder<'cal> {
     /// given [`Frequency`]. Convenient when the schedule's recurrence
     /// is more naturally expressed as "quarterly" / "semiannual" than
     /// as "every 3 months" / "every 6 months".
+    ///
+    /// The tenor passed to [`new`](Self::new) and this method set the
+    /// same thing; whichever is called last wins.
     #[must_use]
     pub fn with_frequency(mut self, frequency: Frequency) -> Self {
         self.tenor = Period::from(frequency);

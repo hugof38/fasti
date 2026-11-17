@@ -222,6 +222,21 @@ impl ActActICMA {
         self.frequency
     }
 
+    /// `"Actual/Actual (ICMA)"`, the name [`BoundActActICMA`] reports
+    /// through [`DayCount::name`].
+    ///
+    /// The unbound convention deliberately does not implement
+    /// [`DayCount`]: without a schedule it cannot know which coupon
+    /// period two dates belong to, and the only answer it could give
+    /// (one full coupon, whatever the dates) silently overstates
+    /// accrued interest. [`bind`](Self::bind) it to a schedule, or
+    /// pass the reference period to
+    /// [`year_fraction_with_reference`](Self::year_fraction_with_reference).
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        "Actual/Actual (ICMA)"
+    }
+
     /// The lattice implied by the frequency alone, used when no
     /// schedule names one. End-of-month snapping is assumed, matching
     /// how coupon grids are conventionally laid out.
@@ -238,7 +253,7 @@ impl ActActICMA {
     ///
     /// Bind an **unadjusted** schedule (ICMA's grid is the natural
     /// coupon grid). Errors with
-    /// [`TimeError::InvalidReferencePeriod`] if the schedule has
+    /// [`TimeError::ScheduleTooShort`] if the schedule has
     /// fewer than two dates.
     ///
     /// ```
@@ -267,7 +282,7 @@ impl ActActICMA {
     /// ```
     pub fn bind(self, schedule: &Schedule) -> Result<BoundActActICMA<'_>, TimeError> {
         if schedule.len() < 2 {
-            return Err(TimeError::InvalidReferencePeriod);
+            return Err(TimeError::ScheduleTooShort);
         }
         // A generated schedule names the lattice it was built on; a
         // convention whose frequency disagrees with that tenor would
@@ -365,21 +380,6 @@ impl ActActICMA {
     }
 }
 
-impl DayCount for ActActICMA {
-    fn name(&self) -> &'static str {
-        "Actual/Actual (ICMA)"
-    }
-
-    /// Unbound: the accrual counts as one full regular coupon period,
-    /// `±1 / frequency`. Use [`ActActICMA::bind`] for real schedules.
-    fn year_fraction(&self, start: Date, end: Date) -> Fraction {
-        if start == end {
-            return Fraction::ZERO;
-        }
-        Basis::of(u64::from(self.frequency.per_year())).fraction(if start < end { 1 } else { -1 })
-    }
-}
-
 /// [`ActActICMA`] bound to a coupon [`Schedule`] by
 /// [`ActActICMA::bind`]: the uniform two-date [`DayCount`] API with
 /// stub handling driven by the schedule's parallel reference dates,
@@ -408,15 +408,37 @@ impl BoundActActICMA<'_> {
         self.schedule
     }
 
+    /// The year fraction from `start` to `end`, signed by direction,
+    /// reporting arithmetic failure instead of hiding it.
+    ///
+    /// [`DayCount::year_fraction`] on this type returns the same value
+    /// but, as the trait is infallible, maps an error to zero. Errors
+    /// need a notional window outside the supported date range
+    /// ([`TimeError::DateOutOfRange`]) or a sum overflowing `i64/u64`
+    /// ([`TimeError::FractionOverflow`]); neither arises within one
+    /// schedule's grid in the supported range. Dates outside the
+    /// schedule's span accrue nothing — the schedule defines the
+    /// instrument's life.
+    pub fn try_year_fraction(&self, start: Date, end: Date) -> Result<Fraction, TimeError> {
+        match start.cmp(&end) {
+            core::cmp::Ordering::Equal => Ok(Fraction::ZERO),
+            core::cmp::Ordering::Less => self.ordered_year_fraction(&(start..end)),
+            core::cmp::Ordering::Greater => self
+                .ordered_year_fraction(&(end..start))?
+                .checked_neg()
+                .ok_or(TimeError::FractionOverflow),
+        }
+    }
+
     /// Sum of per-period accruals for an ordered span, clamped to the
     /// schedule's own span.
-    fn ordered_year_fraction(&self, span: &Range<Date>) -> Fraction {
+    fn ordered_year_fraction(&self, span: &Range<Date>) -> Result<Fraction, TimeError> {
         let (Some(&first), Some(&last)) = (self.schedule.first(), self.schedule.last()) else {
             // Unreachable: bind requires at least two dates.
-            return Fraction::ZERO;
+            return Ok(Fraction::ZERO);
         };
         let Some(covered) = span.intersect(&(first..last)) else {
-            return Fraction::ZERO;
+            return Ok(Fraction::ZERO);
         };
         let mut total = Fraction::ZERO;
         for (period, reference) in self
@@ -431,17 +453,13 @@ impl BoundActActICMA<'_> {
                 continue;
             };
             // A regular period is its own reference, so the grid walk
-            // is a single window; a stub extends it. Errors need a
-            // window outside the supported range, where ZERO is the
-            // documented fallback, and one schedule's denominators
-            // keep the running sum in range.
-            let accrued = self
-                .inner
-                .accrue(chunk, reference, self.lattice)
-                .unwrap_or_default();
-            total = total.checked_add(accrued).unwrap_or_default();
+            // is a single window; a stub extends it.
+            let accrued = self.inner.accrue(chunk, reference, self.lattice)?;
+            total = total
+                .checked_add(accrued)
+                .ok_or(TimeError::FractionOverflow)?;
         }
-        total
+        Ok(total)
     }
 }
 
@@ -450,17 +468,10 @@ impl DayCount for BoundActActICMA<'_> {
         "Actual/Actual (ICMA)"
     }
 
+    /// As [`try_year_fraction`](BoundActActICMA::try_year_fraction),
+    /// with an (unreachable in range) error mapped to zero.
     fn year_fraction(&self, start: Date, end: Date) -> Fraction {
-        if start == end {
-            return Fraction::ZERO;
-        }
-        if start < end {
-            self.ordered_year_fraction(&(start..end))
-        } else {
-            self.ordered_year_fraction(&(end..start))
-                .checked_neg()
-                .unwrap_or_default()
-        }
+        self.try_year_fraction(start, end).unwrap_or_default()
     }
 }
 
@@ -950,23 +961,6 @@ mod tests {
         assert_eq!(dc.frequency(), Frequency::Semiannual);
     }
 
-    /// Without reference dates a period counts as one full coupon:
-    /// exactly 1/frequency, signed by direction.
-    #[test]
-    fn act_act_icma_without_reference_is_one_over_frequency() {
-        let dc = ActActICMA::new(Frequency::Quarterly);
-        let a = ymd(2025, Month::Jan, 15);
-        let b = ymd(2025, Month::Apr, 15);
-        assert_eq!(dc.year_fraction(a, b).parts(), (1, 4));
-        assert_eq!(dc.year_fraction(b, a).parts(), (-1, 4));
-        assert!(dc.year_fraction(a, a).is_zero());
-        // Length doesn't matter without schedule context — QL parity.
-        assert_eq!(
-            dc.year_fraction(a, ymd(2025, Month::Jan, 16)).parts(),
-            (1, 4),
-        );
-    }
-
     /// ISDA "EMU and Market Conventions" / `QuantLib` test-suite anchor:
     /// a regular semiannual US Treasury period accrues exactly 1/2.
     #[test]
@@ -1320,7 +1314,7 @@ mod tests {
         let single = Schedule::try_from(alloc::vec![ymd(2003, Month::Jan, 15)]).unwrap();
         assert!(matches!(
             ActActICMA::new(Frequency::Semiannual).bind(&single),
-            Err(TimeError::InvalidReferencePeriod),
+            Err(TimeError::ScheduleTooShort),
         ));
     }
 
@@ -1613,7 +1607,6 @@ mod tests {
         ) {
             let a = Date::from_serial(x).unwrap();
             let b = Date::from_serial(y).unwrap();
-            let icma = ActActICMA::new(Frequency::Semiannual);
             let isda_30e = Thirty360ISDA::new(Date::MAX);
             for dc in [
                 &Act360 as &dyn DayCount,
@@ -1623,7 +1616,6 @@ mod tests {
                 &Thirty360European,
                 &isda_30e,
                 &ActActISDA,
-                &icma,
             ] {
                 let sum = dc.year_fraction(a, b)
                     .checked_add(dc.year_fraction(b, a))
@@ -1642,7 +1634,6 @@ mod tests {
         ) {
             let a = Date::from_serial(x).unwrap();
             let b = Date::from_serial(y).unwrap();
-            let icma = ActActICMA::new(Frequency::Quarterly);
             let isda_30e = Thirty360ISDA::new(Date::MAX);
             for dc in [
                 &Act360 as &dyn DayCount,
@@ -1652,7 +1643,6 @@ mod tests {
                 &Thirty360European,
                 &isda_30e,
                 &ActActISDA,
-                &icma,
             ] {
                 prop_assert_eq!(dc.day_count(a, b), -dc.day_count(b, a));
             }

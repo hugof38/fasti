@@ -102,7 +102,6 @@ impl fmt::Display for Frequency {
 /// assert_eq!(Period::Months(3) * 4, Period::Months(12));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Period {
     /// Calendar days.
     Days(i32),
@@ -281,6 +280,74 @@ impl Mul<Period> for i32 {
     /// Scalar multiplication with the scalar on the left.
     fn mul(self, period: Period) -> Self::Output {
         period * self
+    }
+}
+
+impl core::str::FromStr for Frequency {
+    type Err = TimeError;
+
+    /// Parse a frequency by name, ignoring case and punctuation:
+    /// `"Semiannual"`, `"semi-annual"`, `"quarterly"`. Also accepts
+    /// `"yearly"`, `"half-yearly"` and `"fortnightly"`.
+    ///
+    /// ```
+    /// use fasti::{Frequency, TimeError};
+    /// assert_eq!("semi-annual".parse(), Ok(Frequency::Semiannual));
+    /// assert_eq!("fortnightly".parse(), Ok(Frequency::Biweekly));
+    /// assert_eq!("hourly".parse::<Frequency>(), Err(TimeError::UnknownName));
+    /// ```
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        crate::names::lookup(
+            s,
+            &[
+                (Self::Annual, &["Annual", "Yearly"]),
+                (Self::Semiannual, &["Semiannual", "HalfYearly"]),
+                (Self::EveryFourthMonth, &["EveryFourthMonth"]),
+                (Self::Quarterly, &["Quarterly"]),
+                (Self::Bimonthly, &["Bimonthly"]),
+                (Self::Monthly, &["Monthly"]),
+                (Self::EveryFourthWeek, &["EveryFourthWeek"]),
+                (Self::Biweekly, &["Biweekly", "Fortnightly"]),
+                (Self::Weekly, &["Weekly"]),
+                (Self::Daily, &["Daily"]),
+            ],
+        )
+    }
+}
+
+impl core::str::FromStr for Period {
+    type Err = TimeError;
+
+    /// Parse the form [`Display`](fmt::Display) writes, as `QuantLib`
+    /// does: an optionally signed integer followed by `D`, `W`, `M` or
+    /// `Y`, in either case — `"6M"`, `"1y"`, `"-2W"`, `"0D"`.
+    ///
+    /// ```
+    /// use fasti::{Period, TimeError};
+    /// assert_eq!("6M".parse(), Ok(Period::Months(6)));
+    /// assert_eq!("-2w".parse(), Ok(Period::Weeks(-2)));
+    /// assert_eq!("6 months".parse::<Period>(), Err(TimeError::InvalidPeriodString));
+    /// ```
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let unit_at = s
+            .len()
+            .checked_sub(1)
+            .filter(|&i| s.is_char_boundary(i))
+            .ok_or(TimeError::InvalidPeriodString)?;
+        let (count, unit) = s.split_at(unit_at);
+        // `i32::from_str` accepts a leading `+`/`-` and nothing else
+        // that is not a digit.
+        if count.is_empty() || count.contains(char::is_whitespace) {
+            return Err(TimeError::InvalidPeriodString);
+        }
+        let n: i32 = count.parse().map_err(|_| TimeError::InvalidPeriodString)?;
+        match unit.as_bytes() {
+            [b'D' | b'd'] => Ok(Self::Days(n)),
+            [b'W' | b'w'] => Ok(Self::Weeks(n)),
+            [b'M' | b'm'] => Ok(Self::Months(n)),
+            [b'Y' | b'y'] => Ok(Self::Years(n)),
+            _ => Err(TimeError::InvalidPeriodString),
+        }
     }
 }
 
