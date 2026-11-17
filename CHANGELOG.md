@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `Date::to_ymd`, `Date::year` and the accessors built on them decompose
+  a serial with the Neri–Schneider algorithm — branch-free, table-free
+  integer arithmetic — instead of a year-table search. Results are
+  identical (checked exhaustively against a day-by-day walk of the whole
+  supported range); calendar evaluation is roughly 25–35% faster, e.g. a
+  century of `is_business_day` on NYSE drops from ~4.9 ms to ~3.3 ms on
+  the benchmark machine. No API change, no new dependency.
+
 ## [py-0.2.1] - 2026-08-25
 
 `fasti-dates` only; the crate stays at 0.2.0. The two numbers are kept

@@ -42,8 +42,8 @@ same capability surface with:
   dependent sees it.
 
 The constraints do not cost speed. Walking `is_business_day` across a
-century of dates (36 525 days) takes ~1.7 ms for `us::SETTLEMENT` and
-~4.2 ms for NYSE, the heaviest built-in — roughly 48 ns and 116 ns per
+century of dates (36 525 days) takes ~1.4 ms for `us::SETTLEMENT` and
+~3.3 ms for NYSE, the heaviest built-in — roughly 40 ns and 90 ns per
 day, evaluated from const rules with no allocation and no runtime
 setup. Reproduce with `cargo bench --bench calendar`; those are
 medians from one 2.1 GHz Xeon core, so read them as an order of
