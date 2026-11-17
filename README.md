@@ -51,7 +51,7 @@ magnitude, not a promise.
 
 ## Comparison
 
-**Dates and times** — [`chrono`], [`jiff`], [`time`]. Use them. fasti
+**Dates and times** — [`jiff`], [`time`], and the now-unmaintained [`chrono`]. Use them. fasti
 is not competing: it has no clock, no time zones, and no resolution
 finer than a day. None of the three knows what a business day is.
 
@@ -126,10 +126,10 @@ Dates cross as `datetime.date` and year fractions come back as
 fasti = "0.2"
 
 # Optional features (both off by default):
-#   serde  — Serialize/Deserialize on the data types
-#   chrono — From/TryFrom conversions with chrono::NaiveDate,
-#            chrono::Weekday, and chrono::Month
-fasti = { version = "0.2", features = ["serde", "chrono"] }
+#   serde — Serialize/Deserialize on the data types
+#   jiff  — From/TryFrom conversions with jiff::civil::Date and
+#           jiff::civil::Weekday
+fasti = { version = "0.2", features = ["serde", "jiff"] }
 ```
 
 The minimum supported Rust version is **1.90** (edition 2024). CI
@@ -137,11 +137,13 @@ tests against it on every change, using a committed lockfile pinned to
 a dependency resolution known to build there. Raising the MSRV is a
 minor-version bump, never a patch.
 
-Coming from `chrono`? Enable the `chrono` feature and convert at the
-boundary — `let d: fasti::Date = naive_date.try_into()?;` (fallible
-only because fasti's supported range is 1901..=2199) and
-`chrono::NaiveDate::from(d)` on the way out. fasti never uses chrono
-internally.
+Using `jiff`? Enable the `jiff` feature and convert at the boundary —
+`let d: fasti::Date = civil_date.try_into()?;` (fallible only because
+fasti's supported range is 1901..=2199) and `jiff::civil::Date::from(d)`
+on the way out. fasti never uses jiff internally. (Earlier versions
+offered a `chrono` feature instead; chrono is now unmaintained,
+[RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543).
+From chrono, go through year, month and day: `Date::from_ymd`.)
 
 ## Quickstart
 

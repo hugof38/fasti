@@ -383,19 +383,16 @@ fn serde_round_trips_through_the_public_types() -> Result<(), TimeError> {
     Ok(())
 }
 
-#[cfg(feature = "chrono")]
+#[cfg(feature = "jiff")]
 #[test]
-fn chrono_conversions_work_at_the_boundary() -> Result<(), TimeError> {
-    use chrono::NaiveDate;
-
-    let naive = NaiveDate::from_ymd_opt(2026, 7, 4).expect("a real date");
-    let date: Date = naive.try_into()?;
+fn jiff_conversions_work_at_the_boundary() -> Result<(), TimeError> {
+    let civil = jiff::civil::date(2026, 7, 4);
+    let date: Date = civil.try_into()?;
     assert_eq!(date, Date::from_ymd(2026, Month::Jul, 4)?);
-    assert_eq!(NaiveDate::from(date), naive);
+    assert_eq!(jiff::civil::Date::from(date), civil);
 
     // Outside fasti's supported range the conversion fails rather than
     // saturating or panicking.
-    let too_early = NaiveDate::from_ymd_opt(1899, 1, 1).expect("a real date");
-    assert!(Date::try_from(too_early).is_err());
+    assert!(Date::try_from(jiff::civil::date(1899, 1, 1)).is_err());
     Ok(())
 }
