@@ -59,10 +59,6 @@ pub enum TimeError {
     /// `i64`/`u64` representation (or `i64` when scaling an amount).
     #[error("fraction arithmetic overflowed")]
     FractionOverflow,
-    /// A day count was bound to a [`Schedule`](crate::Schedule) whose
-    /// tenor disagrees with the convention's coupon frequency.
-    #[error("day-count frequency does not match the schedule's tenor")]
-    FrequencyMismatch,
     /// A [`Schedule`](crate::Schedule) builder was given an
     /// effective date at or after the termination date.
     #[error("schedule effective date must be strictly before termination")]
@@ -81,10 +77,6 @@ pub enum TimeError {
     /// or past termination.
     #[error("schedule dates are not strictly monotonic after adjustment")]
     ScheduleNotMonotonic,
-    /// A day count was bound to a [`Schedule`](crate::Schedule) with
-    /// fewer than two dates, so it has no period to accrue over.
-    #[error("schedule has fewer than two dates")]
-    ScheduleTooShort,
     /// A [`Period`](crate::Period) string was not a signed integer
     /// followed by one of `D`, `W`, `M`, `Y` (for example `6M`).
     #[error("period string is not in `<n><D|W|M|Y>` form, e.g. `6M`")]
@@ -99,4 +91,9 @@ pub enum TimeError {
     /// weekdays.
     #[error("weekend mask must only use the low seven bits")]
     InvalidWeekendMask,
+    /// ACT/ACT ICMA measured a period of a schedule built from a bare
+    /// date list, which names no coupon frequency. Build the schedule
+    /// with one (`TryFrom<(Vec<Date>, Frequency)>`).
+    #[error("ACT/ACT ICMA needs the schedule's coupon frequency")]
+    MissingFrequency,
 }

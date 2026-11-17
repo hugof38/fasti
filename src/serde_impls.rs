@@ -72,12 +72,14 @@ mod tests {
         // Each of these used to deserialize, then panic on first use.
         assert!(parse::<Year>("5000").is_err());
         assert!(parse::<Weekend>("255").is_err());
-        assert!(
-            parse::<Schedule>(
-                r#"{"dates":["2026-01-01","2200-01-01"],"stubs":{"front":null,"back":null},"generation":null}"#
-            )
-            .is_err()
-        );
+        let schedule = |dates: &str, payments: &str| {
+            parse::<Schedule>(&alloc::format!(
+                r#"{{"unadjusted":{dates},"dates":{dates},"payments":{payments},"stubs":{{"front":null,"back":null}},"generation":null}}"#
+            ))
+        };
+        assert!(schedule(r#"["2026-01-01","2026-07-01"]"#, r#"["2026-07-01"]"#).is_ok());
+        assert!(schedule(r#"["2026-01-01","2200-01-01"]"#, r#"["2200-01-01"]"#).is_err());
+        assert!(schedule(r#"["2026-01-01","2026-07-01"]"#, "[]").is_err());
         assert!(parse::<YearRange>(r#"{"from":2020,"to":1990}"#).is_err());
         assert!(
             parse::<FixedDate>(

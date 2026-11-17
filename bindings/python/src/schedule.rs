@@ -1,7 +1,7 @@
 //! [`Schedule`] — the coupon dates, and the regular grid they accrue
 //! against.
 
-use fasti::{Date, DateGenerationRule, Schedule, ScheduleBuilder};
+use fasti::{AccrualPeriod, Date, DateGenerationRule, Schedule, ScheduleBuilder};
 use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
 use pyo3::types::{PyIterator, PyList, PySlice, PyTuple, PyTupleMethods};
@@ -13,7 +13,8 @@ use crate::convert::{
 use crate::period::{PeriodArg, PyPeriod};
 use crate::rule::py_date_repr;
 use crate::vocab::{
-    ConventionArg, GenerationRuleArg, PyBusinessDayConvention, PyDateGenerationRule,
+    ConventionArg, FrequencyArg, GenerationRuleArg, PyBusinessDayConvention, PyDateGenerationRule,
+    PyFrequency,
 };
 
 /// What a schedule was generated from. A generated schedule cannot be
@@ -21,7 +22,7 @@ use crate::vocab::{
 /// them — so pickling replays the generation instead.
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum Origin {
-    Dates(Vec<Date>),
+    Dates(Vec<Date>, Option<PyFrequency>),
     Generated(Box<Generated>),
 }
 
@@ -37,6 +38,9 @@ struct Generated {
     end_of_month: bool,
     first_date: Option<Date>,
     next_to_last_date: Option<Date>,
+    payment_convention: PyBusinessDayConvention,
+    payment_calendar: Option<CalendarSpec>,
+    payment_lag: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -54,15 +58,28 @@ struct ScheduleSpec {
 impl ScheduleSpec {
     fn build(&self) -> PyResult<Schedule> {
         let mut schedule = match &self.origin {
-            Origin::Dates(dates) => Schedule::try_from(dates.clone()).or_raise()?,
+            Origin::Dates(dates, None) => Schedule::try_from(dates.clone()).or_raise()?,
+            Origin::Dates(dates, Some(frequency)) => {
+                Schedule::try_from((dates.clone(), frequency.0)).or_raise()?
+            }
             Origin::Generated(g) => {
                 let calendar = g.calendar.build()?;
+                let payment_calendar = g
+                    .payment_calendar
+                    .as_ref()
+                    .map(CalendarSpec::build)
+                    .transpose()?;
                 let mut builder =
                     ScheduleBuilder::new(g.effective, g.termination, g.tenor.0, calendar.view())
                         .with_convention(g.convention.0)
                         .with_termination_convention(g.termination_convention.0)
                         .with_rule(g.rule.0)
-                        .with_end_of_month(g.end_of_month);
+                        .with_end_of_month(g.end_of_month)
+                        .with_payment_convention(g.payment_convention.0)
+                        .with_payment_lag(g.payment_lag);
+                if let Some(payment_calendar) = &payment_calendar {
+                    builder = builder.with_payment_calendar(payment_calendar.view());
+                }
                 if let Some(date) = g.first_date {
                     builder = builder.with_first_date(date);
                 }
@@ -164,10 +181,10 @@ impl PyGeneration {
 /// A schedule indexes and iterates as its coupon dates.
 ///
 /// Generating one takes the effective and termination dates, a tenor
-/// and a calendar. The rest are keyword arguments whose defaults are
-/// the crate's: `ModifiedFollowing` for interior dates, `Unadjusted`
-/// for the termination date, `Backward` generation, no end-of-month
-/// snapping, and no stub anchors.
+/// and a calendar. The rest are keyword arguments whose defaults are the
+/// crate's bond conventions: unadjusted accrual dates, `Backward`
+/// generation, end of month on, no stub anchors, and payment on the
+/// accrual end rolled `Following` on the same calendar with no lag.
 ///
 /// >>> import datetime
 /// >>> from fasti import Schedule
@@ -243,6 +260,7 @@ impl PySchedule {
         effective, termination, tenor, calendar, *,
         convention=None, termination_convention=None, rule=None,
         end_of_month=true, first_date=None, next_to_last_date=None,
+        payment_convention=None, payment_calendar=None, payment_lag=0,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -256,6 +274,9 @@ impl PySchedule {
         end_of_month: bool,
         first_date: Option<DateArg>,
         next_to_last_date: Option<DateArg>,
+        payment_convention: Option<ConventionArg>,
+        payment_calendar: Option<CalendarArg>,
+        payment_lag: u32,
     ) -> PyResult<Self> {
         Self::from_spec(ScheduleSpec {
             origin: Origin::Generated(Box::new(Generated {
@@ -275,46 +296,83 @@ impl PySchedule {
                 end_of_month,
                 first_date: first_date.map(|d| d.0),
                 next_to_last_date: next_to_last_date.map(|d| d.0),
+                payment_convention: payment_convention.map_or(
+                    PyBusinessDayConvention(fasti::BusinessDayConvention::Following),
+                    |c| c.0,
+                ),
+                payment_calendar: payment_calendar.map(|c| c.0),
+                payment_lag,
             })),
             ops: Vec::new(),
         })
     }
 
     /// A schedule from a date list — a term sheet's dates, taken as
-    /// given. It names no tenor, so it is entirely regular.
+    /// given, each period paid on its end. Pass the coupon `frequency`
+    /// for ACT/ACT ICMA to be able to measure it.
     #[staticmethod]
-    fn from_dates(dates: Vec<DateArg>) -> PyResult<Self> {
+    #[pyo3(signature = (dates, frequency=None))]
+    fn from_dates(dates: Vec<DateArg>, frequency: Option<FrequencyArg>) -> PyResult<Self> {
         Self::from_spec(ScheduleSpec {
-            origin: Origin::Dates(dates.into_iter().map(|d| d.0).collect()),
+            origin: Origin::Dates(
+                dates.into_iter().map(|d| d.0).collect(),
+                frequency.map(|f| f.0),
+            ),
             ops: Vec::new(),
         })
     }
 
-    /// The adjusted coupon dates.
+    /// The accrual dates.
     fn dates<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyAny>>> {
         dates_out(py, self.schedule.dates())
     }
 
-    /// The accrual periods, as half-open `(start, end)` pairs.
-    fn periods<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<Vec<(Bound<'py, PyAny>, Bound<'py, PyAny>)>> {
+    /// The unadjusted lattice dates, one per accrual date.
+    fn unadjusted_dates<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyAny>>> {
+        dates_out(py, self.schedule.unadjusted_dates())
+    }
+
+    /// The payment dates, one per period.
+    fn payment_dates<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyAny>>> {
+        let dates: Vec<Date> = self
+            .schedule
+            .payment_dates()
+            .iter()
+            .map(|p| p.date())
+            .collect();
+        dates_out(py, &dates)
+    }
+
+    /// The accrual periods.
+    fn periods(&self) -> Vec<PyAccrualPeriod> {
+        self.schedule.periods().map(PyAccrualPeriod).collect()
+    }
+
+    /// Each accrual period with its payment date.
+    fn coupons(&self) -> Vec<PyCoupon> {
         self.schedule
-            .periods()
-            .map(|p| period_out(py, &p))
+            .coupons()
+            .map(|c| PyCoupon {
+                accrual: PyAccrualPeriod(c.accrual),
+                payment: c.payment.date(),
+            })
             .collect()
     }
 
-    /// The reference period each coupon period accrues against.
-    fn reference_periods<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<Vec<(Bound<'py, PyAny>, Bound<'py, PyAny>)>> {
-        self.schedule
-            .reference_periods()
-            .map(|p| period_out(py, &p))
-            .collect()
+    /// The period whose interest is running on `date` (start included,
+    /// end excluded), or None outside the schedule. On a coupon date it
+    /// is the period starting there, so accrued interest is zero.
+    ///
+    /// >>> import datetime
+    /// >>> from fasti import DayCount, Schedule
+    /// >>> from fasti.calendars import us
+    /// >>> s = Schedule(datetime.date(2025, 1, 15), datetime.date(2030, 1, 15),
+    /// ...              "semiannual", us.GOVERNMENT_BOND)
+    /// >>> settle = datetime.date(2026, 11, 18)
+    /// >>> DayCount.act_act_icma().accrual_fraction(s.accrual_period(settle).until(settle))
+    /// Fraction(63, 184)
+    fn accrual_period(&self, date: DateArg) -> Option<PyAccrualPeriod> {
+        self.schedule.accrual_period(date.0).map(PyAccrualPeriod)
     }
 
     /// The lattice this schedule was generated on, or None when it was
@@ -445,7 +503,11 @@ impl PySchedule {
 
     fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<ReplayReduction<'py>> {
         let origin: Bound<'py, PyAny> = match &self.spec.origin {
-            Origin::Dates(dates) => PyList::new(py, dates_out(py, dates)?)?.into_any(),
+            Origin::Dates(dates, frequency) => (
+                PyList::new(py, dates_out(py, dates)?)?,
+                frequency.map(|f| f.canonical()),
+            )
+                .into_bound_py_any(py)?,
             Origin::Generated(g) => (
                 date_out(py, g.effective)?,
                 date_out(py, g.termination)?,
@@ -457,6 +519,14 @@ impl PySchedule {
                 g.end_of_month,
                 g.first_date.map(|d| date_out(py, d)).transpose()?,
                 g.next_to_last_date.map(|d| date_out(py, d)).transpose()?,
+                (
+                    g.payment_convention.canonical(),
+                    g.payment_calendar
+                        .as_ref()
+                        .map(CalendarSpec::py_calendar)
+                        .transpose()?,
+                    g.payment_lag,
+                ),
             )
                 .into_bound_py_any(py)?,
         };
@@ -491,11 +561,12 @@ pub fn _rebuild_schedule(
     origin: &Bound<'_, PyAny>,
     ops: &Bound<'_, PyList>,
 ) -> PyResult<PySchedule> {
-    let mut schedule = if let Ok(dates) = origin.extract::<Vec<DateArg>>() {
-        PySchedule::from_dates(dates)?
+    let g = origin.cast::<PyTuple>()?;
+    let at = |i: usize| g.get_item(i);
+    let mut schedule = if g.len() == 2 {
+        PySchedule::from_dates(at(0)?.extract()?, at(1)?.extract()?)?
     } else {
-        let g = origin.cast::<PyTuple>()?;
-        let at = |i: usize| g.get_item(i);
+        let payment = at(10)?.cast_into::<PyTuple>()?;
         PySchedule::new(
             at(0)?.extract()?,
             at(1)?.extract()?,
@@ -507,6 +578,9 @@ pub fn _rebuild_schedule(
             at(7)?.extract()?,
             at(8)?.extract()?,
             at(9)?.extract()?,
+            Some(payment.get_item(0)?.extract()?),
+            payment.get_item(1)?.extract()?,
+            payment.get_item(2)?.extract()?,
         )?
     };
     for entry in ops.iter() {
@@ -521,13 +595,100 @@ pub fn _rebuild_schedule(
     Ok(schedule)
 }
 
-/// A `Schedule` argument, cloned so a bound day count owns its grid.
-pub struct ScheduleArg(pub PySchedule);
+/// One accrual period of a schedule: interest runs from `start` to
+/// `end` (excluded). `unadjusted` and `reference` are the lattice dates
+/// and regular coupon period that ACT/ACT ICMA counts on.
+///
+/// >>> import datetime
+/// >>> from fasti import Schedule
+/// >>> from fasti.calendars import NULL_CALENDAR
+/// >>> stub = Schedule(datetime.date(2002, 8, 15), datetime.date(2004, 1, 15),
+/// ...                 "semiannual", NULL_CALENDAR).periods()[0]
+/// >>> stub.reference
+/// (datetime.date(2002, 7, 15), datetime.date(2003, 1, 15))
+#[pyclass(
+    frozen,
+    eq,
+    skip_from_py_object,
+    module = "fasti",
+    name = "AccrualPeriod"
+)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyAccrualPeriod(pub AccrualPeriod);
 
-impl<'py> FromPyObject<'_, 'py> for ScheduleArg {
-    type Error = PyErr;
+#[pymethods]
+impl PyAccrualPeriod {
+    /// The first day of accrual.
+    #[getter]
+    fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        date_out(py, self.0.start())
+    }
 
-    fn extract(obj: pyo3::Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
-        Ok(Self(obj.cast::<PySchedule>()?.get().clone()))
+    /// The day accrual stops, excluded.
+    #[getter]
+    fn end<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        date_out(py, self.0.end())
+    }
+
+    /// The period on the unadjusted lattice, as `(start, end)`.
+    #[getter]
+    fn unadjusted<'py>(&self, py: Python<'py>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
+        period_out(py, &self.0.unadjusted())
+    }
+
+    /// The regular coupon period it accrues against, as `(start, end)`.
+    #[getter]
+    fn reference<'py>(&self, py: Python<'py>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
+        period_out(py, &self.0.reference())
+    }
+
+    /// True if `date` is in `start <= date < end`.
+    fn __contains__(&self, date: DateArg) -> bool {
+        self.0.contains(date.0)
+    }
+
+    /// The period cut short at `date`, for accrued interest; None unless
+    /// `start <= date <= end`.
+    fn until(&self, date: DateArg) -> Option<Self> {
+        self.0.until(date.0).map(Self)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "AccrualPeriod({} .. {})",
+            py_date_repr(self.0.start()),
+            py_date_repr(self.0.end())
+        )
+    }
+}
+
+/// A coupon: its accrual period and its payment date.
+#[pyclass(frozen, eq, skip_from_py_object, module = "fasti", name = "Coupon")]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyCoupon {
+    accrual: PyAccrualPeriod,
+    payment: Date,
+}
+
+#[pymethods]
+impl PyCoupon {
+    /// The period interest accrues over.
+    #[getter]
+    fn accrual(&self) -> PyAccrualPeriod {
+        self.accrual.clone()
+    }
+
+    /// When the coupon is paid.
+    #[getter]
+    fn payment<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        date_out(py, self.payment)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Coupon({}, payment={})",
+            self.accrual.__repr__(),
+            py_date_repr(self.payment)
+        )
     }
 }

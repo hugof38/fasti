@@ -16,8 +16,9 @@
 //! | step by a tenor (3M, 1Y), then roll | [`Calendar::advance`] |
 //! | describe a market fasti does not ship | [`Calendar::new`] (as a `const`) or [`CalendarBuilder`], from [`Rule`]s |
 //! | trade across two markets | [`CalendarBuilder::union`] |
-//! | lay out coupon dates | [`ScheduleBuilder`] → [`Schedule`] |
-//! | count accrual | a [`DayCount`]; for ACT/ACT ICMA, [`ActActICMA::bind`] to an unadjusted schedule |
+//! | lay out coupons | [`ScheduleBuilder`] (bond conventions by default) → [`Schedule::coupons`] |
+//! | count accrual | an [`AccrualDayCount`] on an [`AccrualPeriod`]: any [`DayCount`], or [`ActActICMA`] |
+//! | accrued interest at settlement | [`Schedule::accrual_period`], then [`AccrualPeriod::until`] |
 //! | turn an accrual into money | [`Fraction::scale`] with a [`RoundingMode`] |
 //!
 //! Errors are one enum, [`TimeError`]: fallible operations return it
@@ -37,6 +38,7 @@
 
 extern crate alloc;
 
+mod accrual;
 mod business_day;
 mod calendar;
 pub mod calendars;
@@ -56,12 +58,13 @@ mod serde_impls;
 mod weekend;
 mod year_range;
 
+pub use accrual::{AccrualDayCount, AccrualPeriod, Coupon, PaymentDate};
 pub use business_day::BusinessDayConvention;
 pub use calendar::{Calendar, CalendarBuilder};
 pub use date::{Date, DateRange, Month, Ordinal, Weekday, Year};
 pub use daycount::{
-    Act360, Act365Fixed, ActActICMA, ActActISDA, BoundActActICMA, DayCount, Thirty360Bond,
-    Thirty360European, Thirty360ISDA, Thirty360US,
+    Act360, Act365Fixed, ActActICMA, ActActISDA, DayCount, Thirty360Bond, Thirty360European,
+    Thirty360ISDA, Thirty360US,
 };
 pub use easter::{EasterMethod, easter_monday, easter_sunday};
 pub use error::TimeError;

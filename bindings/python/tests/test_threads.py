@@ -70,8 +70,8 @@ def test_the_whole_surface_survives_concurrent_use() -> None:
                     "semiannual",
                     calendar,
                 )
-                bound = DayCount.act_act_icma("semiannual").bind(schedule)
-                assert bound.year_fraction(schedule[0], schedule[1]) > 0
+                icma = DayCount.act_act_icma()
+                assert icma.accrual_fraction(schedule.periods()[0]) > 0
                 assert pickle.loads(pickle.dumps(derived)) == derived
                 assert pickle.loads(pickle.dumps(schedule)) == schedule
                 assert hash(calendar) == hash(pickle.loads(pickle.dumps(calendar)))

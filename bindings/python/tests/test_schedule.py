@@ -23,20 +23,28 @@ def unadjusted(effective: str, termination: str, tenor: object, **kwargs: object
     )
 
 
+def ranges(schedule: Schedule) -> list[tuple[datetime.date, datetime.date]]:
+    return [(p.start, p.end) for p in schedule.periods()]
+
+
+def refs(schedule: Schedule) -> list[tuple[datetime.date, datetime.date]]:
+    return [p.reference for p in schedule.periods()]
+
+
 def test_a_regular_schedule_has_no_stub_and_its_own_grid() -> None:
     schedule = unadjusted("2025-01-15", "2026-01-15", "quarterly")
     assert schedule.dates() == days(
         "2025-01-15", "2025-04-15", "2025-07-15", "2025-10-15", "2026-01-15"
     )
-    assert schedule.periods() == list(zip(schedule.dates(), schedule.dates()[1:]))
-    assert schedule.reference_periods() == schedule.periods()
+    assert ranges(schedule) == list(zip(schedule.dates(), schedule.dates()[1:]))
+    assert refs(schedule) == ranges(schedule)
 
 
 def test_backward_generation_puts_the_stub_at_the_front() -> None:
     schedule = unadjusted("2025-02-01", "2026-01-15", "semiannual", rule="backward")
     assert schedule.dates() == days("2025-02-01", "2025-07-15", "2026-01-15")
     # The stub accrues against the notional coupon one tenor back.
-    assert schedule.reference_periods()[0] == (
+    assert refs(schedule)[0] == (
         datetime.date(2025, 1, 15),
         datetime.date(2025, 7, 15),
     )
@@ -45,7 +53,7 @@ def test_backward_generation_puts_the_stub_at_the_front() -> None:
 def test_forward_generation_puts_the_stub_at_the_back() -> None:
     schedule = unadjusted("2025-01-15", "2026-02-01", "semiannual", rule="forward")
     assert schedule.dates() == days("2025-01-15", "2025-07-15", "2026-01-15", "2026-02-01")
-    assert schedule.reference_periods()[-1] == (
+    assert refs(schedule)[-1] == (
         datetime.date(2026, 1, 15),
         datetime.date(2026, 7, 15),
     )
@@ -112,7 +120,7 @@ def test_a_schedule_from_a_bare_date_list_names_no_lattice() -> None:
     schedule = Schedule.from_dates(dates)
     assert schedule.dates() == dates
     assert schedule.generation() is None
-    assert schedule.reference_periods() == schedule.periods()
+    assert refs(schedule) == ranges(schedule)
 
 
 def test_a_schedule_indexes_iterates_and_measures() -> None:
@@ -141,7 +149,7 @@ def test_slicing_keeps_the_lattice_and_drops_the_stub_it_cuts_off() -> None:
     assert tail.dates() == days("2025-07-15", "2026-01-15")
     assert tail.generation() == schedule.generation()
     # The front stub went with the dates it belonged to.
-    assert tail.reference_periods() == tail.periods()
+    assert refs(tail) == ranges(tail)
     head = schedule.until(datetime.date(2025, 7, 15))
     assert head.dates() == days("2025-02-01", "2025-07-15")
 
@@ -194,3 +202,38 @@ def test_a_schedule_is_iterable_in_both_directions() -> None:
     assert next(iter(schedule)) == schedule[0]
     assert schedule[0] in schedule
     assert datetime.date(2025, 1, 16) not in schedule
+
+
+def test_coupons_pay_on_the_next_business_day_after_accrual() -> None:
+    schedule = Schedule(
+        datetime.date(2025, 1, 15), datetime.date(2030, 1, 15), "semiannual", us.GOVERNMENT_BOND
+    )
+    coupon = schedule.coupons()[5]
+    assert (coupon.accrual.start, coupon.accrual.end) == (
+        datetime.date(2027, 7, 15),
+        datetime.date(2028, 1, 15),
+    )
+    assert coupon.payment == datetime.date(2028, 1, 18)
+    assert len(schedule.payment_dates()) == len(schedule.periods())
+    assert schedule.unadjusted_dates() == schedule.dates()
+    lagged = Schedule(
+        datetime.date(2025, 1, 15),
+        datetime.date(2030, 1, 15),
+        "semiannual",
+        us.GOVERNMENT_BOND,
+        payment_convention="preceding",
+        payment_lag=1,
+    )
+    assert lagged.payment_dates()[5] == datetime.date(2028, 1, 18)  # Fri 14th + 1 (MLK) = Tue
+    assert lagged.dates() == schedule.dates()
+
+
+def test_accrual_period_is_half_open() -> None:
+    schedule = unadjusted("2025-01-15", "2026-01-15", "semiannual")
+    coupon_date = datetime.date(2025, 7, 15)
+    period = schedule.accrual_period(coupon_date)
+    assert period is not None and period.start == coupon_date
+    assert coupon_date in period
+    truncated = period.until(coupon_date)
+    assert truncated is not None and truncated.start == truncated.end
+    assert schedule.accrual_period(datetime.date(2024, 1, 1)) is None
