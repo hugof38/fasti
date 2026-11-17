@@ -37,9 +37,10 @@ wildcards = "deny"
 # not a convenience choice. Anything that pulls in a clock, a timezone
 # database, or another date library contradicts the crate's premise.
 deny = [
-    { name = "chrono", wrappers = ["fasti"] },
+    { name = "chrono" },
     { name = "time" },
-    { name = "jiff" },
+    # Only as the optional `jiff` interop feature's dependency.
+    { name = "jiff", wrappers = ["fasti"] },
 ]
 
 [sources]
