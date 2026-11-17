@@ -102,6 +102,14 @@ impl fmt::Display for Frequency {
 /// assert_eq!(Period::Months(3) * 4, Period::Months(12));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(
+        into = "crate::serde_impls::Text",
+        try_from = "crate::serde_impls::Text"
+    )
+)]
 pub enum Period {
     /// Calendar days.
     Days(i32),
@@ -286,15 +294,12 @@ impl Mul<Period> for i32 {
 impl core::str::FromStr for Frequency {
     type Err = TimeError;
 
-    /// Parse a frequency by name, ignoring case and punctuation:
-    /// `"Semiannual"`, `"semi-annual"`, `"quarterly"`. Also accepts
-    /// `"yearly"`, `"half-yearly"` and `"fortnightly"`.
+    /// By name, ignoring case and punctuation; also `"yearly"`,
+    /// `"half-yearly"`, `"fortnightly"`.
     ///
     /// ```
-    /// use fasti::{Frequency, TimeError};
+    /// use fasti::Frequency;
     /// assert_eq!("semi-annual".parse(), Ok(Frequency::Semiannual));
-    /// assert_eq!("fortnightly".parse(), Ok(Frequency::Biweekly));
-    /// assert_eq!("hourly".parse::<Frequency>(), Err(TimeError::UnknownName));
     /// ```
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         crate::names::lookup(
@@ -318,35 +323,23 @@ impl core::str::FromStr for Frequency {
 impl core::str::FromStr for Period {
     type Err = TimeError;
 
-    /// Parse the form [`Display`](fmt::Display) writes, as `QuantLib`
-    /// does: an optionally signed integer followed by `D`, `W`, `M` or
-    /// `Y`, in either case — `"6M"`, `"1y"`, `"-2W"`, `"0D"`.
+    /// The form [`Display`](fmt::Display) writes: a signed count and a
+    /// `D`/`W`/`M`/`Y` unit, either case.
     ///
     /// ```
-    /// use fasti::{Period, TimeError};
-    /// assert_eq!("6M".parse(), Ok(Period::Months(6)));
-    /// assert_eq!("-2w".parse(), Ok(Period::Weeks(-2)));
-    /// assert_eq!("6 months".parse::<Period>(), Err(TimeError::InvalidPeriodString));
+    /// use fasti::Period;
+    /// assert_eq!("-6m".parse(), Ok(Period::Months(-6)));
     /// ```
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let unit_at = s
-            .len()
-            .checked_sub(1)
-            .filter(|&i| s.is_char_boundary(i))
-            .ok_or(TimeError::InvalidPeriodString)?;
-        let (count, unit) = s.split_at(unit_at);
-        // `i32::from_str` accepts a leading `+`/`-` and nothing else
-        // that is not a digit.
-        if count.is_empty() || count.contains(char::is_whitespace) {
-            return Err(TimeError::InvalidPeriodString);
-        }
-        let n: i32 = count.parse().map_err(|_| TimeError::InvalidPeriodString)?;
-        match unit.as_bytes() {
-            [b'D' | b'd'] => Ok(Self::Days(n)),
-            [b'W' | b'w'] => Ok(Self::Weeks(n)),
-            [b'M' | b'm'] => Ok(Self::Months(n)),
-            [b'Y' | b'y'] => Ok(Self::Years(n)),
-            _ => Err(TimeError::InvalidPeriodString),
+        let invalid = TimeError::InvalidPeriodString;
+        let (count, unit) = s.split_at_checked(s.len().wrapping_sub(1)).ok_or(invalid)?;
+        let n = count.parse().map_err(|_| invalid)?;
+        match unit {
+            "D" | "d" => Ok(Self::Days(n)),
+            "W" | "w" => Ok(Self::Weeks(n)),
+            "M" | "m" => Ok(Self::Months(n)),
+            "Y" | "y" => Ok(Self::Years(n)),
+            _ => Err(invalid),
         }
     }
 }

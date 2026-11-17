@@ -68,6 +68,7 @@ impl Rule {
     ///
     /// [`Rule::Custom`] is a predicate, not a description: it answers
     /// [`None`] here and callers must probe it per date instead.
+    #[inline]
     pub(crate) const fn natural_date_in(&self, year: Year) -> Option<Date> {
         match self {
             Self::Fixed(r) => r.natural_date_in(year),

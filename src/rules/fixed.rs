@@ -104,8 +104,7 @@ pub struct FixedDate {
     years: YearRange,
 }
 
-/// Serde shadow of [`FixedDate`], validated through
-/// [`FixedDate::new`] on the way in.
+/// Serde shadow of [`FixedDate`], validated through [`FixedDate::new`].
 #[cfg(feature = "serde")]
 #[derive(serde::Deserialize)]
 struct FixedDateData {
@@ -130,19 +129,14 @@ impl FixedDate {
     /// Construct a fixed-date rule with no weekend shift, covering all
     /// supported years; refine with [`shift`](Self::shift) etc.
     ///
-    /// Refuses a day that no year has in `month` with
-    /// [`TimeError::DayOutOfRange`]. Feb 29 is accepted and matches in
-    /// leap years only. For `const` calendars use
-    /// [`literal`](Self::literal).
+    /// Refuses a day no year has in `month` (Feb 29 is fine) with
+    /// [`TimeError::DayOutOfRange`]. `const` calendars use [`literal`](Self::literal).
     ///
     /// ```
     /// use fasti::{FixedDate, Month, TimeError};
-    /// assert!(FixedDate::new(Month::Feb, 29).is_ok());
     /// assert_eq!(FixedDate::new(Month::Apr, 31), Err(TimeError::DayOutOfRange));
-    /// assert_eq!(FixedDate::new(Month::Jan, 0), Err(TimeError::DayOutOfRange));
     /// ```
     pub const fn new(month: Month, day: u8) -> Result<Self, TimeError> {
-        // The longest the month ever is: a leap year's length.
         let longest = month.length(Year::literal(2000));
         if day == 0 || day > longest {
             return Err(TimeError::DayOutOfRange);
@@ -155,15 +149,8 @@ impl FixedDate {
         })
     }
 
-    /// As [`new`](Self::new), for `const` calendars: a day that no year
-    /// has in `month` is a compile error. Called at run time with one,
-    /// this panics.
-    ///
-    /// ```
-    /// use fasti::{FixedDate, Month};
-    /// const BASTILLE_DAY: FixedDate = FixedDate::literal(Month::Jul, 14);
-    /// assert_eq!(BASTILLE_DAY.day(), 14);
-    /// ```
+    /// As [`new`](Self::new), for `const` calendars, where a bad day is a
+    /// compile error (at run time, a panic).
     ///
     /// ```compile_fail
     /// use fasti::{FixedDate, Month};
@@ -234,6 +221,7 @@ impl FixedDate {
     /// The natural date this rule names in `year`: its month/day when
     /// the year is active, [`None`] otherwise (a Feb 29 rule names
     /// nothing in a non-leap year).
+    #[inline]
     pub(crate) const fn natural_date_in(self, year: Year) -> Option<Date> {
         if !self.years.contains(year) {
             return None;

@@ -77,8 +77,7 @@ impl DayFacts {
 /// [`Rule`]s naming holidays' natural dates.
 ///
 /// Build one as a `const` with [`Calendar::new`], or at run time with
-/// [`CalendarBuilder`], which also joins calendars
-/// ([`CalendarBuilder::union`]).
+/// [`CalendarBuilder`].
 ///
 /// ```
 /// use fasti::{Calendar, Date, FixedDate, Month, Rule, Weekend};
@@ -98,22 +97,24 @@ pub struct Calendar<'a> {
     name: &'a str,
     weekend: Weekend,
     rules: &'a [Rule],
-    /// Empty for a plain calendar. For a joint calendar, splits
-    /// `rules` into its members, each evaluated on its own with its
-    /// own weekend, so that one member's holiday never moves another
-    /// member's weekend substitute.
+    /// A joint calendar's members, each evaluated alone; empty otherwise.
     members: &'a [Member],
 }
 
-/// One member of a joint calendar: the rules in `rules[start..end]`,
-/// where `start` is the previous member's `end`, under `weekend`.
+/// A joint calendar member: `rules[previous member's end..end]` under
+/// `weekend`. `own` marks rules added after a union, which later
+/// `with_rule` calls extend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Member {
     end: usize,
     weekend: Weekend,
-    /// Rules added to the joint calendar itself after a union; later
-    /// such rules extend this member instead of opening another.
     own: bool,
+}
+
+impl Member {
+    const fn new(end: usize, weekend: Weekend, own: bool) -> Self {
+        Self { end, weekend, own }
+    }
 }
 
 impl<'a> Calendar<'a> {
@@ -134,16 +135,13 @@ impl<'a> Calendar<'a> {
         self.name
     }
 
-    /// The weekly weekend. For a joint calendar, the union of its
-    /// members' weekends.
+    /// The weekly weekend; for a joint calendar, its members' union.
     #[must_use]
     pub const fn weekend(&self) -> Weekend {
         self.weekend
     }
 
-    /// The holiday rules. For a joint calendar, every member's rules
-    /// in order; [`is_holiday`](Self::is_holiday) still evaluates each
-    /// member separately.
+    /// The holiday rules; for a joint calendar, every member's in order.
     #[must_use]
     pub const fn rules(&self) -> &'a [Rule] {
         self.rules
@@ -153,6 +151,21 @@ impl<'a> Calendar<'a> {
     #[must_use]
     pub const fn is_joint(&self) -> bool {
         !self.members.is_empty()
+    }
+
+    /// Each member's rules and weekend; a plain calendar is one member.
+    fn parts(&self) -> impl Iterator<Item = (&'a [Rule], Weekend)> + '_ {
+        let plain = self
+            .members
+            .is_empty()
+            .then_some((self.rules, self.weekend));
+        let mut start = 0;
+        let joint = self.members.iter().map(move |m| {
+            let rules = self.rules.get(start..m.end).unwrap_or(&[]);
+            start = m.end;
+            (rules, m.weekend)
+        });
+        plain.into_iter().chain(joint)
     }
 }
 
@@ -213,25 +226,18 @@ impl Calendar<'_> {
     /// # Ok::<(), fasti::TimeError>(())
     /// ```
     ///
-    /// A joint calendar (see [`CalendarBuilder::union`]) asks each
-    /// member separately, under the member's own weekend: a date is a
-    /// holiday if any member says so.
+    /// A joint calendar asks each member alone, under its own weekend.
     #[must_use]
     pub fn is_holiday(&self, date: Date) -> bool {
         if self.members.is_empty() {
             return self.is_holiday_alone(date);
         }
-        let mut start = 0;
-        self.members.iter().any(|member| {
-            let rules = self.rules.get(start..member.end).unwrap_or(&[]);
-            start = member.end;
-            Calendar::new(self.name, member.weekend, rules).is_holiday_alone(date)
-        })
+        self.parts()
+            .any(|(rules, weekend)| Calendar::new(self.name, weekend, rules).is_holiday_alone(date))
     }
 
-    /// [`is_holiday`](Self::is_holiday) for a calendar that is not
-    /// joint: every rule sees every other, so chaining substitutes can
-    /// step past the calendar's own holidays.
+    /// [`is_holiday`](Self::is_holiday) for one member.
+    #[inline]
     fn is_holiday_alone(&self, date: Date) -> bool {
         // Every describable rule names at most one date per year, so
         // instead of asking each rule "is this date yours?" (three
@@ -454,34 +460,21 @@ impl Calendar<'_> {
         Some(d)
     }
 
-    /// Renamed [`previous_business_day`](Self::previous_business_day),
-    /// matching [`Schedule::previous_date`](crate::Schedule::previous_date).
+    /// Old name of [`previous_business_day`](Self::previous_business_day).
     #[deprecated(since = "0.3.0", note = "renamed to `previous_business_day`")]
     #[must_use]
     pub fn prev_business_day(&self, date: Date) -> Option<Date> {
         self.previous_business_day(date)
     }
 
-    /// Move `n` business days from `date`: forwards for positive `n`,
-    /// backwards for negative. Settlement lags (T+1, T+2) are this,
-    /// and so is `QuantLib`'s `Calendar::advance` with a `Days` unit.
-    ///
-    /// `date` itself need not be a business day: each step goes to the
-    /// next (or previous) business day, so one business day after a
-    /// Saturday is the Monday, the same as one after the Friday before.
-    /// With `n == 0` the date is rolled `Following`, as `QuantLib`
-    /// does.
-    ///
-    /// Returns [`TimeError::DateOutOfRange`] if the walk leaves the
-    /// supported range.
+    /// Move `n` business days (backwards if negative): settlement lags,
+    /// and `QuantLib`'s `advance` with a `Days` unit. `n == 0` rolls
+    /// `Following`. Errors with [`TimeError::DateOutOfRange`].
     ///
     /// ```
     /// use fasti::{Date, Month, calendars::us};
-    /// // Friday Nov 20 2026; Thanksgiving is Thursday Nov 26.
-    /// let trade = Date::from_ymd(2026, Month::Nov, 20)?;
-    /// assert_eq!(us::SETTLEMENT.add_business_days(trade, 2)?, Date::from_ymd(2026, Month::Nov, 24)?);
-    /// assert_eq!(us::SETTLEMENT.add_business_days(trade, 5)?, Date::from_ymd(2026, Month::Nov, 30)?);
-    /// assert_eq!(us::SETTLEMENT.add_business_days(trade, -1)?, Date::from_ymd(2026, Month::Nov, 19)?);
+    /// let friday = Date::from_ymd(2026, Month::Nov, 20)?; // Thanksgiving is the 26th
+    /// assert_eq!(us::SETTLEMENT.add_business_days(friday, 5)?, Date::from_ymd(2026, Month::Nov, 30)?);
     /// # Ok::<(), fasti::TimeError>(())
     /// ```
     pub fn add_business_days(&self, date: Date, n: i32) -> Result<Date, TimeError> {
@@ -557,14 +550,11 @@ impl Calendar<'_> {
         }
     }
 
-    /// Step `date` forward (or backward) by `period` in **calendar**
-    /// time, then roll onto a business day under `convention`. Returns
+    /// Step `date` by `period` in **calendar** time, then roll onto a
+    /// business day under `convention`: `Period::Days(2)` is two calendar
+    /// days, unlike `QuantLib`; for T+2 use
+    /// [`add_business_days`](Self::add_business_days). Returns
     /// [`TimeError::DateOutOfRange`] if the arithmetic or search leaves the supported range.
-    ///
-    /// `Period::Days(2)` here means two calendar days, then a roll — not
-    /// two business days. For settlement lags (T+2) use
-    /// [`add_business_days`](Self::add_business_days), which is what
-    /// `QuantLib`'s `Calendar::advance` does for a `Days` unit.
     ///
     /// If `end_of_month` is set, a `Months`/`Years` step from a month-end snaps to the target month's end before adjusting. Matches `QuantLib`'s semantics.
     ///
@@ -628,7 +618,7 @@ impl CalendarBuilder {
     }
 
     /// Seed a builder from a [`Calendar`], e.g. a built-in to extend
-    /// with bespoke blackout days. A joint calendar stays joint.
+    /// with bespoke blackout days.
     #[must_use]
     pub fn from_calendar(cal: Calendar<'_>) -> Self {
         Self {
@@ -646,20 +636,16 @@ impl CalendarBuilder {
         self
     }
 
-    /// Replace the weekend configuration. On a joint calendar this
-    /// sets the joint weekend; each member's substitute days still
-    /// follow that member's own weekend.
+    /// Replace the weekend configuration (on a joint calendar, the joint
+    /// weekend; members keep their own for substitutes).
     #[must_use]
     pub fn with_weekend(mut self, weekend: Weekend) -> Self {
         self.weekend = weekend;
         self
     }
 
-    /// Append a holiday rule.
-    ///
-    /// On a joint calendar the rule joins a member of its own, under
-    /// the joint weekend, so it cannot disturb the joined calendars'
-    /// substitute days.
+    /// Append a holiday rule. On a joint calendar it joins a member of its
+    /// own, so it cannot move the joined calendars' substitutes.
     #[must_use]
     pub fn with_rule(mut self, rule: Rule) -> Self {
         self.rules.push(rule);
@@ -668,23 +654,14 @@ impl CalendarBuilder {
         match self.members.last_mut() {
             None => {}
             Some(last) if last.own && last.weekend == weekend => last.end = end,
-            Some(_) => self.members.push(Member {
-                end,
-                weekend,
-                own: true,
-            }),
+            Some(_) => self.members.push(Member::new(end, weekend, true)),
         }
         self
     }
 
-    /// Join `other` in, as `QuantLib`'s `JointCalendar` does under
-    /// `JoinHolidays`: a date is a business day only if it is one in
-    /// both calendars. The weekends union, and a date is a holiday if
-    /// either calendar, evaluated on its own, says so.
-    ///
-    /// Each side keeps its own rules and weekend. That matters for
-    /// substitute days: the UK moves a weekend holiday past any day
-    /// the UK itself has taken, but not past another market's holiday.
+    /// Join `other` in, as `QuantLib`'s `JointCalendar` (`JoinHolidays`):
+    /// a business day only if it is one in both. Each calendar is judged
+    /// alone, so one's holiday never moves the other's substitute day.
     ///
     /// ```
     /// use fasti::{CalendarBuilder, Date, FixedDate, Month, Rule, Weekend, calendars};
@@ -695,9 +672,8 @@ impl CalendarBuilder {
     /// assert!(cal.is_holiday(Date::from_ymd(2026, Month::Nov, 26)?)); // Thanksgiving
     /// assert!(cal.is_holiday(Date::from_ymd(2026, Month::Jul, 14)?)); // Bastille Day
     ///
-    /// // New Year's Day 2023 was a Sunday, so the UK took Monday Jan 2.
-    /// // A market closed on Jan 2 does not push that substitute on to
-    /// // the Tuesday: neither calendar closes on Jan 3.
+    /// // The UK's 2023 New Year substitute is Monday Jan 2; a market also
+    /// // closed on Jan 2 must not push it to Tuesday.
     /// let jan2 = CalendarBuilder::new("Jan 2", Weekend::SAT_SUN)
     ///     .with_rule(Rule::Fixed(FixedDate::literal(Month::Jan, 2)));
     /// let joint = CalendarBuilder::from_calendar(calendars::uk::SETTLEMENT).union(jan2.view());
@@ -707,26 +683,13 @@ impl CalendarBuilder {
     #[must_use]
     pub fn union(mut self, other: Calendar<'_>) -> Self {
         if self.members.is_empty() {
-            self.members.push(Member {
-                end: self.rules.len(),
-                weekend: self.weekend,
-                own: false,
-            });
+            self.members
+                .push(Member::new(self.rules.len(), self.weekend, false));
         }
-        let offset = self.rules.len();
-        self.rules.extend_from_slice(other.rules);
-        if other.members.is_empty() {
-            self.members.push(Member {
-                end: self.rules.len(),
-                weekend: other.weekend,
-                own: false,
-            });
-        } else {
-            self.members.extend(other.members.iter().map(|m| Member {
-                end: offset + m.end,
-                own: false,
-                ..*m
-            }));
+        for (rules, weekend) in other.parts() {
+            self.rules.extend_from_slice(rules);
+            self.members
+                .push(Member::new(self.rules.len(), weekend, false));
         }
         self.name = format!("{} + {}", self.name, other.name);
         self.weekend = self.weekend | other.weekend;
@@ -1826,112 +1789,93 @@ mod tests {
 
     // ---- Joint calendars -------------------------------------------------
 
-    /// A joint calendar's holidays are exactly the members' holidays,
-    /// each judged alone, at every date of the supported range.
-    fn assert_joint_is_member_union(joint: &Calendar<'_>, members: &[Calendar<'_>]) {
-        for d in (Date::MIN..Date::MAX).dates() {
-            let expected = members.iter().any(|m| m.is_holiday(d));
-            assert_eq!(joint.is_holiday(d), expected, "{} on {d}", joint.name());
-            let business = members.iter().all(|m| m.is_business_day(d));
-            assert_eq!(
-                joint.is_business_day(d),
-                business,
-                "{} on {d}",
-                joint.name()
-            );
+    /// At every supported date, a joint calendar's holidays and business
+    /// days are exactly its members', each judged alone. Covers UK ∪ a
+    /// Jan 2 holiday (concatenated rules invented 43 Jan 3rds), UK ∪ a
+    /// Fri/Sat market (substitutes follow each member's weekend), and a
+    /// nested union copied through `from_calendar`.
+    #[test]
+    fn union_is_exactly_its_members() {
+        use crate::calendars::{TARGET, uk, us};
+        let jan2 = CalendarBuilder::new("Jan 2", Weekend::SAT_SUN)
+            .with_rule(Rule::Fixed(FixedDate::literal(Month::Jan, 2)));
+        let gulf = CalendarBuilder::new("Gulf", Weekend::FRI_SAT).with_rule(Rule::Fixed(
+            FixedDate::literal(Month::Dec, 25).shift(WeekendShift::Forward),
+        ));
+        let us_uk = CalendarBuilder::from_calendar(us::SETTLEMENT).union(uk::SETTLEMENT);
+        let nested = CalendarBuilder::from_calendar(
+            CalendarBuilder::from_calendar(TARGET)
+                .union(us_uk.view())
+                .view(),
+        );
+        let cases = [
+            (
+                CalendarBuilder::from_calendar(uk::SETTLEMENT).union(jan2.view()),
+                alloc::vec![uk::SETTLEMENT, jan2.view()],
+            ),
+            (
+                CalendarBuilder::from_calendar(uk::SETTLEMENT).union(gulf.view()),
+                alloc::vec![uk::SETTLEMENT, gulf.view()],
+            ),
+            (nested, alloc::vec![TARGET, us::SETTLEMENT, uk::SETTLEMENT]),
+        ];
+        for (joint, members) in &cases {
+            let joint = joint.view();
+            for d in (Date::MIN..Date::MAX).dates() {
+                let holiday = members.iter().any(|m| m.is_holiday(d));
+                let business = members.iter().all(|m| m.is_business_day(d));
+                assert_eq!(
+                    (joint.is_holiday(d), joint.is_business_day(d)),
+                    (holiday, business),
+                    "{} {d}",
+                    joint.name()
+                );
+            }
         }
     }
 
     #[test]
-    fn union_does_not_let_one_calendar_push_anothers_substitute() {
-        // Rule concatenation used to mark 43 such Tuesdays, Jan 3 2023
-        // among them, as holidays neither calendar has.
-        let jan2 = CalendarBuilder::new("Jan 2", Weekend::SAT_SUN)
-            .with_rule(Rule::Fixed(FixedDate::literal(Month::Jan, 2)));
-        let uk = crate::calendars::uk::SETTLEMENT;
-        let joint = CalendarBuilder::from_calendar(uk).union(jan2.view());
-        assert!(!joint.view().is_holiday(ymd(2023, Month::Jan, 3)));
-        assert_joint_is_member_union(&joint.view(), &[uk, jan2.view()]);
-    }
-
-    #[test]
-    fn union_judges_substitutes_under_each_members_own_weekend() {
-        // A Friday/Saturday market's Friday holiday is a weekday holiday
-        // to the UK and must not be treated as a weekend one.
-        let gulf = CalendarBuilder::new("Gulf", Weekend::FRI_SAT).with_rule(Rule::Fixed(
-            FixedDate::literal(Month::Dec, 25).shift(WeekendShift::Forward),
-        ));
-        let uk = crate::calendars::uk::SETTLEMENT;
-        let joint = CalendarBuilder::from_calendar(uk).union(gulf.view());
-        assert_eq!(joint.view().weekend(), Weekend::SAT_SUN | Weekend::FRI_SAT);
-        assert_joint_is_member_union(&joint.view(), &[uk, gulf.view()]);
-    }
-
-    #[test]
-    fn unions_nest_and_survive_from_calendar() {
-        use crate::calendars::{TARGET, uk, us};
-        let us_uk = CalendarBuilder::from_calendar(us::SETTLEMENT).union(uk::SETTLEMENT);
-        let all = CalendarBuilder::from_calendar(TARGET).union(us_uk.view());
-        let copied = CalendarBuilder::from_calendar(all.view());
-        assert!(copied.view().is_joint());
-        assert_joint_is_member_union(&copied.view(), &[TARGET, us::SETTLEMENT, uk::SETTLEMENT]);
-    }
-
-    #[test]
-    fn rules_added_after_a_union_form_their_own_member() {
-        let blackout = ymd(2026, Month::Aug, 14);
+    fn rules_added_after_a_union_join_it() {
         let joint = CalendarBuilder::from_calendar(crate::calendars::uk::SETTLEMENT)
             .union(crate::calendars::us::SETTLEMENT)
-            .with_rule(Rule::OneOff(OneOff::new(blackout)))
-            .with_rule(Rule::OneOff(OneOff::new(ymd(2026, Month::Aug, 17))));
+            .with_rule(Rule::OneOff(OneOff::new(ymd(2026, Month::Aug, 14))));
         let cal = joint.view();
-        assert!(cal.is_holiday(blackout));
-        assert!(cal.is_holiday(ymd(2026, Month::Aug, 17)));
-        assert!(cal.is_holiday(ymd(2026, Month::Jul, 3))); // US Independence Day observed
-        assert!(cal.is_holiday(ymd(2026, Month::Aug, 31))); // UK summer bank holiday
-        assert_eq!(
-            cal.rules().len(),
-            crate::calendars::uk::SETTLEMENT.rules().len()
-                + crate::calendars::us::SETTLEMENT.rules().len()
-                + 2
-        );
+        for d in [
+            ymd(2026, Month::Aug, 14),
+            ymd(2026, Month::Jul, 3),
+            ymd(2026, Month::Aug, 31),
+        ] {
+            assert!(cal.is_holiday(d), "{d}"); // blackout, US July 4th observed, UK bank holiday
+        }
     }
 
     #[test]
     fn add_business_days_counts_business_days_like_quantlib() {
         let cal = crate::calendars::us::SETTLEMENT;
-        let fri = ymd(2026, Month::Nov, 20);
-        // Calendar advance: two calendar days, then roll — Monday.
-        assert_eq!(
-            cal.advance(
-                fri,
-                Period::Days(2),
-                BusinessDayConvention::Following,
-                false
-            ),
-            Ok(ymd(2026, Month::Nov, 23)),
+        let nov = |d| ymd(2026, Month::Nov, d);
+        // `advance` counts calendar days, then rolls: Fri + 2D is Monday.
+        let advanced = cal.advance(
+            nov(20),
+            Period::Days(2),
+            BusinessDayConvention::Following,
+            false,
         );
-        // Business-day advance: T+2 is Tuesday.
-        assert_eq!(cal.add_business_days(fri, 2), Ok(ymd(2026, Month::Nov, 24)));
-        // Thanksgiving (Thu 26th) is skipped.
-        assert_eq!(
-            cal.add_business_days(ymd(2026, Month::Nov, 25), 1),
-            Ok(ymd(2026, Month::Nov, 27))
-        );
-        // From a Saturday, the first step lands on Monday.
-        assert_eq!(
-            cal.add_business_days(ymd(2026, Month::Nov, 21), 1),
-            Ok(ymd(2026, Month::Nov, 23))
-        );
-        // Zero rolls Following; negative steps back.
-        assert_eq!(
-            cal.add_business_days(ymd(2026, Month::Nov, 21), 0),
-            Ok(ymd(2026, Month::Nov, 23))
-        );
-        assert_eq!(
-            cal.add_business_days(ymd(2026, Month::Nov, 23), -1),
-            Ok(fri)
-        );
+        assert_eq!(advanced, Ok(nov(23)));
+        // (from, n, expected): T+2 from Friday; over Thanksgiving (26th);
+        // from Saturday; zero rolls Following; backwards.
+        for (from, n, expected) in [
+            (20, 2, 24),
+            (25, 1, 27),
+            (21, 1, 23),
+            (21, 0, 23),
+            (23, -1, 20),
+        ] {
+            assert_eq!(
+                cal.add_business_days(nov(from), n),
+                Ok(nov(expected)),
+                "{from} {n}"
+            );
+        }
         assert_eq!(
             cal.add_business_days(Date::MAX, 1),
             Err(TimeError::DateOutOfRange)

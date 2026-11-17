@@ -481,6 +481,14 @@ impl fmt::Display for Ordinal {
 /// # Ok::<(), fasti::TimeError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(
+        into = "crate::serde_impls::Text",
+        try_from = "crate::serde_impls::Text"
+    )
+)]
 pub struct Date(u32);
 
 impl Date {

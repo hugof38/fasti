@@ -37,6 +37,7 @@ impl OneOff {
     }
 
     /// The rule's date when it falls in `year`, [`None`] otherwise.
+    #[inline]
     pub(crate) const fn natural_date_in(self, year: crate::Year) -> Option<Date> {
         if self.date.year().get() == year.get() {
             Some(self.date)

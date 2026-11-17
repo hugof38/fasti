@@ -54,17 +54,8 @@ impl fmt::Display for BusinessDayConvention {
 impl core::str::FromStr for BusinessDayConvention {
     type Err = crate::TimeError;
 
-    /// Parse a convention by name, ignoring case and punctuation:
-    /// `"ModifiedFollowing"`, `"modified following"`. Also accepts
-    /// `"mod following"` and `"mod preceding"`.
-    ///
-    /// ```
-    /// use fasti::BusinessDayConvention;
-    /// assert_eq!(
-    ///     "modified following".parse(),
-    ///     Ok(BusinessDayConvention::ModifiedFollowing),
-    /// );
-    /// ```
+    /// By name, ignoring case and punctuation (`"modified following"`);
+    /// also `"mod following"` and `"mod preceding"`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         crate::names::lookup(
             s,

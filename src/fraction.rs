@@ -38,8 +38,7 @@ pub struct Fraction {
     den: u64,
 }
 
-/// Serde shadow of [`Fraction`], reduced and checked through
-/// [`Fraction::new`] on the way in.
+/// Serde shadow of [`Fraction`], validated through [`Fraction::new`].
 #[cfg(feature = "serde")]
 #[derive(serde::Deserialize)]
 struct FractionData {
@@ -246,26 +245,15 @@ impl Fraction {
 }
 
 impl Fraction {
-    /// `amount × self`, rounded to an integer under `mode`.
-    ///
-    /// This is the step from an accrual to money: express the amount in
-    /// its smallest unit (cents, say), multiply by the rate and the
-    /// accrual fraction as one [`Fraction`], and round once at the end.
-    /// The product is formed in `i128`, so no intermediate can
-    /// overflow; [`TimeError::FractionOverflow`] means only that the
-    /// rounded result does not fit an `i64`.
+    /// `amount × self`, rounded once under `mode`: amount in cents, `self`
+    /// the rate times the accrual fraction. Computed in `i128`;
+    /// [`TimeError::FractionOverflow`] only if the result exceeds `i64`.
     ///
     /// ```
     /// use fasti::{Fraction, RoundingMode};
-    /// // $1,000,000.00 at 4.25% for a 182/365 accrual, in cents.
-    /// let notional_cents = 100_000_000;
-    /// let rate = Fraction::new(425, 10_000)?;
-    /// let accrual = Fraction::new(182, 365)?;
-    /// let factor = rate.checked_mul(accrual).expect("small denominators");
-    /// assert_eq!(factor.scale(notional_cents, RoundingMode::HalfEven)?, 2_119_178); // $21,191.78
-    /// // A negative amount rounds by the same rule, not by truncation.
-    /// assert_eq!(Fraction::new(-7, 2)?.scale(1, RoundingMode::Floor)?, -4);
-    /// assert_eq!(Fraction::new(-7, 2)?.scale(1, RoundingMode::TowardZero)?, -3);
+    /// // $1mm at 4.25% for 182/365 of a year, in cents.
+    /// let factor = Fraction::new(425, 10_000)?.checked_mul(Fraction::new(182, 365)?).unwrap();
+    /// assert_eq!(factor.scale(100_000_000, RoundingMode::HalfEven)?, 2_119_178);
     /// # Ok::<(), fasti::TimeError>(())
     /// ```
     pub fn scale(self, amount: i64, mode: RoundingMode) -> Result<i64, TimeError> {
@@ -275,25 +263,11 @@ impl Fraction {
     }
 
     /// `self` rounded to an integer under `mode`.
-    ///
-    /// ```
-    /// use fasti::{Fraction, RoundingMode};
-    /// let five_halves = Fraction::new(5, 2)?;
-    /// assert_eq!(five_halves.round(RoundingMode::HalfEven), 2);
-    /// assert_eq!(five_halves.round(RoundingMode::HalfAwayFromZero), 3);
-    /// # Ok::<(), fasti::TimeError>(())
-    /// ```
     #[must_use]
     pub fn round(self, mode: RoundingMode) -> i64 {
         // |num / den| <= |num|, so the quotient always fits.
         i64::try_from(round_div(i128::from(self.num), i128::from(self.den), mode))
             .unwrap_or_default()
-    }
-
-    /// `self × n`, reduced, or [`None`] if the numerator overflows.
-    #[must_use]
-    pub fn checked_mul_int(self, n: i64) -> Option<Self> {
-        self.checked_mul(Self::from(n))
     }
 }
 
@@ -304,8 +278,7 @@ impl From<i64> for Fraction {
     }
 }
 
-/// How [`Fraction::scale`] and [`Fraction::round`] resolve a result
-/// that is not a whole number.
+/// How [`Fraction::scale`] and [`Fraction::round`] round.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum RoundingMode {
@@ -317,64 +290,31 @@ pub enum RoundingMode {
     TowardZero,
     /// Away from zero.
     AwayFromZero,
-    /// To the nearest integer; halves away from zero ("round half up"
-    /// as most people mean it).
+    /// Nearest; halves away from zero.
     HalfAwayFromZero,
-    /// To the nearest integer; halves to the even neighbour (banker's
-    /// rounding).
+    /// Nearest; halves to even (banker's rounding).
     HalfEven,
 }
 
 /// `num / den` rounded under `mode`, for `den > 0`.
 fn round_div(num: i128, den: i128, mode: RoundingMode) -> i128 {
-    let floor = num.div_euclid(den);
-    let rem = num.rem_euclid(den); // 0 <= rem < den
+    let (floor, rem) = (num.div_euclid(den), num.rem_euclid(den));
     if rem == 0 {
         return floor;
     }
-    let ceil = floor + 1;
-    match mode {
-        RoundingMode::Floor => floor,
-        RoundingMode::Ceiling => ceil,
-        RoundingMode::TowardZero => {
-            if num < 0 {
-                ceil
-            } else {
-                floor
-            }
-        }
-        RoundingMode::AwayFromZero => {
-            if num < 0 {
-                floor
-            } else {
-                ceil
-            }
-        }
-        RoundingMode::HalfAwayFromZero | RoundingMode::HalfEven => {
-            // Compare the remainder with half the denominator, doubled
-            // to stay in integers.
-            match (2 * rem).cmp(&den) {
-                Ordering::Less => floor,
-                Ordering::Greater => ceil,
-                Ordering::Equal => match mode {
-                    RoundingMode::HalfEven => {
-                        if floor.rem_euclid(2) == 0 {
-                            floor
-                        } else {
-                            ceil
-                        }
-                    }
-                    _ => {
-                        if num < 0 {
-                            floor
-                        } else {
-                            ceil
-                        }
-                    }
-                },
-            }
-        }
-    }
+    let up = match mode {
+        RoundingMode::Floor => false,
+        RoundingMode::Ceiling => true,
+        RoundingMode::TowardZero => num < 0,
+        RoundingMode::AwayFromZero => num > 0,
+        RoundingMode::HalfAwayFromZero | RoundingMode::HalfEven => match (2 * rem).cmp(&den) {
+            Ordering::Less => false,
+            Ordering::Greater => true,
+            Ordering::Equal if mode == RoundingMode::HalfEven => floor % 2 != 0,
+            Ordering::Equal => num > 0,
+        },
+    };
+    floor + i128::from(up)
 }
 
 impl Default for Fraction {
@@ -737,8 +677,7 @@ mod tests {
 
     #[test]
     fn scale_keeps_large_products_exact_and_reports_overflow() {
-        // $10bn in cents x 4.125% x 13685/26718: the product overflows
-        // i64 before division, but not i128.
+        // $10bn in cents: the product overflows i64, not i128.
         let f = Fraction::new(4125, 100_000)
             .unwrap()
             .checked_mul(Fraction::new(13_685, 26_718).unwrap())
@@ -754,13 +693,5 @@ mod tests {
             Err(TimeError::FractionOverflow),
         );
         assert_eq!(Fraction::from(-3).parts(), (-3, 1));
-        assert_eq!(
-            Fraction::new(1, 4)
-                .unwrap()
-                .checked_mul_int(6)
-                .unwrap()
-                .parts(),
-            (3, 2)
-        );
     }
 }

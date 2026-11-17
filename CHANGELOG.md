@@ -12,8 +12,8 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
 
 ### Breaking
 
-- `serde`: `Date` serializes as `"YYYY-MM-DD"` and `Period` as `"6M"`.
-  The 0.2 forms (an integer serial, `{"Months": 6}`) are still read.
+- `serde`: `Date` is `"YYYY-MM-DD"` and `Period` is `"6M"`. The 0.2
+  forms (an integer serial, `{"Months": 6}`) are no longer read.
 - `ActActICMA` no longer implements `DayCount`. Unbound, it returned one
   full coupon for any two dates, even a day apart. Use
   `ActActICMA::bind(&schedule)`, or `year_fraction_with_reference`.
@@ -84,8 +84,7 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
   what QuantLib's `advance` does with a `Days` unit; fasti's `advance`
   with `Period::Days` counts calendar days, as its docs now say loudly.
 - `Fraction::scale(amount, RoundingMode)` (amount × fraction, rounded
-  once, via `i128`), `Fraction::round`, `checked_mul_int`,
-  `From<i64>`, and `RoundingMode` (floor, ceiling, toward/away from
+  once, via `i128`), `Fraction::round`, `From<i64>`, and `RoundingMode` (floor, ceiling, toward/away from
   zero, half away from zero, half even).
 - `FromStr` for `Period` (`"6M"`), `Frequency`,
   `BusinessDayConvention` and `DateGenerationRule`, ignoring case and
