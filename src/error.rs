@@ -76,8 +76,9 @@ pub enum TimeError {
     /// were out of order.
     #[error("schedule stub date is out of (effective, termination) range")]
     StubDateOutOfRange,
-    /// A [`Schedule`](crate::Schedule) build produced dates that are not
-    /// strictly monotonically increasing after business-day adjustment.
+    /// [`Schedule`](crate::Schedule) dates were not strictly increasing:
+    /// an out-of-order `TryFrom` list, or an effective date adjusted onto
+    /// or past termination.
     #[error("schedule dates are not strictly monotonic after adjustment")]
     ScheduleNotMonotonic,
     /// A day count was bound to a [`Schedule`](crate::Schedule) with

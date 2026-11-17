@@ -47,6 +47,9 @@ pub enum Frequency {
     /// Once a week.
     Weekly = 52,
     /// Once a day.
+    ///
+    /// For just the business days in a range, use
+    /// [`Calendar::business_days`](crate::Calendar::business_days).
     Daily = 365,
 }
 

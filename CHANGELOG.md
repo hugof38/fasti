@@ -52,6 +52,9 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
 
 ### Fixed
 
+- `ScheduleBuilder::build` merges dates that business-day adjustment
+  rolls onto one day, as QuantLib does, instead of failing with
+  `ScheduleNotMonotonic`, so daily schedules build on real calendars.
 - Deserializing untrusted input can no longer panic the library.
   `Date`, `Year`, `Weekend`, `YearRange`, `FixedDate`, `Fraction` and
   the dates inside a `Schedule` are validated on the way in; before,
