@@ -30,12 +30,12 @@ use crate::{
 ///
 /// - MLK effective 1983 and Juneteenth effective 2022 per `QuantLib` (not the federal 1986/2021).
 /// - Veterans Day 1971–1977 follows the Uniform Monday Holiday Act (4th Monday of October).
-pub const SETTLEMENT: Calendar<'static> = Calendar {
-    name: "US settlement",
-    weekend: Weekend::SAT_SUN,
-    rules: &[
+pub const SETTLEMENT: Calendar<'static> = Calendar::new(
+    "US settlement",
+    Weekend::SAT_SUN,
+    &[
         // New Year's Day.
-        Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::SatBackSunForward)),
+        Rule::Fixed(FixedDate::literal(Month::Jan, 1).shift(WeekendShift::SatBackSunForward)),
         // Martin Luther King Jr. Day — 3rd Monday of January, since 1983.
         Rule::NthWeekday(
             NthWeekday::new(Ordinal::Third, Weekday::Mon, Month::Jan)
@@ -43,7 +43,7 @@ pub const SETTLEMENT: Calendar<'static> = Calendar {
         ),
         // Washington's Birthday (pre-1971): Feb 22 with weekend shift.
         Rule::Fixed(
-            FixedDate::new(Month::Feb, 22)
+            FixedDate::literal(Month::Feb, 22)
                 .shift(WeekendShift::SatBackSunForward)
                 .years(YearRange::literal_through(1970)),
         ),
@@ -54,7 +54,7 @@ pub const SETTLEMENT: Calendar<'static> = Calendar {
         ),
         // Memorial Day (pre-1971): May 30 with weekend shift.
         Rule::Fixed(
-            FixedDate::new(Month::May, 30)
+            FixedDate::literal(Month::May, 30)
                 .shift(WeekendShift::SatBackSunForward)
                 .years(YearRange::literal_through(1970)),
         ),
@@ -64,12 +64,12 @@ pub const SETTLEMENT: Calendar<'static> = Calendar {
         ),
         // Juneteenth (2022+): Jun 19 with weekend shift.
         Rule::Fixed(
-            FixedDate::new(Month::Jun, 19)
+            FixedDate::literal(Month::Jun, 19)
                 .shift(WeekendShift::SatBackSunForward)
                 .from_year(Year::literal(2022)),
         ),
         // Independence Day.
-        Rule::Fixed(FixedDate::new(Month::Jul, 4).shift(WeekendShift::SatBackSunForward)),
+        Rule::Fixed(FixedDate::literal(Month::Jul, 4).shift(WeekendShift::SatBackSunForward)),
         // Labor Day — 1st Monday of September.
         Rule::NthWeekday(NthWeekday::new(Ordinal::First, Weekday::Mon, Month::Sep)),
         // Columbus Day (1971+): 2nd Monday of October.
@@ -79,7 +79,7 @@ pub const SETTLEMENT: Calendar<'static> = Calendar {
         ),
         // Veterans Day (pre-1971): Nov 11 with weekend shift.
         Rule::Fixed(
-            FixedDate::new(Month::Nov, 11)
+            FixedDate::literal(Month::Nov, 11)
                 .shift(WeekendShift::SatBackSunForward)
                 .years(YearRange::literal_through(1970)),
         ),
@@ -90,16 +90,16 @@ pub const SETTLEMENT: Calendar<'static> = Calendar {
         ),
         // Veterans Day (1978+): Nov 11 with weekend shift.
         Rule::Fixed(
-            FixedDate::new(Month::Nov, 11)
+            FixedDate::literal(Month::Nov, 11)
                 .shift(WeekendShift::SatBackSunForward)
                 .from_year(Year::literal(1978)),
         ),
         // Thanksgiving — 4th Thursday of November.
         Rule::NthWeekday(NthWeekday::new(Ordinal::Fourth, Weekday::Thu, Month::Nov)),
         // Christmas.
-        Rule::Fixed(FixedDate::new(Month::Dec, 25).shift(WeekendShift::SatBackSunForward)),
+        Rule::Fixed(FixedDate::literal(Month::Dec, 25).shift(WeekendShift::SatBackSunForward)),
     ],
-};
+);
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -235,7 +235,7 @@ mod tests {
         );
         let fri = ymd(2024, Month::Jul, 5);
         assert_eq!(
-            SETTLEMENT.prev_business_day(fri),
+            SETTLEMENT.previous_business_day(fri),
             Some(ymd(2024, Month::Jul, 3)),
         );
     }

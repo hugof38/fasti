@@ -95,7 +95,7 @@ const fn civil(serial: u32) -> (u16, u8, u8) {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(transparent))]
+#[cfg_attr(feature = "serde", serde(try_from = "u16", into = "u16"))]
 pub struct Year(u16);
 
 impl Year {
@@ -114,8 +114,10 @@ impl Year {
         }
     }
 
-    /// Construct a [`Year`] from a compile-time literal; an out-of-range
-    /// value is a compile error, not a runtime panic.
+    /// Construct a [`Year`] from a compile-time literal. In a `const` an
+    /// out-of-range value is a compile error; called at run time with
+    /// one, this panics. Use [`new`](Self::new) for values that are not
+    /// literals.
     ///
     /// ```
     /// use fasti::Year;
@@ -176,6 +178,21 @@ impl Year {
     #[must_use]
     pub const fn length(self) -> u16 {
         if self.is_leap() { 366 } else { 365 }
+    }
+}
+
+impl TryFrom<u16> for Year {
+    type Error = TimeError;
+
+    /// As [`Year::new`].
+    fn try_from(year: u16) -> Result<Self, Self::Error> {
+        Self::new(year)
+    }
+}
+
+impl From<Year> for u16 {
+    fn from(year: Year) -> Self {
+        year.get()
     }
 }
 
@@ -465,7 +482,13 @@ impl fmt::Display for Ordinal {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(transparent))]
+#[cfg_attr(
+    feature = "serde",
+    serde(
+        into = "crate::serde_impls::Text",
+        try_from = "crate::serde_impls::Text"
+    )
+)]
 pub struct Date(u32);
 
 impl Date {
@@ -498,7 +521,9 @@ impl Date {
     }
 
     /// Construct a [`Date`] from compile-time year, month, and day
-    /// literals; an invalid date is a compile error, not a runtime panic.
+    /// literals. In a `const` an invalid date is a compile error;
+    /// called at run time with one, this panics. Use
+    /// [`from_ymd`](Self::from_ymd) for values that are not literals.
     ///
     /// ```
     /// use fasti::{Date, Month};
@@ -929,10 +954,27 @@ impl DateRange for Range<Date> {
 }
 
 impl fmt::Display for Date {
+    /// `YYYY-MM-DD`. Width, fill and alignment flags pad the whole
+    /// date, so dates line up in tables: `format!("{d:<12}")`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Decompose once instead of three separate year lookups.
-        let (y, m, d) = self.to_ymd();
-        write!(f, "{:04}-{:02}-{:02}", y.get(), m.get(), d)
+        let (year, month, day) = self.to_ymd();
+        // Ten ASCII bytes, formatted without allocating.
+        let write_digits = |value: u32, out: &mut [u8]| {
+            let mut rest = value;
+            for slot in out.iter_mut().rev() {
+                // `rest % 10` is a single digit, so the narrowing is exact.
+                #[allow(clippy::cast_possible_truncation)]
+                let digit = (rest % 10) as u8;
+                *slot = b'0' + digit;
+                rest /= 10;
+            }
+        };
+        let mut buf = *b"0000-00-00";
+        write_digits(u32::from(year.get()), &mut buf[0..4]);
+        write_digits(u32::from(month.get()), &mut buf[5..7]);
+        write_digits(u32::from(day), &mut buf[8..10]);
+        // Every byte written is an ASCII digit or '-'.
+        f.pad(core::str::from_utf8(&buf).unwrap_or_default())
     }
 }
 

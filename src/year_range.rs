@@ -17,9 +17,28 @@ use crate::{TimeError, Year};
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(try_from = "YearRangeData"))]
 pub struct YearRange {
     from: Year,
     to: Year,
+}
+
+/// Serde shadow of [`YearRange`], validated through
+/// [`YearRange::try_between`] on the way in.
+#[cfg(feature = "serde")]
+#[derive(serde::Deserialize)]
+struct YearRangeData {
+    from: Year,
+    to: Year,
+}
+
+#[cfg(feature = "serde")]
+impl TryFrom<YearRangeData> for YearRange {
+    type Error = TimeError;
+
+    fn try_from(stored: YearRangeData) -> Result<Self, Self::Error> {
+        Self::try_between(stored.from, stored.to)
+    }
 }
 
 impl YearRange {

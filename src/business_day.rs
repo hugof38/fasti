@@ -50,3 +50,28 @@ impl fmt::Display for BusinessDayConvention {
         f.write_str(name)
     }
 }
+
+impl core::str::FromStr for BusinessDayConvention {
+    type Err = crate::TimeError;
+
+    /// By name, ignoring case and punctuation (`"modified following"`);
+    /// also `"mod following"` and `"mod preceding"`.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        crate::names::lookup(
+            s,
+            &[
+                (Self::Unadjusted, &["Unadjusted"]),
+                (Self::Following, &["Following"]),
+                (
+                    Self::ModifiedFollowing,
+                    &["ModifiedFollowing", "ModFollowing"],
+                ),
+                (Self::Preceding, &["Preceding"]),
+                (
+                    Self::ModifiedPreceding,
+                    &["ModifiedPreceding", "ModPreceding"],
+                ),
+            ],
+        )
+    }
+}

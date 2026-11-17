@@ -10,7 +10,7 @@ use crate::Weekday;
 /// `(w.get() - 1)` is set iff `w` is a weekend day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(transparent))]
+#[cfg_attr(feature = "serde", serde(try_from = "u8", into = "u8"))]
 pub struct Weekend(u8);
 
 impl Weekend {
@@ -30,6 +30,29 @@ impl Weekend {
 
     /// Sunday only.
     pub const SUN_ONLY: Self = Self(Self::bit(Weekday::Sun));
+
+    /// The mask: bit `(w.get() - 1)` is set iff `w` is a weekend day.
+    ///
+    /// ```
+    /// use fasti::Weekend;
+    /// assert_eq!(Weekend::SAT_SUN.bits(), 0b110_0000);
+    /// assert_eq!(Weekend::from_bits(0b110_0000), Ok(Weekend::SAT_SUN));
+    /// assert!(Weekend::from_bits(0x80).is_err());
+    /// ```
+    #[must_use]
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// The weekend with the given mask, refusing bits beyond the seven
+    /// weekdays with [`TimeError::InvalidWeekendMask`](crate::TimeError::InvalidWeekendMask).
+    pub const fn from_bits(bits: u8) -> Result<Self, crate::TimeError> {
+        if bits & 0x80 == 0 {
+            Ok(Self(bits))
+        } else {
+            Err(crate::TimeError::InvalidWeekendMask)
+        }
+    }
 
     /// `true` iff `w` is a weekend day under this configuration.
     ///
@@ -61,6 +84,21 @@ impl Weekend {
             i += 1;
         }
         Self(mask)
+    }
+}
+
+impl TryFrom<u8> for Weekend {
+    type Error = crate::TimeError;
+
+    /// As [`Weekend::from_bits`].
+    fn try_from(bits: u8) -> Result<Self, Self::Error> {
+        Self::from_bits(bits)
+    }
+}
+
+impl From<Weekend> for u8 {
+    fn from(weekend: Weekend) -> Self {
+        weekend.bits()
     }
 }
 

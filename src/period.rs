@@ -106,6 +106,13 @@ impl fmt::Display for Frequency {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(
+        into = "crate::serde_impls::Text",
+        try_from = "crate::serde_impls::Text"
+    )
+)]
 pub enum Period {
     /// Calendar days.
     Days(i32),
@@ -284,6 +291,59 @@ impl Mul<Period> for i32 {
     /// Scalar multiplication with the scalar on the left.
     fn mul(self, period: Period) -> Self::Output {
         period * self
+    }
+}
+
+impl core::str::FromStr for Frequency {
+    type Err = TimeError;
+
+    /// By name, ignoring case and punctuation; also `"yearly"`,
+    /// `"half-yearly"`, `"fortnightly"`.
+    ///
+    /// ```
+    /// use fasti::Frequency;
+    /// assert_eq!("semi-annual".parse(), Ok(Frequency::Semiannual));
+    /// ```
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        crate::names::lookup(
+            s,
+            &[
+                (Self::Annual, &["Annual", "Yearly"]),
+                (Self::Semiannual, &["Semiannual", "HalfYearly"]),
+                (Self::EveryFourthMonth, &["EveryFourthMonth"]),
+                (Self::Quarterly, &["Quarterly"]),
+                (Self::Bimonthly, &["Bimonthly"]),
+                (Self::Monthly, &["Monthly"]),
+                (Self::EveryFourthWeek, &["EveryFourthWeek"]),
+                (Self::Biweekly, &["Biweekly", "Fortnightly"]),
+                (Self::Weekly, &["Weekly"]),
+                (Self::Daily, &["Daily"]),
+            ],
+        )
+    }
+}
+
+impl core::str::FromStr for Period {
+    type Err = TimeError;
+
+    /// The form [`Display`](fmt::Display) writes: a signed count and a
+    /// `D`/`W`/`M`/`Y` unit, either case.
+    ///
+    /// ```
+    /// use fasti::Period;
+    /// assert_eq!("-6m".parse(), Ok(Period::Months(-6)));
+    /// ```
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let invalid = TimeError::InvalidPeriodString;
+        let (count, unit) = s.split_at_checked(s.len().wrapping_sub(1)).ok_or(invalid)?;
+        let n = count.parse().map_err(|_| invalid)?;
+        match unit {
+            "D" | "d" => Ok(Self::Days(n)),
+            "W" | "w" => Ok(Self::Weeks(n)),
+            "M" | "m" => Ok(Self::Months(n)),
+            "Y" | "y" => Ok(Self::Years(n)),
+            _ => Err(invalid),
+        }
     }
 }
 

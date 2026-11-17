@@ -59,6 +59,23 @@ pub enum DateGenerationRule {
     Zero,
 }
 
+impl core::str::FromStr for DateGenerationRule {
+    type Err = TimeError;
+
+    /// Parse `"Forward"`, `"Backward"` or `"Zero"`, ignoring case and
+    /// punctuation.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        crate::names::lookup(
+            s,
+            &[
+                (Self::Forward, &["Forward"]),
+                (Self::Backward, &["Backward"]),
+                (Self::Zero, &["Zero"]),
+            ],
+        )
+    }
+}
+
 /// Parallel lists of business-day-adjusted dates in chronological
 /// order, each of length `periods + 1`: the coupon dates, and the
 /// reference dates of the regular coupon grid.
@@ -431,10 +448,22 @@ pub struct ScheduleBuilder<'cal> {
 }
 
 impl<'cal> ScheduleBuilder<'cal> {
-    /// Start a builder with the four required inputs. Defaults match
-    /// common bond conventions: `ModifiedFollowing` for interior
-    /// dates, `Unadjusted` for the termination date, `Backward`
-    /// generation, `EoM`flag off, no stub dates.
+    /// Start a builder with the four required inputs. Defaults are bond
+    /// conventions, so a bond needs no further calls:
+    ///
+    /// - `Unadjusted` interior and effective dates, and `Unadjusted`
+    ///   termination: a bond accrues on its stated coupon grid, and its
+    ///   payments roll separately (see the crate's Treasury example).
+    /// - `Backward` generation, anchored on maturity, so any odd period
+    ///   is a front stub.
+    /// - End-of-month on: a bond maturing on the last day of a month
+    ///   pays on the last day of each coupon month (Feb 28 → Aug 31).
+    /// - No stub dates.
+    ///
+    /// Swap legs and other schedules that accrue on business days opt
+    /// in with [`with_convention`](Self::with_convention), typically
+    /// `ModifiedFollowing`, and [`with_end_of_month`](Self::with_end_of_month)
+    /// as their terms say.
     #[must_use]
     pub fn new(
         effective: Date,
@@ -447,10 +476,10 @@ impl<'cal> ScheduleBuilder<'cal> {
             termination,
             tenor,
             calendar,
-            convention: BusinessDayConvention::ModifiedFollowing,
+            convention: BusinessDayConvention::Unadjusted,
             termination_convention: BusinessDayConvention::Unadjusted,
             rule: DateGenerationRule::Backward,
-            end_of_month: false,
+            end_of_month: true,
             first_date: None,
             next_to_last_date: None,
         }
@@ -460,6 +489,9 @@ impl<'cal> ScheduleBuilder<'cal> {
     /// given [`Frequency`]. Convenient when the schedule's recurrence
     /// is more naturally expressed as "quarterly" / "semiannual" than
     /// as "every 3 months" / "every 6 months".
+    ///
+    /// The tenor passed to [`new`](Self::new) and this method set the
+    /// same thing; whichever is called last wins.
     #[must_use]
     pub fn with_frequency(mut self, frequency: Frequency) -> Self {
         self.tenor = Period::from(frequency);
@@ -536,13 +568,14 @@ impl<'cal> ScheduleBuilder<'cal> {
     /// period per weekend.
     ///
     /// ```
-    /// use fasti::{Date, Frequency, Month, Period, ScheduleBuilder, calendars};
+    /// use fasti::{BusinessDayConvention, Date, Frequency, Month, Period, ScheduleBuilder, calendars};
     /// let s = ScheduleBuilder::new(
     ///     Date::from_ymd(2025, Month::Jan, 3)?, // Friday
     ///     Date::from_ymd(2025, Month::Jan, 8)?, // Wednesday
     ///     Period::from(Frequency::Daily),
     ///     calendars::WEEKENDS_ONLY,
     /// )
+    /// .with_convention(BusinessDayConvention::Following)
     /// .forwards()
     /// .build()?;
     /// // Saturday and Sunday both roll to Monday the 6th.
@@ -936,6 +969,7 @@ mod tests {
             Period::Months(1),
             WEEKENDS,
         )
+        .with_convention(BusinessDayConvention::ModifiedFollowing)
         .with_rule(DateGenerationRule::Forward)
         .build()
         .unwrap();
@@ -2074,5 +2108,41 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod bond_default_tests {
+    use super::*;
+    use crate::Month;
+
+    /// With no options set, a builder lays out a bond: unadjusted
+    /// coupon dates on the maturity's grid, snapped to month end when
+    /// maturity is one.
+    #[test]
+    fn defaults_are_bond_conventions() {
+        let ymd = |y, m, d| Date::from_ymd(y, m, d).unwrap();
+        // Maturity Thursday Feb 28 2030, a month end: coupons on the
+        // last day of Aug and Feb, unadjusted even when that is a
+        // weekend (Sat Aug 31 2024, Sun Aug 31 2025).
+        let s = ScheduleBuilder::new(
+            ymd(2024, Month::Feb, 29),
+            ymd(2026, Month::Feb, 28),
+            Period::Months(6),
+            crate::calendars::us::GOVERNMENT_BOND,
+        )
+        .build()
+        .unwrap();
+        assert_eq!(
+            s.dates(),
+            &[
+                ymd(2024, Month::Feb, 29),
+                ymd(2024, Month::Aug, 31),
+                ymd(2025, Month::Feb, 28),
+                ymd(2025, Month::Aug, 31),
+                ymd(2026, Month::Feb, 28),
+            ],
+        );
     }
 }

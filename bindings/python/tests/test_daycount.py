@@ -131,3 +131,10 @@ def test_thirty_360_is_deliberately_not_additive() -> None:
     assert convention.year_fraction(JAN, split) + convention.year_fraction(split, APR) != (
         convention.year_fraction(JAN, APR)
     )
+
+
+def test_unbound_icma_refuses_to_guess_a_coupon_period() -> None:
+    unbound = DayCount.act_act_icma("semiannual")
+    assert unbound.name() == "Actual/Actual (ICMA)"
+    with pytest.raises(FastiError, match="bind"):
+        unbound.year_fraction(datetime.date(2025, 1, 15), datetime.date(2025, 1, 16))

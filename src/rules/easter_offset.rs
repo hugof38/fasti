@@ -163,6 +163,7 @@ impl EasterOffset {
     /// the query date's own year: an offset reaching into a
     /// neighbouring year never matches there either.
     // Widening u16 -> i32 / i16 -> i32 casts; `as` because `From` is not const.
+    #[inline]
     #[allow(clippy::cast_lossless)]
     pub(crate) const fn natural_date_in(self, year: Year) -> Option<Date> {
         if !self.years.contains(year) {

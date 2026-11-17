@@ -88,6 +88,9 @@ datetime.date(2024, 7, 5)
 ...                       "modified following", True)
 datetime.date(2025, 2, 28)
 
+>>> us.SETTLEMENT.add_business_days(datetime.date(2026, 11, 20), 2)  # T+2
+datetime.date(2026, 11, 24)
+
 >>> schedule = Schedule(datetime.date(2025, 1, 15), datetime.date(2026, 1, 15),
 ...                     "semiannual", us.GOVERNMENT_BOND)
 >>> schedule.dates()
@@ -98,6 +101,16 @@ datetime.date(2025, 2, 28)
 Fraction(45, 181)
 
 ```
+
+A `Schedule`'s defaults are bond conventions: unadjusted coupon dates,
+backward from maturity, end of month on. Swap legs opt in with
+`convention="modified following"`. Bind ACT/ACT ICMA to an
+**unadjusted** schedule, as above: it reads the schedule's dates as the
+coupon grid, and a business-day-adjusted one gives different, wrong
+fractions. Roll payment dates separately with `adjust`. Unbound,
+`act_act_icma` raises rather than guess which coupon period two dates
+belong to. `advance` with a day period counts calendar days, then
+rolls; settlement lags are `add_business_days`.
 
 A `Schedule` is its coupon dates: it has a length, indexes, slices,
 iterates and reverses, because the crate's schedule derefs to `[Date]`.

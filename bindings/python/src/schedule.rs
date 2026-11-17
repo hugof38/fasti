@@ -242,7 +242,7 @@ impl PySchedule {
     #[pyo3(signature = (
         effective, termination, tenor, calendar, *,
         convention=None, termination_convention=None, rule=None,
-        end_of_month=false, first_date=None, next_to_last_date=None,
+        end_of_month=true, first_date=None, next_to_last_date=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -264,7 +264,7 @@ impl PySchedule {
                 tenor: PyPeriod(tenor.0),
                 calendar: calendar.0,
                 convention: convention.map_or(
-                    PyBusinessDayConvention(fasti::BusinessDayConvention::ModifiedFollowing),
+                    PyBusinessDayConvention(fasti::BusinessDayConvention::Unadjusted),
                     |c| c.0,
                 ),
                 termination_convention: termination_convention.map_or(

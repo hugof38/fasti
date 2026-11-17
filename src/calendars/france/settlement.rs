@@ -21,34 +21,34 @@ use crate::{Calendar, EasterOffset, FixedDate, Month, Rule, Weekend, WeekendShif
 /// | Noël / Christmas | Dec 25 |
 ///
 /// No weekend shift — weekend holidays are simply lost.
-pub const SETTLEMENT: Calendar<'static> = Calendar {
-    name: "France settlement",
-    weekend: Weekend::SAT_SUN,
-    rules: &[
+pub const SETTLEMENT: Calendar<'static> = Calendar::new(
+    "France settlement",
+    Weekend::SAT_SUN,
+    &[
         // Jour de l'An.
-        Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::None)),
+        Rule::Fixed(FixedDate::literal(Month::Jan, 1).shift(WeekendShift::None)),
         // Lundi de Pâques.
         Rule::Easter(EasterOffset::easter_monday()),
         // Fête du Travail.
-        Rule::Fixed(FixedDate::new(Month::May, 1).shift(WeekendShift::None)),
+        Rule::Fixed(FixedDate::literal(Month::May, 1).shift(WeekendShift::None)),
         // Victoire 1945.
-        Rule::Fixed(FixedDate::new(Month::May, 8).shift(WeekendShift::None)),
+        Rule::Fixed(FixedDate::literal(Month::May, 8).shift(WeekendShift::None)),
         // Jeudi de l'Ascension.
         Rule::Easter(EasterOffset::ascension()),
         // Lundi de Pentecôte.
         Rule::Easter(EasterOffset::whit_monday()),
         // Fête nationale.
-        Rule::Fixed(FixedDate::new(Month::Jul, 14).shift(WeekendShift::None)),
+        Rule::Fixed(FixedDate::literal(Month::Jul, 14).shift(WeekendShift::None)),
         // Assomption.
-        Rule::Fixed(FixedDate::new(Month::Aug, 15).shift(WeekendShift::None)),
+        Rule::Fixed(FixedDate::literal(Month::Aug, 15).shift(WeekendShift::None)),
         // Toussaint.
-        Rule::Fixed(FixedDate::new(Month::Nov, 1).shift(WeekendShift::None)),
+        Rule::Fixed(FixedDate::literal(Month::Nov, 1).shift(WeekendShift::None)),
         // Armistice 1918.
-        Rule::Fixed(FixedDate::new(Month::Nov, 11).shift(WeekendShift::None)),
+        Rule::Fixed(FixedDate::literal(Month::Nov, 11).shift(WeekendShift::None)),
         // Noël.
-        Rule::Fixed(FixedDate::new(Month::Dec, 25).shift(WeekendShift::None)),
+        Rule::Fixed(FixedDate::literal(Month::Dec, 25).shift(WeekendShift::None)),
     ],
-};
+);
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

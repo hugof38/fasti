@@ -14,7 +14,7 @@ use crate::{
 ///
 /// | Holiday | Rule |
 /// |---|---|
-/// | New Year's Day | Jan 1 + [`NextWeekday`](crate::WeekendShift::Forward) |
+/// | New Year's Day | Jan 1 + [`Forward`](crate::WeekendShift::Forward) |
 /// | Good Friday | Easter Sunday − 2 |
 /// | Easter Monday | Easter Sunday + 1 |
 /// | Early May Bank Holiday | 1st Mon of May *[except 1995 and 2020]* |
@@ -24,8 +24,8 @@ use crate::{
 /// | Diamond Jubilee | Jun 4–5 *[2012 only]* |
 /// | Platinum Jubilee | Jun 2–3 *[2022 only]* |
 /// | Summer Bank Holiday | Last Mon of August |
-/// | Christmas | Dec 25 + [`NextWeekday`](crate::WeekendShift::Forward) |
-/// | Boxing Day | Dec 26 + [`NextWeekday`](crate::WeekendShift::Forward) |
+/// | Christmas | Dec 25 + [`Forward`](crate::WeekendShift::Forward) |
+/// | Boxing Day | Dec 26 + [`Forward`](crate::WeekendShift::Forward) |
 /// | Queen Elizabeth II's funeral | Sep 19 *[2022 only]* |
 /// | King Charles III's coronation | May 8 *[2023 only]* |
 /// | Millennium Day | Dec 31 *[1999 only]* |
@@ -45,12 +45,12 @@ use crate::{
 /// assert!(calendars::uk::SETTLEMENT.is_holiday(Date::from_ymd(2022, Month::Dec, 27)?));
 /// # Ok::<(), fasti::TimeError>(())
 /// ```
-pub const SETTLEMENT: Calendar<'static> = Calendar {
-    name: "UK settlement",
-    weekend: Weekend::SAT_SUN,
-    rules: &[
+pub const SETTLEMENT: Calendar<'static> = Calendar::new(
+    "UK settlement",
+    Weekend::SAT_SUN,
+    &[
         // New Year's Day, with a substitute Monday.
-        Rule::Fixed(FixedDate::new(Month::Jan, 1).shift(WeekendShift::Forward)),
+        Rule::Fixed(FixedDate::literal(Month::Jan, 1).shift(WeekendShift::Forward)),
         // Good Friday and Easter Monday.
         Rule::Easter(EasterOffset::good_friday()),
         Rule::Easter(EasterOffset::easter_monday()),
@@ -99,8 +99,8 @@ pub const SETTLEMENT: Calendar<'static> = Calendar {
         Rule::LastWeekday(LastWeekday::new(Weekday::Mon, Month::Aug)),
         // Both take the next free weekday, so a weekend Christmas
         // pushes Boxing Day's substitute on by one.
-        Rule::Fixed(FixedDate::new(Month::Dec, 25).shift(WeekendShift::Forward)),
-        Rule::Fixed(FixedDate::new(Month::Dec, 26).shift(WeekendShift::Forward)),
+        Rule::Fixed(FixedDate::literal(Month::Dec, 25).shift(WeekendShift::Forward)),
+        Rule::Fixed(FixedDate::literal(Month::Dec, 26).shift(WeekendShift::Forward)),
         // Queen Elizabeth II's state funeral.
         Rule::OneOff(OneOff::new(Date::literal(2022, Month::Sep, 19))),
         // King Charles III's coronation.
@@ -108,7 +108,7 @@ pub const SETTLEMENT: Calendar<'static> = Calendar {
         // Millennium Day.
         Rule::OneOff(OneOff::new(Date::literal(1999, Month::Dec, 31))),
     ],
-};
+);
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -316,7 +316,7 @@ mod tests {
         for y in 1996..=2060 {
             let natural: Vec<Date> = year(y)
                 .dates()
-                .filter(|d| SETTLEMENT.rules.iter().any(|r| r.is_holiday(*d)))
+                .filter(|d| SETTLEMENT.rules().iter().any(|r| r.is_holiday(*d)))
                 .collect();
             assert_eq!(observed(y).len(), natural.len(), "{y}: {natural:?}");
         }

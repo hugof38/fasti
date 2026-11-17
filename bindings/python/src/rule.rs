@@ -90,9 +90,10 @@ pub enum RuleSpec {
 }
 
 impl RuleSpec {
-    /// The crate rule this record describes.
-    pub fn rule(self) -> Rule {
-        match self {
+    /// The crate rule this record describes. Fails only for a record
+    /// the constructors would have refused.
+    pub fn rule(self) -> PyResult<Rule> {
+        Ok(match self {
             Self::Fixed {
                 month,
                 day,
@@ -100,6 +101,7 @@ impl RuleSpec {
                 years,
             } => Rule::Fixed(
                 FixedDate::new(month, day)
+                    .or_raise()?
                     .shift(shift.0)
                     .years(years.range()),
             ),
@@ -126,7 +128,7 @@ impl RuleSpec {
                 .years(years.range()),
             ),
             Self::OneOff { date } => Rule::OneOff(OneOff::new(date)),
-        }
+        })
     }
 }
 
@@ -243,8 +245,8 @@ impl PyRule {
     }
 
     /// True if this rule marks `date` as a holiday on its natural date.
-    fn is_holiday(&self, date: DateArg) -> bool {
-        self.0.rule().is_holiday(date.0)
+    fn is_holiday(&self, date: DateArg) -> PyResult<bool> {
+        Ok(self.0.rule()?.is_holiday(date.0))
     }
 
     pub fn __repr__(&self) -> String {

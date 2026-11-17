@@ -79,7 +79,7 @@ impl CalendarSpec {
             Origin::Fresh(name, weekend, rules) => {
                 let mut builder = CalendarBuilder::new(name.clone(), weekend_of(weekend));
                 for rule in rules {
-                    builder = builder.with_rule(rule.rule());
+                    builder = builder.with_rule(rule.rule()?);
                 }
                 builder
             }
@@ -88,7 +88,7 @@ impl CalendarSpec {
             builder = match op {
                 Op::Name(name) => builder.name(name.clone()),
                 Op::Weekend(weekend) => builder.with_weekend(weekend_of(weekend)),
-                Op::Rule(rule) => builder.with_rule(rule.rule()),
+                Op::Rule(rule) => builder.with_rule(rule.rule()?),
                 // The other calendar's storage only has to outlive the
                 // call: `union` copies the rules out of the view.
                 Op::Union(other) => builder.union(other.build()?.view()),
@@ -205,7 +205,7 @@ impl PyCalendar {
 
     /// The weekend as the weekdays it contains, Monday first.
     fn weekend_days(&self) -> Vec<PyWeekday> {
-        let weekend = self.view().weekend;
+        let weekend = self.view().weekend();
         [
             Weekday::Mon,
             Weekday::Tue,
@@ -244,7 +244,7 @@ impl PyCalendar {
     /// The calendar's human-readable name.
     #[getter]
     fn name(&self) -> String {
-        self.view().name.to_owned()
+        self.view().name().to_owned()
     }
 
     /// The weekend, as the weekdays it contains, Monday first.
@@ -375,15 +375,42 @@ impl PyCalendar {
     }
 
     /// The last business day strictly before `date`, if it is in range.
-    fn prev_business_day<'py>(
+    fn previous_business_day<'py>(
         &self,
         py: Python<'py>,
         date: DateArg,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         self.view()
-            .prev_business_day(date.0)
+            .previous_business_day(date.0)
             .map(|d| date_out(py, d))
             .transpose()
+    }
+
+    /// Former name of `previous_business_day`, kept as an alias.
+    fn prev_business_day<'py>(
+        &self,
+        py: Python<'py>,
+        date: DateArg,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        self.previous_business_day(py, date)
+    }
+
+    /// Move `n` business days from `date`: forwards for positive `n`,
+    /// backwards for negative. Settlement lags (T+1, T+2) are this;
+    /// `advance` with a day period counts calendar days instead.
+    ///
+    /// >>> import datetime
+    /// >>> from fasti.calendars import us
+    /// >>> us.SETTLEMENT.add_business_days(datetime.date(2026, 11, 20), 2)
+    /// datetime.date(2026, 11, 24)
+    fn add_business_days<'py>(
+        &self,
+        py: Python<'py>,
+        date: DateArg,
+        n: i32,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let moved = self.view().add_business_days(date.0, n).or_raise()?;
+        date_out(py, moved)
     }
 
     /// Roll `date` onto a business day under `convention`.

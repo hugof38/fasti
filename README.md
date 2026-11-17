@@ -25,7 +25,9 @@ same capability surface with:
 
 - **No float arithmetic — anywhere.** Day-count fractions are integer
   rationals (`Fraction`, an `i64/u64` reduced fraction). Scaling money
-  by an accrual fraction stays exact.
+  by an accrual fraction stays exact until the one rounding you choose
+  (`Fraction::scale` with a `RoundingMode`). Pricing — discounting,
+  compounding — is out of scope; convert at that boundary.
 - **`no_std` + `alloc`.** No I/O, no clock, no timezone database, no
   runtime dependencies beyond `thiserror`. The library has no concept
   of "now" — you tell it the dates. CI compiles it for a bare-metal
@@ -80,8 +82,8 @@ job, exact rationals instead of `f64`, and no `std`.
 | Durations | `Period` (days/weeks/months/years), `Frequency` |
 | Holiday rules | `Rule`: fixed-date (with weekend-shift policies), nth/last weekday, Easter offsets (Western & Orthodox), one-offs, custom `fn(Date) -> bool` |
 | Calendars | `Calendar` / `CalendarBuilder`; built-ins: TARGET, UK Settlement, US Settlement, NYSE, Federal Reserve, Government Bond, SOFR, NERC, France Settlement & Exchange, plus `WEEKENDS_ONLY` / `NULL_CALENDAR` baselines. Business-day and holiday enumeration over a date range, month edges, and joint calendars via `CalendarBuilder::union` |
-| Business days | `BusinessDayConvention` (Following, ModifiedFollowing, Preceding, ModifiedPreceding, Unadjusted), `adjust`, `advance` |
-| Day counts | `DayCount`: ACT/360, ACT/365F, 30/360 (Bond Basis, US, 30E/360, 30E/360 ISDA), ACT/ACT (ISDA and schedule-aware ICMA) — all returning `Fraction` |
+| Business days | `BusinessDayConvention` (Following, ModifiedFollowing, Preceding, ModifiedPreceding, Unadjusted), `adjust`, `advance`, `add_business_days` |
+| Day counts | `DayCount`: ACT/360, ACT/365F, 30/360 (Bond Basis, US, 30E/360, 30E/360 ISDA), ACT/ACT (ISDA and schedule-aware ICMA) — all returning `Fraction`, scaled to money with `Fraction::scale` and a `RoundingMode` |
 | Schedules | `Schedule` / `ScheduleBuilder`: forward/backward/zero generation, stubs, end-of-month preservation |
 
 Four jurisdictions ship today. If yours is not among them you are not
@@ -126,7 +128,9 @@ Dates cross as `datetime.date` and year fractions come back as
 fasti = "0.2"
 
 # Optional features (both off by default):
-#   serde — Serialize/Deserialize on the data types
+#   serde — Serialize/Deserialize on the data types; dates as
+#           "YYYY-MM-DD", periods as "6M", every value validated on
+#           the way in
 #   jiff  — From/TryFrom conversions with jiff::civil::Date and
 #           jiff::civil::Weekday
 fasti = { version = "0.2", features = ["serde", "jiff"] }
@@ -149,58 +153,76 @@ From chrono, go through year, month and day: `Date::from_ymd`.)
 
 ```rust
 use fasti::{
-    ActActISDA, BusinessDayConvention, Date, DayCount, Month, Period,
-    ScheduleBuilder, calendars::us,
+    ActActICMA, BusinessDayConvention, Date, Fraction, Frequency, Month, Period,
+    RoundingMode, ScheduleBuilder, calendars::us,
 };
 
 fn main() -> Result<(), fasti::TimeError> {
-    // Is July 4 a US market holiday?
-    let d = Date::from_ymd(2026, Month::Jul, 3)?; // Sat Jul 4 observed Friday
-    assert!(us::SETTLEMENT.is_holiday(d));
+    // Is the bond market open? July 4 2026 is a Saturday, observed Friday.
+    let calendar = us::GOVERNMENT_BOND;
+    assert!(calendar.is_holiday(Date::from_ymd(2026, Month::Jul, 3)?));
 
-    // Build a 5-year semiannual coupon schedule (backward generation,
-    // ModifiedFollowing interior dates, unadjusted maturity).
+    // T+1 settlement counts business days.
+    let trade = Date::from_ymd(2026, Month::Jul, 2)?;
+    assert_eq!(calendar.add_business_days(trade, 1)?, Date::from_ymd(2026, Month::Jul, 6)?);
+
+    // A 5-year semiannual Treasury accrues on its unadjusted coupon grid.
     let schedule = ScheduleBuilder::new(
         Date::from_ymd(2025, Month::Jan, 15)?,
         Date::from_ymd(2030, Month::Jan, 15)?,
         Period::Months(6),
-        us::SETTLEMENT,
+        calendar,
     )
-    .backwards()
-    .with_convention(BusinessDayConvention::ModifiedFollowing)
-    .with_termination_convention(BusinessDayConvention::Unadjusted)
-    .build()?;
+    .build()?; // defaults are bond conventions: unadjusted, backward, end of month
+    let day_count = ActActICMA::new(Frequency::Semiannual).bind(&schedule)?;
 
-    // Accrue each period under ACT/ACT (ISDA) — exact integer rationals.
+    // Each coupon on $1mm at 4.25%: exact rationals, rounded once, in cents.
+    let rate = Fraction::new(425, 10_000)?;
     for period in schedule.periods() {
-        let (num, den) = ActActISDA
-            .year_fraction(period.start, period.end)
-            .parts();
-        println!("{} -> {}: {num}/{den}", period.start, period.end);
+        let fraction = day_count.try_year_fraction(period.start, period.end)?;
+        let cents = rate
+            .checked_mul(fraction)
+            .ok_or(fasti::TimeError::FractionOverflow)?
+            .scale(100_000_000, RoundingMode::HalfEven)?;
+        let paid = calendar.adjust(period.end, BusinessDayConvention::Following)?;
+        println!("{} -> {} (paid {paid}): {fraction} = ${}.{:02}",
+            period.start, period.end, cents / 100, cents % 100);
     }
     Ok(())
 }
 ```
 
-Output — note that the January 2028 coupon lands on the 18th (the 15th
-is a Saturday, and the Monday behind it is Martin Luther King Jr. Day),
-and that the periods spanning a leap boundary are the ones a `double`
-would have to round:
+Output. Every coupon is exactly half the annual coupon, because ACT/ACT
+ICMA counts each regular period as half a year. Payment is a separate
+question from accrual: the January 2028 coupon accrues to the 15th but
+pays on the 18th (the 15th is a Saturday, and the Monday behind it is
+Martin Luther King Jr. Day).
 
 ```text
-2025-01-15 -> 2025-07-15: 181/365
-2025-07-15 -> 2026-01-15: 184/365
-2026-01-15 -> 2026-07-15: 181/365
-2026-07-15 -> 2027-01-15: 184/365
-2027-01-15 -> 2027-07-15: 181/365
-2027-07-15 -> 2028-01-18: 13685/26718
-2028-01-18 -> 2028-07-17: 181/366
-2028-07-17 -> 2029-01-16: 2227/4453
-2029-01-16 -> 2029-07-16: 181/365
-2029-07-16 -> 2030-01-15: 183/365
+2025-01-15 -> 2025-07-15 (paid 2025-07-15): 1/2 = $21250.00
+2025-07-15 -> 2026-01-15 (paid 2026-01-15): 1/2 = $21250.00
+2026-01-15 -> 2026-07-15 (paid 2026-07-15): 1/2 = $21250.00
+2026-07-15 -> 2027-01-15 (paid 2027-01-15): 1/2 = $21250.00
+2027-01-15 -> 2027-07-15 (paid 2027-07-15): 1/2 = $21250.00
+2027-07-15 -> 2028-01-15 (paid 2028-01-18): 1/2 = $21250.00
+2028-01-15 -> 2028-07-15 (paid 2028-07-17): 1/2 = $21250.00
+2028-07-15 -> 2029-01-15 (paid 2029-01-16): 1/2 = $21250.00
+2029-01-15 -> 2029-07-15 (paid 2029-07-16): 1/2 = $21250.00
+2029-07-15 -> 2030-01-15 (paid 2030-01-15): 1/2 = $21250.00
 ```
 
-Run the fuller example:
+Two things to know before you go further:
+
+- **`ScheduleBuilder`'s defaults are bond conventions**: unadjusted
+  coupon dates, generated backward from maturity, end of month on.
+  ACT/ACT ICMA needs exactly that, because it reads the schedule's
+  dates as the coupon grid. Swap legs and other schedules that accrue
+  on business days opt in with `.with_convention(ModifiedFollowing)`;
+  roll payment dates separately, as above.
+- **`Calendar::advance` with `Period::Days(n)` counts calendar days,
+  then rolls.** For settlement lags use `Calendar::add_business_days`.
+
+The fuller example adds accrued interest for a trade settling T+1:
 
 ```bash
 cargo run --example treasury_schedule
@@ -208,9 +230,11 @@ cargo run --example treasury_schedule
 
 ## Design notes
 
-See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the design constraints:
-serial dates, the rule-based calendar model, why `Fraction` instead of
-floats, and the supported 1901..=2199 date range.
+For using the crate, the API docs on [docs.rs](https://docs.rs/fasti)
+are the reference. For changing it, [`ARCHITECTURE.md`](./ARCHITECTURE.md)
+records the design constraints: serial dates, the rule-based calendar
+model, why `Fraction` instead of floats, and the supported
+1901..=2199 date range.
 
 QuantLib's `ql/time` is the design reference; ported holiday tables and
 lookup data are attributed in the module docs and in
