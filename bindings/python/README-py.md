@@ -96,21 +96,26 @@ datetime.date(2026, 11, 24)
 >>> schedule.dates()
 [datetime.date(2025, 1, 15), datetime.date(2025, 7, 15), datetime.date(2026, 1, 15)]
 
->>> DayCount.act_act_icma("semiannual").bind(schedule).year_fraction(
-...     datetime.date(2025, 1, 15), datetime.date(2025, 4, 15))
+>>> coupon = schedule.coupons()[0]
+>>> coupon.payment
+datetime.date(2025, 7, 15)
+>>> settle = datetime.date(2025, 4, 15)
+>>> DayCount.act_act_icma().accrual_fraction(schedule.accrual_period(settle).until(settle))
 Fraction(45, 181)
 
 ```
 
-A `Schedule`'s defaults are bond conventions: unadjusted coupon dates,
-backward from maturity, end of month on. Swap legs opt in with
-`convention="modified following"`. Bind ACT/ACT ICMA to an
-**unadjusted** schedule, as above: it reads the schedule's dates as the
-coupon grid, and a business-day-adjusted one gives different, wrong
-fractions. Roll payment dates separately with `adjust`. Unbound,
-`act_act_icma` raises rather than guess which coupon period two dates
-belong to. `advance` with a day period counts calendar days, then
-rolls; settlement lags are `add_business_days`.
+A `Schedule`'s defaults are bond conventions: unadjusted accrual dates,
+backward from maturity, end of month on, and each coupon paid on its
+accrual end rolled `following` (`payment_convention`,
+`payment_calendar` and `payment_lag` change that). Swap legs opt in to
+adjusted accrual with `convention="modified following"`. `coupons()`
+pairs each `AccrualPeriod` with its payment date, and
+`accrual_period(date)` finds the period running on a settlement date,
+half-open, so a coupon date accrues nothing. ACT/ACT ICMA measures
+periods only (`accrual_fraction`) and always counts on the unadjusted
+lattice. `advance` with a day period counts calendar days, then rolls;
+settlement lags are `add_business_days`.
 
 A `Schedule` is its coupon dates: it has a length, indexes, slices,
 iterates and reverses, because the crate's schedule derefs to `[Date]`.

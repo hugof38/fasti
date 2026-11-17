@@ -153,8 +153,8 @@ From chrono, go through year, month and day: `Date::from_ymd`.)
 
 ```rust
 use fasti::{
-    ActActICMA, BusinessDayConvention, Date, Fraction, Frequency, Month, Period,
-    RoundingMode, ScheduleBuilder, calendars::us,
+    AccrualDayCount, ActActICMA, Date, Fraction, Month, Period, RoundingMode, ScheduleBuilder,
+    calendars::us,
 };
 
 fn main() -> Result<(), fasti::TimeError> {
@@ -166,27 +166,27 @@ fn main() -> Result<(), fasti::TimeError> {
     let trade = Date::from_ymd(2026, Month::Jul, 2)?;
     assert_eq!(calendar.add_business_days(trade, 1)?, Date::from_ymd(2026, Month::Jul, 6)?);
 
-    // A 5-year semiannual Treasury accrues on its unadjusted coupon grid.
+    // A 5-year semiannual Treasury. The defaults are bond conventions:
+    // accrue on the unadjusted grid, pay on the next business day.
     let schedule = ScheduleBuilder::new(
         Date::from_ymd(2025, Month::Jan, 15)?,
         Date::from_ymd(2030, Month::Jan, 15)?,
         Period::Months(6),
         calendar,
     )
-    .build()?; // defaults are bond conventions: unadjusted, backward, end of month
-    let day_count = ActActICMA::new(Frequency::Semiannual).bind(&schedule)?;
+    .build()?;
 
     // Each coupon on $1mm at 4.25%: exact rationals, rounded once, in cents.
     let rate = Fraction::new(425, 10_000)?;
-    for period in schedule.periods() {
-        let fraction = day_count.try_year_fraction(period.start, period.end)?;
+    for coupon in schedule.coupons() {
+        let fraction = ActActICMA.accrual_fraction(&coupon.accrual)?;
         let cents = rate
             .checked_mul(fraction)
             .ok_or(fasti::TimeError::FractionOverflow)?
             .scale(100_000_000, RoundingMode::HalfEven)?;
-        let paid = calendar.adjust(period.end, BusinessDayConvention::Following)?;
+        let (accrual, paid) = (coupon.accrual.range(), coupon.payment);
         println!("{} -> {} (paid {paid}): {fraction} = ${}.{:02}",
-            period.start, period.end, cents / 100, cents % 100);
+            accrual.start, accrual.end, cents / 100, cents % 100);
     }
     Ok(())
 }
@@ -213,12 +213,13 @@ Martin Luther King Jr. Day).
 
 Two things to know before you go further:
 
-- **`ScheduleBuilder`'s defaults are bond conventions**: unadjusted
-  coupon dates, generated backward from maturity, end of month on.
-  ACT/ACT ICMA needs exactly that, because it reads the schedule's
-  dates as the coupon grid. Swap legs and other schedules that accrue
-  on business days opt in with `.with_convention(ModifiedFollowing)`;
-  roll payment dates separately, as above.
+- **Accrual and payment are different dates.** `coupons()` pairs each
+  `AccrualPeriod` with its `PaymentDate`; the builder's
+  `with_payment_convention`, `with_payment_calendar` and
+  `with_payment_lag` set the second without touching the first. Swap
+  legs that accrue on business days opt in with
+  `.with_convention(ModifiedFollowing)`. ACT/ACT ICMA measures periods,
+  not date pairs, and always counts on the unadjusted grid.
 - **`Calendar::advance` with `Period::Days(n)` counts calendar days,
   then rolls.** For settlement lags use `Calendar::add_business_days`.
 

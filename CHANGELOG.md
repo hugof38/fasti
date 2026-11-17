@@ -12,6 +12,25 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
 
 ### Breaking
 
+- **Accrual and payment dates are separate.** A `Schedule` now holds
+  unadjusted lattice dates, accrual dates and a payment date per
+  period. `periods()` yields `AccrualPeriod`s (accessors `start`,
+  `end`, `range`, `unadjusted`, `reference`, `until`) instead of
+  ranges; `coupons()` pairs each with a `PaymentDate`;
+  `reference_periods()` is gone (each period has its `reference()`).
+  Payments default to the accrual end rolled `Following`; set them
+  with `ScheduleBuilder::with_payment_convention`,
+  `with_payment_calendar` and `with_payment_lag`. Stub reference
+  periods are now on the unadjusted lattice.
+- **ACT/ACT ICMA measures periods.** `ActActICMA` is a unit struct
+  implementing the new `AccrualDayCount` (also implemented for every
+  `DayCount`), taking its frequency and stub grid from the period:
+  it cannot be given adjusted dates or a mismatched frequency.
+  `ActActICMA::new`, `bind`, `BoundActActICMA` and the
+  `FrequencyMismatch` and `ScheduleTooShort` errors are removed;
+  `year_fraction_with_reference` takes the frequency.
+  `TryFrom<Vec<Date>>` schedules name no frequency (ICMA reports
+  `MissingFrequency`); use `TryFrom<(Vec<Date>, Frequency)>`.
 - `serde`: `Date` is `"YYYY-MM-DD"` and `Period` is `"6M"`. The 0.2
   forms (an integer serial, `{"Months": 6}`) are no longer read.
 - `ActActICMA` no longer implements `DayCount`. Unbound, it returned one
@@ -52,6 +71,8 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
 
 ### Fixed
 
+- Python: the `Calendar.advance` stub declared `end_of_month=True`;
+  the default is `False`, and `Schedule`'s is `True`.
 - `ScheduleBuilder::build` merges dates that business-day adjustment
   rolls onto one day, as QuantLib does, instead of failing with
   `ScheduleNotMonotonic`, so daily schedules build on real calendars.
@@ -78,6 +99,15 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
 
 ### Added
 
+- `Schedule::accrual_period(date)`: the period running on a
+  settlement date, half-open, so accrued interest on a coupon date is
+  zero; cut it short with `AccrualPeriod::until(date)`.
+- `Schedule::unadjusted_dates` and `payment_dates`.
+- Python: `AccrualPeriod` and `Coupon` classes; `Schedule.coupons()`,
+  `accrual_period()`, `payment_dates()`, `unadjusted_dates()`; the
+  `payment_convention`, `payment_calendar` and `payment_lag` keywords;
+  `DayCount.accrual_fraction(period)`; `act_act_icma()` takes no
+  frequency and `bind` is gone.
 - A `jiff` feature: `TryFrom<jiff::civil::Date> for Date`,
   `From<Date> for jiff::civil::Date`, and `Weekday` conversions both
   ways. jiff has no month type; months cross as numbers
