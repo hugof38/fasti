@@ -22,6 +22,14 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
   `weekend()`, `rules()`.
 - `FixedDate::new` returns `Result` and refuses a day no year has in the
   month (Feb 30). `FixedDate::literal` is the `const` form.
+- `ScheduleBuilder::new`'s defaults are now bond conventions:
+  `Unadjusted` interior dates (was `ModifiedFollowing`) and end of month
+  on (was off), alongside the unchanged `Unadjusted` termination and
+  `Backward` generation. The old docs already called these "bond
+  conventions"; ModifiedFollowing is what made a bond schedule silently
+  wrong under ACT/ACT ICMA. Swap legs opt in with
+  `with_convention(ModifiedFollowing)` and `with_end_of_month(false)`.
+  The Python `Schedule` follows.
 - `TimeError` is `#[non_exhaustive]`. `ActActICMA::bind` on a schedule
   with fewer than two dates now returns `ScheduleTooShort`.
 

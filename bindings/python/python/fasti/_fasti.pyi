@@ -195,7 +195,7 @@ class Calendar:
         date: datetime.date,
         period: Period | Frequency | str,
         convention: BusinessDayConvention | str,
-        end_of_month: bool = False,
+        end_of_month: bool = True,
     ) -> datetime.date: ...
     def __hash__(self) -> int: ...
     def __reduce__(

@@ -11,9 +11,9 @@
 //!
 //! 1. Treasuries accrue on the **unadjusted** coupon grid: the 15th of
 //!    January and July, whatever day of the week it is. So the
-//!    accrual schedule is built with `Unadjusted` dates. Backward
-//!    generation anchors the grid on maturity, as bonds conventionally
-//!    do.
+//!    accrual schedule keeps `ScheduleBuilder`'s defaults, which are
+//!    bond conventions: `Unadjusted` dates, generated backward from
+//!    maturity.
 //! 2. Interest is counted ACT/ACT ICMA, bound to that schedule. Every
 //!    regular period is then exactly half a year, so every coupon is
 //!    exactly half the annual coupon: $21,250.00 on $1mm at 4.25%.
@@ -42,12 +42,9 @@ fn main() -> Result<(), TimeError> {
     let rate = Fraction::new(425, 10_000)?;
     let calendar = us::GOVERNMENT_BOND;
 
-    // The accrual grid: unadjusted coupon dates.
-    let schedule = ScheduleBuilder::new(issue, maturity, Period::Months(6), calendar)
-        .backwards()
-        .with_convention(BusinessDayConvention::Unadjusted)
-        .with_termination_convention(BusinessDayConvention::Unadjusted)
-        .build()?;
+    // The accrual grid: unadjusted coupon dates, backward from maturity.
+    // These are ScheduleBuilder's defaults, which are bond conventions.
+    let schedule = ScheduleBuilder::new(issue, maturity, Period::Months(6), calendar).build()?;
     let day_count = ActActICMA::new(Frequency::Semiannual).bind(&schedule)?;
 
     println!("UST 4.25% {issue} -> {maturity}, semiannual, ACT/ACT ICMA, $1,000,000 face\n");

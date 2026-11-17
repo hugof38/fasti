@@ -173,9 +173,7 @@ fn main() -> Result<(), fasti::TimeError> {
         Period::Months(6),
         calendar,
     )
-    .backwards()
-    .with_convention(BusinessDayConvention::Unadjusted)
-    .build()?;
+    .build()?; // defaults are bond conventions: unadjusted, backward, end of month
     let day_count = ActActICMA::new(Frequency::Semiannual).bind(&schedule)?;
 
     // Each coupon on $1mm at 4.25%: exact rationals, rounded once, in cents.
@@ -215,10 +213,12 @@ Martin Luther King Jr. Day).
 
 Two things to know before you go further:
 
-- **Bind ACT/ACT ICMA to an unadjusted schedule.** It reads the
-  schedule's dates as the coupon grid. A business-day-adjusted
-  schedule (`ScheduleBuilder`'s default is `ModifiedFollowing`) gives
-  different, wrong fractions. Roll payment dates separately, as above.
+- **`ScheduleBuilder`'s defaults are bond conventions**: unadjusted
+  coupon dates, generated backward from maturity, end of month on.
+  ACT/ACT ICMA needs exactly that, because it reads the schedule's
+  dates as the coupon grid. Swap legs and other schedules that accrue
+  on business days opt in with `.with_convention(ModifiedFollowing)`;
+  roll payment dates separately, as above.
 - **`Calendar::advance` with `Period::Days(n)` counts calendar days,
   then rolls.** For settlement lags use `Calendar::add_business_days`.
 

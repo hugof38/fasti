@@ -92,7 +92,7 @@ datetime.date(2025, 2, 28)
 datetime.date(2026, 11, 24)
 
 >>> schedule = Schedule(datetime.date(2025, 1, 15), datetime.date(2026, 1, 15),
-...                     "semiannual", us.GOVERNMENT_BOND, convention="unadjusted")
+...                     "semiannual", us.GOVERNMENT_BOND)
 >>> schedule.dates()
 [datetime.date(2025, 1, 15), datetime.date(2025, 7, 15), datetime.date(2026, 1, 15)]
 
@@ -102,9 +102,11 @@ Fraction(45, 181)
 
 ```
 
-Bind ACT/ACT ICMA to an **unadjusted** schedule, as above: it reads the
-schedule's dates as the coupon grid, and a business-day-adjusted one
-(the default convention is modified following) gives different, wrong
+A `Schedule`'s defaults are bond conventions: unadjusted coupon dates,
+backward from maturity, end of month on. Swap legs opt in with
+`convention="modified following"`. Bind ACT/ACT ICMA to an
+**unadjusted** schedule, as above: it reads the schedule's dates as the
+coupon grid, and a business-day-adjusted one gives different, wrong
 fractions. Roll payment dates separately with `adjust`. Unbound,
 `act_act_icma` raises rather than guess which coupon period two dates
 belong to. `advance` with a day period counts calendar days, then

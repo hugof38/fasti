@@ -252,7 +252,8 @@ impl ActActICMA {
     /// periods accrue against their notional grid automatically.
     ///
     /// Bind an **unadjusted** schedule (ICMA's grid is the natural
-    /// coupon grid). Errors with
+    /// coupon grid): `ScheduleBuilder`'s defaults, which are bond
+    /// conventions, give one. Errors with
     /// [`TimeError::ScheduleTooShort`] if the schedule has
     /// fewer than two dates.
     ///
