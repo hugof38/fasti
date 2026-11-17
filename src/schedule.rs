@@ -528,9 +528,34 @@ impl<'cal> ScheduleBuilder<'cal> {
     /// [`TimeError::EffectiveAfterTermination`],
     /// [`TimeError::ZeroTenor`], or [`TimeError::StubDateOutOfRange`]
     /// for inconsistent inputs, and
-    /// [`TimeError::ScheduleNotMonotonic`] when business-day
-    /// adjustment collapses adjacent dates onto the same business
-    /// day.
+    /// [`TimeError::ScheduleNotMonotonic`] only when business-day
+    /// adjustment rolls the effective date onto or past the
+    /// termination date, leaving no period at all.
+    ///
+    /// Generated dates that adjustment rolls onto the same business
+    /// day are merged rather than refused, as `QuantLib` does: the
+    /// effective and termination dates are always kept, and an
+    /// interior date is dropped when it lands on or before the date
+    /// kept before it, or on or after the termination date. The
+    /// periods either side of a dropped date join into one, so a
+    /// daily schedule rolled with `Following` has a single
+    /// Friday-to-Monday period over each weekend.
+    ///
+    /// ```
+    /// use fasti::{Date, Frequency, Month, Period, ScheduleBuilder, calendars};
+    /// let s = ScheduleBuilder::new(
+    ///     Date::from_ymd(2025, Month::Jan, 3)?, // Friday
+    ///     Date::from_ymd(2025, Month::Jan, 8)?, // Wednesday
+    ///     Period::from(Frequency::Daily),
+    ///     calendars::WEEKENDS_ONLY,
+    /// )
+    /// .forwards()
+    /// .build()?;
+    /// // Saturday and Sunday both roll to Monday 6th; one date remains.
+    /// let days: Vec<u8> = s.iter().map(|d| d.day()).collect();
+    /// assert_eq!(days, [3, 6, 7, 8]);
+    /// # Ok::<(), fasti::TimeError>(())
+    /// ```
     pub fn build(self) -> Result<Schedule, TimeError> {
         self.validate_inputs()?;
         let (dates, stubs) = match self.rule {
@@ -557,6 +582,7 @@ impl<'cal> ScheduleBuilder<'cal> {
         let adjusted =
             BdcAdjuster::new(self.calendar, self.convention, self.termination_convention)
                 .apply(dates)?;
+        let (adjusted, stubs) = merge_collisions(adjusted, stubs);
         let generation = (!matches!(self.rule, DateGenerationRule::Zero)).then(|| self.lattice());
         Schedule::new(adjusted, stubs, generation)
     }
@@ -797,6 +823,63 @@ impl<'a> BdcAdjuster<'a> {
         }
         Ok(adjusted)
     }
+}
+
+/// Merge the periods that business-day adjustment has collapsed,
+/// following `QuantLib`'s `Schedule`, which skips a generated date
+/// that adjusts onto its predecessor and trims the ends the same way.
+///
+/// The first and last dates are kept. An interior date is dropped
+/// when it is on or before the last date kept, or on or after the
+/// last date. Interior dates share one monotone convention, so the
+/// first case is always a tie; the second can be strict, because the
+/// termination date may carry a different convention (an
+/// `Unadjusted` Sunday maturity behind a penultimate date rolled to
+/// Monday).
+///
+/// Stub references follow the period they describe:
+///
+/// - A date dropped next to the first date was a tie with it, so the
+///   first period had zero length. It is gone with its stub; the
+///   period that replaces it was regular.
+/// - When the date before the last is dropped, the new last period
+///   starts one lattice step earlier, and the dropped date is
+///   exactly that step's boundary: it becomes the back reference, or
+///   no reference at all when it ties with the last date.
+///
+/// A schedule whose ends cross is returned untouched for
+/// [`Schedule::new`] to refuse.
+fn merge_collisions(dates: Vec<Date>, stubs: StubReferences) -> (Vec<Date>, StubReferences) {
+    let (Some(&first), Some(&last)) = (dates.first(), dates.last()) else {
+        return (dates, stubs);
+    };
+    if dates.len() < 3 || first >= last {
+        return (dates, stubs);
+    }
+    let mut kept = Vec::with_capacity(dates.len());
+    kept.push(first);
+    let mut front = stubs.front;
+    let mut tail_boundary = None;
+    for &d in &dates[1..dates.len() - 1] {
+        let previous = kept.last().copied().unwrap_or(first);
+        if d >= last {
+            // Monotone interior: the first such date is the boundary
+            // one step after the last date kept.
+            tail_boundary.get_or_insert(d);
+        } else if d <= previous {
+            if kept.len() == 1 {
+                front = None;
+            }
+        } else {
+            kept.push(d);
+        }
+    }
+    kept.push(last);
+    let back = match tail_boundary {
+        Some(boundary) => (boundary != last).then_some(boundary),
+        None => stubs.back,
+    };
+    (kept, StubReferences { front, back })
 }
 
 // ---- Tests --------------------------------------------------------------
@@ -1829,5 +1912,190 @@ mod tests {
     fn try_from_rejects_decreasing() {
         let r = Schedule::try_from(vec![ymd(2025, Month::Feb, 15), ymd(2025, Month::Jan, 15)]);
         assert_eq!(r.unwrap_err(), TimeError::ScheduleNotMonotonic);
+    }
+
+    // ---- Collisions after adjustment -----------------------------------
+
+    const US: Calendar<'static> = crate::calendars::us::SETTLEMENT;
+
+    const ROLLING: [BusinessDayConvention; 4] = [
+        BusinessDayConvention::Following,
+        BusinessDayConvention::ModifiedFollowing,
+        BusinessDayConvention::Preceding,
+        BusinessDayConvention::ModifiedPreceding,
+    ];
+
+    fn daily(effective: Date, termination: Date) -> ScheduleBuilder<'static> {
+        ScheduleBuilder::new(effective, termination, Period::from(Frequency::Daily), US)
+    }
+
+    #[test]
+    fn daily_schedule_is_the_business_days_between_its_ends() {
+        // Jan 2025 on US Settlement: New Year's Day (Wed), MLK Day
+        // (Mon 20th), four weekends; Feb 1 is a Saturday maturity.
+        let (effective, termination) = (ymd(2025, Month::Jan, 1), ymd(2025, Month::Feb, 1));
+        for convention in ROLLING {
+            for rule in [DateGenerationRule::Forward, DateGenerationRule::Backward] {
+                let s = daily(effective, termination)
+                    .with_convention(convention)
+                    .with_rule(rule)
+                    .build()
+                    .unwrap();
+                let first = US.adjust(effective, convention).unwrap();
+                let mut expected = vec![first];
+                expected.extend(US.business_days(first.add_days(1).unwrap()..termination));
+                expected.push(termination);
+                assert_eq!(s.dates(), &expected[..], "{convention:?} {rule:?}");
+                assert_eq!(
+                    s.periods().collect::<Vec<_>>(),
+                    s.reference_periods().collect::<Vec<_>>(),
+                    "{convention:?} {rule:?}: every period is regular",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn weekend_collapses_into_one_friday_to_monday_period() {
+        let s = daily(ymd(2025, Month::Jan, 9), ymd(2025, Month::Jan, 15))
+            .with_convention(BusinessDayConvention::Following)
+            .build()
+            .unwrap();
+        let periods: Vec<_> = s.periods().collect();
+        assert!(periods.contains(&(ymd(2025, Month::Jan, 10)..ymd(2025, Month::Jan, 13))));
+        assert_eq!(periods.len(), 4);
+    }
+
+    #[test]
+    fn penultimate_date_rolled_past_an_unadjusted_maturity_is_dropped() {
+        // Maturity Sunday Feb 2, kept unadjusted; Saturday rolls to
+        // Monday Feb 3, past it. The last period becomes Fri..Sun,
+        // accruing against the Fri..Mon lattice step it replaces.
+        let s = daily(ymd(2025, Month::Jan, 27), ymd(2025, Month::Feb, 2))
+            .with_convention(BusinessDayConvention::Following)
+            .with_termination_convention(BusinessDayConvention::Unadjusted)
+            .forwards()
+            .build()
+            .unwrap();
+        assert_eq!(s.dates().last(), Some(&ymd(2025, Month::Feb, 2)));
+        assert_eq!(
+            s.periods().last(),
+            Some(ymd(2025, Month::Jan, 31)..ymd(2025, Month::Feb, 2)),
+        );
+        assert_eq!(
+            s.reference_periods().last(),
+            Some(ymd(2025, Month::Jan, 31)..ymd(2025, Month::Feb, 3)),
+        );
+    }
+
+    #[test]
+    fn penultimate_date_tying_with_maturity_leaves_a_regular_last_period() {
+        // Maturity Sunday Feb 2 rolled Following to Monday Feb 3;
+        // Saturday Feb 1 rolls onto the same Monday.
+        let s = daily(ymd(2025, Month::Jan, 27), ymd(2025, Month::Feb, 2))
+            .with_convention(BusinessDayConvention::Following)
+            .with_termination_convention(BusinessDayConvention::Following)
+            .forwards()
+            .build()
+            .unwrap();
+        assert_eq!(
+            s.periods().last(),
+            Some(ymd(2025, Month::Jan, 31)..ymd(2025, Month::Feb, 3)),
+        );
+        assert_eq!(s.periods().last(), s.reference_periods().last());
+    }
+
+    #[test]
+    fn front_stub_that_adjusts_onto_the_effective_date_vanishes() {
+        // Effective Saturday Jan 4, first regular date Sunday Jan 5:
+        // both roll to Monday Jan 6, so the stub has no length left.
+        let s = ScheduleBuilder::new(
+            ymd(2025, Month::Jan, 4),
+            ymd(2025, Month::Feb, 2),
+            Period::Weeks(1),
+            US,
+        )
+        .with_convention(BusinessDayConvention::Following)
+        .with_first_date(ymd(2025, Month::Jan, 5))
+        .forwards()
+        .build()
+        .unwrap();
+        assert_eq!(
+            s.dates()[..2],
+            [ymd(2025, Month::Jan, 6), ymd(2025, Month::Jan, 13)]
+        );
+        assert_eq!(s.periods().next(), s.reference_periods().next());
+    }
+
+    #[test]
+    fn ends_that_meet_after_adjustment_are_still_refused() {
+        // Saturday effective rolls to Monday, past a Sunday maturity
+        // kept unadjusted: no period survives.
+        let r = daily(ymd(2025, Month::Jan, 4), ymd(2025, Month::Jan, 5))
+            .with_convention(BusinessDayConvention::Following)
+            .with_termination_convention(BusinessDayConvention::Unadjusted)
+            .build();
+        assert_eq!(r.unwrap_err(), TimeError::ScheduleNotMonotonic);
+    }
+
+    #[test]
+    fn merged_daily_schedule_binds_and_accrues_under_icma() {
+        use crate::{ActActICMA, DayCount};
+        let s = daily(ymd(2025, Month::Jan, 1), ymd(2025, Month::Feb, 1))
+            .build()
+            .unwrap();
+        let dc = ActActICMA::new(Frequency::Daily).bind(&s).unwrap();
+        for p in s.periods() {
+            assert!(dc.year_fraction(p.start, p.end).parts().0 > 0, "{p:?}");
+        }
+    }
+
+    proptest! {
+        /// Short tenors on a real calendar always build once the ends
+        /// survive adjustment, and every invariant a schedule promises
+        /// still holds after merging.
+        #[test]
+        fn short_tenors_build_and_stay_valid(
+            x in 1u32..(Date::MAX.serial() - 1_000),
+            span_days in 1u32..=120,
+            weeks in any::<bool>(),
+            convention_idx in 0usize..4,
+            terminal_idx in 0usize..5,
+            forward in any::<bool>(),
+        ) {
+            let effective = Date::from_serial(x).unwrap();
+            let termination = Date::from_serial(x + span_days).unwrap();
+            let tenor = if weeks { Period::Weeks(1) } else { Period::Days(1) };
+            let convention = ROLLING[convention_idx];
+            let terminal = ROLLING.get(terminal_idx).copied()
+                .unwrap_or(BusinessDayConvention::Unadjusted);
+            let rule = if forward { DateGenerationRule::Forward } else { DateGenerationRule::Backward };
+            let result = ScheduleBuilder::new(effective, termination, tenor, US)
+                .with_convention(convention)
+                .with_termination_convention(terminal)
+                .with_rule(rule)
+                .build();
+            let first = US.adjust(effective, convention).unwrap();
+            let last = US.adjust(termination, terminal).unwrap();
+            if first >= last {
+                prop_assert_eq!(result.unwrap_err(), TimeError::ScheduleNotMonotonic);
+            } else {
+                let s = result.unwrap();
+                prop_assert_eq!(s.dates().first(), Some(&first));
+                prop_assert_eq!(s.dates().last(), Some(&last));
+                for w in s.dates().windows(2) {
+                    prop_assert!(w[0] < w[1]);
+                }
+                for r in s.reference_periods() {
+                    prop_assert!(r.start < r.end);
+                }
+                if !weeks {
+                    // Nothing a daily schedule could land on is lost.
+                    for b in US.business_days(first..last) {
+                        prop_assert!(s.dates().binary_search(&b).is_ok(), "{b} missing");
+                    }
+                }
+            }
+        }
     }
 }

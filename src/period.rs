@@ -47,6 +47,12 @@ pub enum Frequency {
     /// Once a week.
     Weekly = 52,
     /// Once a day.
+    ///
+    /// A daily [`Schedule`](crate::Schedule) on a business calendar
+    /// joins the days around each run of non-business days into one
+    /// period (Friday to Monday over a weekend). To list
+    /// the business days in a range instead, use
+    /// [`Calendar::business_days`](crate::Calendar::business_days).
     Daily = 365,
 }
 

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `ScheduleBuilder::build` no longer fails with `ScheduleNotMonotonic`
+  when business-day adjustment rolls generated dates onto the same day,
+  so daily (and other short-tenor) schedules build on real calendars.
+  Colliding dates are merged, as in QuantLib: the effective and
+  termination dates are kept, and the periods either side of a dropped
+  date join into one (Friday to Monday over a weekend). Stub reference
+  periods are carried over. The error remains for date lists passed to
+  `TryFrom` and for a build whose effective date rolls onto or past its
+  termination date.
+
 ## [py-0.2.1] - 2026-08-25
 
 `fasti-dates` only; the crate stays at 0.2.0. The two numbers are kept
