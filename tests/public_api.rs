@@ -361,7 +361,7 @@ fn errors_are_usable_downstream() {
 
     // Display, Debug and equality — enough to fold into a downstream
     // error enum without reaching for anything private.
-    assert!(!rendered(err).is_empty());
+    assert_ne!(rendered(err), "");
     assert_eq!(err, Date::from_ymd(2026, Month::Feb, 30).unwrap_err());
 
     let wrapped = DownstreamError::Time(err);

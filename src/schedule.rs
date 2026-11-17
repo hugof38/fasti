@@ -1535,7 +1535,7 @@ mod tests {
         let dates: Vec<Date> = Walk::new(monthly, seed, stop, Direction::Forward)
             .collect::<Result<_, _>>()
             .unwrap();
-        assert!(dates.is_empty());
+        assert_eq!(dates, Vec::<Date>::new());
     }
 
     // ---- Generator ----------------------------------------------------
@@ -1639,7 +1639,7 @@ mod tests {
         )
         .apply(Vec::new())
         .unwrap();
-        assert!(adjusted.is_empty());
+        assert_eq!(adjusted, Vec::<Date>::new());
     }
 
     // ---- with_frequency ----------------------------------------------

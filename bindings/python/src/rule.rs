@@ -4,6 +4,11 @@
 //! Python folds each variant into one constructor, because the builder
 //! chain (`.shift(...)`, `.years(...)`) is what keyword arguments are.
 
+// `#[pyclass(from_py_object)]` on the `Copy` type `PyRule` expands to a
+// `.clone()` that clippy 1.100 flags as `clone_on_copy`. The call is in
+// pyo3's generated impl, which no item-level attribute here reaches.
+#![allow(clippy::clone_on_copy)]
+
 use fasti::{
     Date, EasterOffset, FixedDate, LastWeekday, Month, NthWeekday, OneOff, Ordinal, Rule, Year,
     YearRange,
