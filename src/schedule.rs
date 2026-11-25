@@ -90,10 +90,7 @@ impl core::str::FromStr for DateGenerationRule {
 /// it through the same checks as construction, so a deserialized one is valid.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "serde",
-    serde(try_from = "ScheduleData", into = "ScheduleData")
-)]
+#[cfg_attr(feature = "serde", serde(try_from = "ScheduleData"))]
 pub struct Schedule {
     dates: Vec<Date>,
     payments: Vec<PaymentDate>,
@@ -118,6 +115,14 @@ pub struct Generation {
 }
 
 impl Generation {
+    /// The lattice of a `frequency` coupon grid, month-end snapping.
+    pub(crate) fn of(frequency: Frequency) -> Self {
+        Self {
+            tenor: Period::from(frequency),
+            end_of_month: true,
+        }
+    }
+
     /// `anchor + i · tenor`, the lattice's own stepping rule.
     ///
     /// Computed as a fresh multiple rather than by chaining, which
@@ -168,11 +173,7 @@ impl TryFrom<(Vec<Date>, Frequency)> for Schedule {
 
     /// As [`TryFrom<Vec<Date>>`], on a `frequency` coupon grid.
     fn try_from((dates, frequency): (Vec<Date>, Frequency)) -> Result<Self, Self::Error> {
-        let lattice = Generation {
-            tenor: Period::from(frequency),
-            end_of_month: true,
-        };
-        Self::from_parts(dates, Some(lattice))
+        Self::from_parts(dates, Some(Generation::of(frequency)))
     }
 }
 
@@ -193,10 +194,9 @@ struct StubReferences {
     back: Option<Date>,
 }
 
-/// Serde representation of a [`Schedule`], validated on the way back
-/// in through [`Schedule::new`].
+/// A [`Schedule`] as deserialized, before [`Schedule::new`] checks it.
 #[cfg(feature = "serde")]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 struct ScheduleData {
     dates: Vec<Date>,
     payments: Vec<PaymentDate>,
@@ -210,18 +210,6 @@ impl TryFrom<ScheduleData> for Schedule {
 
     fn try_from(d: ScheduleData) -> Result<Self, Self::Error> {
         Self::new(d.dates, d.payments, d.stubs, d.generation)
-    }
-}
-
-#[cfg(feature = "serde")]
-impl From<Schedule> for ScheduleData {
-    fn from(s: Schedule) -> Self {
-        Self {
-            dates: s.dates,
-            payments: s.payments,
-            stubs: s.stubs,
-            generation: s.generation,
-        }
     }
 }
 
@@ -391,8 +379,8 @@ impl Schedule {
 impl core::ops::Deref for Schedule {
     type Target = [Date];
 
-    /// The coupon dates, so a `Schedule` indexes, slices, and iterates
-    /// like the date list it is. Reference dates stay explicit.
+    /// The accrual dates, so a `Schedule` indexes, slices, and iterates
+    /// like the date list it is.
     fn deref(&self) -> &Self::Target {
         &self.dates
     }

@@ -11,7 +11,7 @@ use core::ops::Range;
 
 use crate::{
     AccrualDayCount, AccrualPeriod, Date, DateRange, Fraction, Frequency, Generation, Month,
-    Period, TimeError, Year,
+    TimeError, Year,
 };
 
 /// A day-count convention.
@@ -242,46 +242,40 @@ impl ActActICMA {
         if ref_start >= ref_end {
             return Err(TimeError::InvalidReferencePeriod);
         }
-        let lattice = Generation {
-            tenor: Period::from(frequency),
-            end_of_month: true,
-        };
-        let reference = ref_start..ref_end;
-        match start.cmp(&end) {
-            core::cmp::Ordering::Equal => Ok(Fraction::ZERO),
-            core::cmp::Ordering::Less => accrue(frequency, start..end, &reference, lattice),
-            core::cmp::Ordering::Greater => accrue(frequency, end..start, &reference, lattice)?
+        let (lattice, reference) = (Generation::of(frequency), ref_start..ref_end);
+        if start <= end {
+            accrue(start..end, &reference, lattice)
+        } else {
+            accrue(end..start, &reference, lattice)?
                 .checked_neg()
-                .ok_or(TimeError::FractionOverflow),
+                .ok_or(TimeError::FractionOverflow)
         }
     }
 }
 
 impl AccrualDayCount for ActActICMA {
-    /// Accrues the period against its reference period. Errors with [`TimeError::MissingFrequency`] for a period
-    /// of a schedule built from a bare date list, and
-    /// [`TimeError::NonCanonicalPeriod`] for a tenor that is not a
-    /// whole number of coupons a year.
+    /// Accrues the period against its reference period. Errors with
+    /// [`TimeError::MissingFrequency`] for a period of a schedule built
+    /// from a bare date list, and [`TimeError::NonCanonicalPeriod`] for a
+    /// tenor that is not a whole number of coupons a year.
     fn accrual_fraction(&self, period: &AccrualPeriod) -> Result<Fraction, TimeError> {
         let lattice = period.generation().ok_or(TimeError::MissingFrequency)?;
-        let frequency = Frequency::try_from(lattice.tenor)?;
-        let span = period.range();
-        if span.start >= span.end {
-            return Ok(Fraction::ZERO);
-        }
-        accrue(frequency, span, &period.reference(), lattice)
+        accrue(period.range(), &period.reference(), lattice)
     }
 }
 
-/// Accrue an ordered `span` over the grid anchored on `reference`:
-/// descend to the lowest overlapping window, then add each window's
-/// share of a coupon until the span is covered.
+/// Accrue `span` over the grid anchored on `reference`: descend to the
+/// lowest overlapping window, then add each window's share of a coupon
+/// until the span is covered. An empty span accrues zero.
 fn accrue(
-    frequency: Frequency,
     span: Range<Date>,
     reference: &Range<Date>,
     lattice: Generation,
 ) -> Result<Fraction, TimeError> {
+    let frequency = Frequency::try_from(lattice.tenor)?;
+    if span.is_empty() {
+        return Ok(Fraction::ZERO);
+    }
     let mut i = 0;
     while lattice.window(reference, i)?.start > span.start {
         i -= 1;
@@ -539,8 +533,7 @@ mod tests {
     extern crate alloc;
 
     use super::*;
-    use crate::Month;
-    use crate::Schedule;
+    use crate::{Month, Period, Schedule};
     use proptest::prelude::*;
 
     fn ymd(y: u16, m: Month, d: u8) -> Date {

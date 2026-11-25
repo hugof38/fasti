@@ -1,7 +1,7 @@
-//! [`Schedule`] — the coupon dates, and the regular grid they accrue
-//! against.
+//! [`Schedule`] — accrual periods, their payment dates, and the
+//! lattice they were generated on.
 
-use fasti::{AccrualPeriod, Date, DateGenerationRule, Schedule, ScheduleBuilder};
+use fasti::{AccrualPeriod, Coupon, Date, Schedule, ScheduleBuilder};
 use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
 use pyo3::types::{PyIterator, PyList, PySlice, PyTuple, PyTupleMethods};
@@ -32,13 +32,14 @@ struct Generated {
     termination: Date,
     tenor: PyPeriod,
     calendar: CalendarSpec,
-    convention: PyBusinessDayConvention,
-    termination_convention: PyBusinessDayConvention,
-    rule: PyDateGenerationRule,
+    // `None` leaves the crate's default.
+    convention: Option<PyBusinessDayConvention>,
+    termination_convention: Option<PyBusinessDayConvention>,
+    rule: Option<PyDateGenerationRule>,
     end_of_month: bool,
     first_date: Option<Date>,
     next_to_last_date: Option<Date>,
-    payment_convention: PyBusinessDayConvention,
+    payment_convention: Option<PyBusinessDayConvention>,
     payment_calendar: Option<CalendarSpec>,
     payment_lag: u32,
 }
@@ -71,12 +72,20 @@ impl ScheduleSpec {
                     .transpose()?;
                 let mut builder =
                     ScheduleBuilder::new(g.effective, g.termination, g.tenor.0, calendar.view())
-                        .with_convention(g.convention.0)
-                        .with_termination_convention(g.termination_convention.0)
-                        .with_rule(g.rule.0)
                         .with_end_of_month(g.end_of_month)
-                        .with_payment_convention(g.payment_convention.0)
                         .with_payment_lag(g.payment_lag);
+                if let Some(c) = g.convention {
+                    builder = builder.with_convention(c.0);
+                }
+                if let Some(c) = g.termination_convention {
+                    builder = builder.with_termination_convention(c.0);
+                }
+                if let Some(r) = g.rule {
+                    builder = builder.with_rule(r.0);
+                }
+                if let Some(c) = g.payment_convention {
+                    builder = builder.with_payment_convention(c.0);
+                }
                 if let Some(payment_calendar) = &payment_calendar {
                     builder = builder.with_payment_calendar(payment_calendar.view());
                 }
@@ -171,14 +180,12 @@ impl PyGeneration {
     }
 }
 
-/// Coupon dates in chronological order, and the reference periods they
-/// accrue against.
+/// Accrual dates in chronological order, with a payment date per
+/// period. `periods()` gives the accrual periods, each carrying the
+/// reference period ACT/ACT ICMA counts a stub against; `coupons()`
+/// pairs each with its payment date.
 ///
-/// The two differ only at a stub, where the reference period is the
-/// notional quasi-coupon period one tenor from the adjacent coupon —
-/// which is what ACT/ACT ICMA accrues against.
-///
-/// A schedule indexes and iterates as its coupon dates.
+/// A schedule indexes and iterates as its accrual dates.
 ///
 /// Generating one takes the effective and termination dates, a tenor
 /// and a calendar. The rest are keyword arguments whose defaults are the
@@ -202,6 +209,7 @@ impl PyGeneration {
     module = "fasti",
     name = "Schedule"
 )]
+#[derive(Clone)]
 pub struct PySchedule {
     spec: ScheduleSpec,
     schedule: Schedule,
@@ -220,15 +228,6 @@ impl Eq for PySchedule {}
 impl core::hash::Hash for PySchedule {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.schedule.dates().hash(state);
-    }
-}
-
-impl Clone for PySchedule {
-    fn clone(&self) -> Self {
-        Self {
-            spec: self.spec.clone(),
-            schedule: self.schedule.clone(),
-        }
     }
 }
 
@@ -280,22 +279,13 @@ impl PySchedule {
                 termination: termination.0,
                 tenor: PyPeriod(tenor.0),
                 calendar: calendar.0,
-                convention: convention.map_or(
-                    PyBusinessDayConvention(fasti::BusinessDayConvention::Unadjusted),
-                    |c| c.0,
-                ),
-                termination_convention: termination_convention.map_or(
-                    PyBusinessDayConvention(fasti::BusinessDayConvention::Unadjusted),
-                    |c| c.0,
-                ),
-                rule: rule.map_or(PyDateGenerationRule(DateGenerationRule::Backward), |r| r.0),
+                convention: convention.map(|c| c.0),
+                termination_convention: termination_convention.map(|c| c.0),
+                rule: rule.map(|r| r.0),
                 end_of_month,
                 first_date: first_date.map(|d| d.0),
                 next_to_last_date: next_to_last_date.map(|d| d.0),
-                payment_convention: payment_convention.map_or(
-                    PyBusinessDayConvention(fasti::BusinessDayConvention::Following),
-                    |c| c.0,
-                ),
+                payment_convention: payment_convention.map(|c| c.0),
                 payment_calendar: payment_calendar.map(|c| c.0),
                 payment_lag,
             })),
@@ -341,13 +331,7 @@ impl PySchedule {
 
     /// Each accrual period with its payment date.
     fn coupons(&self) -> Vec<PyCoupon> {
-        self.schedule
-            .coupons()
-            .map(|c| PyCoupon {
-                accrual: PyAccrualPeriod(c.accrual),
-                payment: c.payment.date(),
-            })
-            .collect()
+        self.schedule.coupons().map(PyCoupon).collect()
     }
 
     /// The period whose interest is running on `date` (start included,
@@ -504,14 +488,14 @@ impl PySchedule {
                 date_out(py, g.termination)?,
                 g.tenor,
                 g.calendar.py_calendar()?,
-                g.convention.canonical(),
-                g.termination_convention.canonical(),
-                g.rule.canonical(),
+                g.convention.map(|c| c.canonical()),
+                g.termination_convention.map(|c| c.canonical()),
+                g.rule.map(|r| r.canonical()),
                 g.end_of_month,
                 g.first_date.map(|d| date_out(py, d)).transpose()?,
                 g.next_to_last_date.map(|d| date_out(py, d)).transpose()?,
                 (
-                    g.payment_convention.canonical(),
+                    g.payment_convention.map(|c| c.canonical()),
                     g.payment_calendar
                         .as_ref()
                         .map(CalendarSpec::py_calendar)
@@ -563,13 +547,13 @@ pub fn _rebuild_schedule(
             at(1)?.extract()?,
             at(2)?.extract()?,
             at(3)?.extract()?,
-            Some(at(4)?.extract()?),
-            Some(at(5)?.extract()?),
-            Some(at(6)?.extract()?),
+            at(4)?.extract()?,
+            at(5)?.extract()?,
+            at(6)?.extract()?,
             at(7)?.extract()?,
             at(8)?.extract()?,
             at(9)?.extract()?,
-            Some(payment.get_item(0)?.extract()?),
+            payment.get_item(0)?.extract()?,
             payment.get_item(1)?.extract()?,
             payment.get_item(2)?.extract()?,
         )?
@@ -639,41 +623,42 @@ impl PyAccrualPeriod {
     }
 
     fn __repr__(&self) -> String {
-        format!(
-            "AccrualPeriod({} .. {})",
-            py_date_repr(self.0.start()),
-            py_date_repr(self.0.end())
-        )
+        period_repr(&self.0)
     }
+}
+
+fn period_repr(p: &AccrualPeriod) -> String {
+    format!(
+        "AccrualPeriod({} .. {})",
+        py_date_repr(p.start()),
+        py_date_repr(p.end())
+    )
 }
 
 /// A coupon: its accrual period and its payment date.
 #[pyclass(frozen, eq, skip_from_py_object, module = "fasti", name = "Coupon")]
 #[derive(Clone, PartialEq, Eq)]
-pub struct PyCoupon {
-    accrual: PyAccrualPeriod,
-    payment: Date,
-}
+pub struct PyCoupon(Coupon);
 
 #[pymethods]
 impl PyCoupon {
     /// The period interest accrues over.
     #[getter]
     fn accrual(&self) -> PyAccrualPeriod {
-        self.accrual.clone()
+        PyAccrualPeriod(self.0.accrual.clone())
     }
 
     /// When the coupon is paid.
     #[getter]
     fn payment<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        date_out(py, self.payment)
+        date_out(py, self.0.payment.date())
     }
 
     fn __repr__(&self) -> String {
         format!(
             "Coupon({}, payment={})",
-            self.accrual.__repr__(),
-            py_date_repr(self.payment)
+            period_repr(&self.0.accrual),
+            py_date_repr(self.0.payment.date())
         )
     }
 }
