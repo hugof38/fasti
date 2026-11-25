@@ -108,9 +108,9 @@ impl AccrualPeriod {
 }
 
 /// The date a coupon is paid: its accrual end rolled under the
-/// schedule's payment convention, plus any payment lag. A type of its
-/// own so it cannot stand in for an accrual date; [`date`](Self::date)
-/// takes the [`Date`] out explicitly.
+/// schedule's payment convention, or a payment lag of business days
+/// after it. A type of its own so it cannot stand in for an accrual
+/// date; [`date`](Self::date) takes the [`Date`] out explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]

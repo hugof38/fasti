@@ -564,8 +564,8 @@ impl<'cal> ScheduleBuilder<'cal> {
     }
 
     /// The convention rolling each accrual end onto its payment date
-    /// (default `Following`). Ignored when there is a payment lag, as in
-    /// `QuantLib`.
+    /// (default `Following`). Applies when there is no payment lag; a lag
+    /// counts business days and so always lands on one.
     #[must_use]
     pub fn with_payment_convention(mut self, convention: BusinessDayConvention) -> Self {
         self.payment_convention = convention;
@@ -579,8 +579,10 @@ impl<'cal> ScheduleBuilder<'cal> {
         self
     }
 
-    /// Business days from the accrual end to payment (default 0), as
-    /// [`Calendar::add_business_days`] counts them.
+    /// Pay this many business days after the accrual end, counted on the
+    /// payment calendar (default 0). From a non-business day the first
+    /// step lands on the next business day: one business day after a
+    /// Saturday is the Monday.
     #[must_use]
     pub fn with_payment_lag(mut self, business_days: u32) -> Self {
         self.payment_lag = business_days;
@@ -642,9 +644,9 @@ impl<'cal> ScheduleBuilder<'cal> {
                 .adjust_lattice(dates, stubs)?;
         let pay_calendar = self.payment_calendar.unwrap_or(self.calendar);
         let lag = i32::try_from(self.payment_lag).map_err(|_| TimeError::DateOutOfRange)?;
-        // As QuantLib's `paymentCalendar.advance(end, lag, Days, convention)`:
-        // with no lag, roll under the convention; with one, step that many
-        // business days from the accrual end and ignore the convention.
+        // No lag: roll the accrual end under the payment convention. A
+        // lag: count business days from the accrual end, which already
+        // lands on a business day (QuantLib, Strata and rateslib agree).
         let payments = dates
             .iter()
             .skip(1)
@@ -2164,8 +2166,8 @@ mod tests {
             .with_payment_calendar(crate::calendars::TARGET)
             .build()
             .unwrap();
-        // As QuantLib, a lag counts business days from the accrual end
-        // itself, Saturday Jan 15 2028: Monday 17th, then Tuesday 18th.
+        // The lag counts from the accrual end, Saturday Jan 15 2028:
+        // Monday 17th is one TARGET business day, Tuesday 18th two.
         assert_eq!(lagged.payment_dates()[5].date(), ymd(2028, Month::Jan, 18));
         let preceding = treasury()
             .with_payment_convention(BusinessDayConvention::Preceding)

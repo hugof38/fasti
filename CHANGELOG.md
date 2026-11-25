@@ -20,8 +20,8 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
   Payments default to the accrual end rolled `Following`; set them
   with `ScheduleBuilder::with_payment_convention`,
   `with_payment_calendar` and `with_payment_lag`. A lag counts
-  business days from the accrual end and ignores the convention, as
-  QuantLib's `advance(end, lag, Days, convention)` does.
+  business days on the payment calendar from the accrual end; the
+  convention applies only without one.
 - **ACT/ACT ICMA measures periods.** `ActActICMA` is a unit struct
   implementing the new `AccrualDayCount` (also implemented for every
   `DayCount`), taking its frequency and stub grid from the period's
@@ -50,8 +50,7 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
   wrong under ACT/ACT ICMA. Swap legs opt in with
   `with_convention(ModifiedFollowing)` and `with_end_of_month(false)`.
   The Python `Schedule` follows.
-- `TimeError` is `#[non_exhaustive]`. `ActActICMA::bind` on a schedule
-  with fewer than two dates now returns `ScheduleTooShort`.
+- `TimeError` is `#[non_exhaustive]`.
 
 ### Changed
 
@@ -91,8 +90,6 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
   ICMA on the unadjusted grid with payment dates rolled separately, so
   every coupon on $1mm at 4.25% is exactly $21,250.00. The example also
   computes accrued interest for a T+1 settlement.
-- `BoundActActICMA` no longer turns an arithmetic failure into a silent
-  zero mid-sum; `try_year_fraction` reports it.
 - `Date::literal` and `Year::literal` documented a compile error even
   at run time; the docs now say they panic outside a `const`.
 - `Date`'s `Display` honours width and alignment, so dates line up in
@@ -123,10 +120,10 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
 - `FromStr` for `Period` (`"6M"`), `Frequency`,
   `BusinessDayConvention` and `DateGenerationRule`, ignoring case and
   punctuation as the Python bindings do.
-- `BoundActActICMA::try_year_fraction`, `ActActICMA::name`,
+- `ActActICMA::name`,
   `Calendar::is_joint`, `Weekend::bits` / `from_bits`,
   `FixedDate::literal`, `TryFrom<u16> for Year`, and the `TimeError`
-  variants `ScheduleTooShort`, `InvalidPeriodString`, `UnknownName`,
+  variants `MissingFrequency`, `InvalidPeriodString`, `UnknownName`,
   `InvalidWeekendMask`.
 - Python: `Calendar.add_business_days` and
   `Calendar.previous_business_day`. Unbound `DayCount.act_act_icma`

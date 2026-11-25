@@ -184,7 +184,8 @@ impl PyGeneration {
 /// and a calendar. The rest are keyword arguments whose defaults are the
 /// crate's bond conventions: unadjusted accrual dates, `Backward`
 /// generation, end of month on, no stub anchors, and payment on the
-/// accrual end rolled `Following` on the same calendar with no lag.
+/// accrual end rolled `Following` on the same calendar. `payment_lag`
+/// pays that many business days after the accrual end instead.
 ///
 /// >>> import datetime
 /// >>> from fasti import Schedule
@@ -237,11 +238,6 @@ impl PySchedule {
             schedule: spec.build()?,
             spec,
         })
-    }
-
-    /// The schedule itself, for the day counts that bind to one.
-    pub fn inner(&self) -> &Schedule {
-        &self.schedule
     }
 
     fn sliced(&self, op: Op) -> PyResult<Self> {
