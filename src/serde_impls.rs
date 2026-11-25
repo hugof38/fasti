@@ -74,7 +74,7 @@ mod tests {
         assert!(parse::<Weekend>("255").is_err());
         let schedule = |dates: &str, payments: &str| {
             parse::<Schedule>(&alloc::format!(
-                r#"{{"unadjusted":{dates},"dates":{dates},"payments":{payments},"stubs":{{"front":null,"back":null}},"generation":null}}"#
+                r#"{{"dates":{dates},"payments":{payments},"stubs":{{"front":null,"back":null}},"generation":null}}"#
             ))
         };
         assert!(schedule(r#"["2026-01-01","2026-07-01"]"#, r#"["2026-07-01"]"#).is_ok());

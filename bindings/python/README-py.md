@@ -113,8 +113,7 @@ adjusted accrual with `convention="modified following"`. `coupons()`
 pairs each `AccrualPeriod` with its payment date, and
 `accrual_period(date)` finds the period running on a settlement date,
 half-open, so a coupon date accrues nothing. ACT/ACT ICMA measures
-periods only (`accrual_fraction`) and always counts on the unadjusted
-lattice. `advance` with a day period counts calendar days, then rolls;
+periods only (`accrual_fraction`), on the dates the schedule accrues on. `advance` with a day period counts calendar days, then rolls;
 settlement lags are `add_business_days`.
 
 A `Schedule` is its coupon dates: it has a length, indexes, slices,

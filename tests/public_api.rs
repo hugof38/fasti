@@ -335,7 +335,7 @@ fn schedule_exposes_its_generation() -> Result<(), TimeError> {
         generation.step(start, 1)?,
         Date::from_ymd(2025, Month::Jun, 30)?
     );
-    assert!(schedule.periods().all(|p| p.reference() == p.unadjusted()));
+    assert!(schedule.periods().all(|p| p.reference() == p.range()));
     Ok(())
 }
 

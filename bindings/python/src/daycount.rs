@@ -175,8 +175,8 @@ impl PyDayCount {
     }
 
     /// The year fraction accrued over a schedule's `period`. Every
-    /// convention measures its start to end; ACT/ACT ICMA counts on its
-    /// unadjusted lattice and reference period.
+    /// convention measures its start to end; ACT/ACT ICMA also counts
+    /// against its reference period.
     ///
     /// >>> import datetime
     /// >>> from fasti import DayCount, Schedule

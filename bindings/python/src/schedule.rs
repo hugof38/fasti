@@ -327,11 +327,6 @@ impl PySchedule {
         dates_out(py, self.schedule.dates())
     }
 
-    /// The unadjusted lattice dates, one per accrual date.
-    fn unadjusted_dates<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyAny>>> {
-        dates_out(py, self.schedule.unadjusted_dates())
-    }
-
     /// The payment dates, one per period.
     fn payment_dates<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyAny>>> {
         let dates: Vec<Date> = self
@@ -596,8 +591,8 @@ pub fn _rebuild_schedule(
 }
 
 /// One accrual period of a schedule: interest runs from `start` to
-/// `end` (excluded). `unadjusted` and `reference` are the lattice dates
-/// and regular coupon period that ACT/ACT ICMA counts on.
+/// `end` (excluded). `reference` is the regular coupon period ACT/ACT
+/// ICMA counts it against.
 ///
 /// >>> import datetime
 /// >>> from fasti import Schedule
@@ -628,12 +623,6 @@ impl PyAccrualPeriod {
     #[getter]
     fn end<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         date_out(py, self.0.end())
-    }
-
-    /// The period on the unadjusted lattice, as `(start, end)`.
-    #[getter]
-    fn unadjusted<'py>(&self, py: Python<'py>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
-        period_out(py, &self.0.unadjusted())
     }
 
     /// The regular coupon period it accrues against, as `(start, end)`.

@@ -12,20 +12,21 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
 
 ### Breaking
 
-- **Accrual and payment dates are separate.** A `Schedule` now holds
-  unadjusted lattice dates, accrual dates and a payment date per
-  period. `periods()` yields `AccrualPeriod`s (accessors `start`,
-  `end`, `range`, `unadjusted`, `reference`, `until`) instead of
-  ranges; `coupons()` pairs each with a `PaymentDate`;
+- **Accrual and payment dates are separate.** A `Schedule` holds its
+  accrual dates and a payment date per period. `periods()` yields
+  `AccrualPeriod`s (`start`, `end`, `range`, `reference`, `until`)
+  instead of ranges; `coupons()` pairs each with a `PaymentDate`;
   `reference_periods()` is gone (each period has its `reference()`).
   Payments default to the accrual end rolled `Following`; set them
   with `ScheduleBuilder::with_payment_convention`,
-  `with_payment_calendar` and `with_payment_lag`. Stub reference
-  periods are now on the unadjusted lattice.
+  `with_payment_calendar` and `with_payment_lag`. A lag counts
+  business days from the accrual end and ignores the convention, as
+  QuantLib's `advance(end, lag, Days, convention)` does.
 - **ACT/ACT ICMA measures periods.** `ActActICMA` is a unit struct
   implementing the new `AccrualDayCount` (also implemented for every
-  `DayCount`), taking its frequency and stub grid from the period:
-  it cannot be given adjusted dates or a mismatched frequency.
+  `DayCount`), taking its frequency and stub grid from the period's
+  schedule, so there is no frequency to mismatch. Like every
+  convention it accrues on the schedule's accrual dates.
   `ActActICMA::new`, `bind`, `BoundActActICMA` and the
   `FrequencyMismatch` and `ScheduleTooShort` errors are removed;
   `year_fraction_with_reference` takes the frequency.
@@ -34,8 +35,8 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
 - `serde`: `Date` is `"YYYY-MM-DD"` and `Period` is `"6M"`. The 0.2
   forms (an integer serial, `{"Months": 6}`) are no longer read.
 - `ActActICMA` no longer implements `DayCount`. Unbound, it returned one
-  full coupon for any two dates, even a day apart. Use
-  `ActActICMA::bind(&schedule)`, or `year_fraction_with_reference`.
+  full coupon for any two dates, even a day apart. Measure a schedule's
+  periods with `AccrualDayCount`, or use `year_fraction_with_reference`.
 - `Calendar`'s fields are private. Build one with `const fn
   Calendar::new(name, weekend, rules)` and read it with `name()`,
   `weekend()`, `rules()`.
@@ -102,9 +103,9 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
 - `Schedule::accrual_period(date)`: the period running on a
   settlement date, half-open, so accrued interest on a coupon date is
   zero; cut it short with `AccrualPeriod::until(date)`.
-- `Schedule::unadjusted_dates` and `payment_dates`.
+- `Schedule::payment_dates`.
 - Python: `AccrualPeriod` and `Coupon` classes; `Schedule.coupons()`,
-  `accrual_period()`, `payment_dates()`, `unadjusted_dates()`; the
+  `accrual_period()`, `payment_dates()`; the
   `payment_convention`, `payment_calendar` and `payment_lag` keywords;
   `DayCount.accrual_fraction(period)`; `act_act_icma()` takes no
   frequency and `bind` is gone.

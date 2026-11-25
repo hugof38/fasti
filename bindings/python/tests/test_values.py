@@ -120,7 +120,10 @@ def test_a_generated_schedule_replays_its_generation_not_its_dates() -> None:
         p.reference for p in SCHEDULE.periods()
     ]
     assert restored.periods() == SCHEDULE.periods()
-    assert restored.periods()[0].reference != restored.periods()[0].unadjusted
+    assert restored.periods()[0].reference != (
+        restored.periods()[0].start,
+        restored.periods()[0].end,
+    )
     assert restored.payment_dates() == SCHEDULE.payment_dates()
     assert restored.generation() == SCHEDULE.generation()
 

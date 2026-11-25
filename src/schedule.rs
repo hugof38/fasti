@@ -79,8 +79,8 @@ impl core::str::FromStr for DateGenerationRule {
     }
 }
 
-/// A coupon schedule: its accrual dates, the unadjusted lattice they
-/// came from, and a payment date for each period.
+/// A coupon schedule: its accrual dates and a payment date for each
+/// period.
 ///
 /// A `Schedule` derefs to its accrual dates. [`periods`](Self::periods)
 /// yields [`AccrualPeriod`]s, [`coupons`](Self::coupons) pairs each with
@@ -95,7 +95,6 @@ impl core::str::FromStr for DateGenerationRule {
     serde(try_from = "ScheduleData", into = "ScheduleData")
 )]
 pub struct Schedule {
-    unadjusted: Vec<Date>,
     dates: Vec<Date>,
     payments: Vec<PaymentDate>,
     stubs: StubReferences,
@@ -156,7 +155,7 @@ impl TryFrom<Vec<Date>> for Schedule {
     type Error = TimeError;
 
     /// Wrap a chronologically ordered date list — a term sheet's
-    /// coupon dates, say — as unadjusted, regular periods, each paid on
+    /// coupon dates, say — as regular periods, each paid on
     /// its end date. A bare list names no coupon frequency, so ACT/ACT
     /// ICMA needs [`TryFrom<(Vec<Date>, Frequency)>`] instead.
     fn try_from(dates: Vec<Date>) -> Result<Self, Self::Error> {
@@ -184,8 +183,9 @@ impl From<Schedule> for Vec<Date> {
     }
 }
 
-/// Where a schedule departs from its regular lattice: the unadjusted
-/// quasi-coupon boundary of each end period that is a stub.
+/// Where a schedule departs from its regular lattice: the quasi-coupon
+/// boundary of each end period that is a stub, adjusted like the coupon
+/// date it stands in for.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct StubReferences {
@@ -198,7 +198,6 @@ struct StubReferences {
 #[cfg(feature = "serde")]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ScheduleData {
-    unadjusted: Vec<Date>,
     dates: Vec<Date>,
     payments: Vec<PaymentDate>,
     stubs: StubReferences,
@@ -210,7 +209,7 @@ impl TryFrom<ScheduleData> for Schedule {
     type Error = TimeError;
 
     fn try_from(d: ScheduleData) -> Result<Self, Self::Error> {
-        Self::new(d.unadjusted, d.dates, d.payments, d.stubs, d.generation)
+        Self::new(d.dates, d.payments, d.stubs, d.generation)
     }
 }
 
@@ -218,7 +217,6 @@ impl TryFrom<ScheduleData> for Schedule {
 impl From<Schedule> for ScheduleData {
     fn from(s: Schedule) -> Self {
         Self {
-            unadjusted: s.unadjusted,
             dates: s.dates,
             payments: s.payments,
             stubs: s.stubs,
@@ -228,37 +226,33 @@ impl From<Schedule> for ScheduleData {
 }
 
 impl Schedule {
-    /// The one constructor. Checks that the lists line up (a payment
-    /// per period), that unadjusted and accrual dates strictly
-    /// increase, and that a stub boundary lies outside the coupon it
-    /// anchors, so every reference period is non-degenerate.
+    /// The one constructor. Checks that there is a payment per period,
+    /// that accrual dates strictly increase, and that a stub boundary
+    /// lies outside the coupon it anchors, so every reference period is
+    /// non-degenerate.
     fn new(
-        unadjusted: Vec<Date>,
         dates: Vec<Date>,
         payments: Vec<PaymentDate>,
         stubs: StubReferences,
         generation: Option<Generation>,
     ) -> Result<Self, TimeError> {
-        let increasing = |v: &[Date]| v.windows(2).all(|w| w[0] < w[1]);
-        let aligned =
-            unadjusted.len() == dates.len() && payments.len() == dates.len().saturating_sub(1);
-        if !aligned || !increasing(&unadjusted) || !increasing(&dates) {
+        let aligned = payments.len() == dates.len().saturating_sub(1);
+        if !aligned || dates.windows(2).any(|w| w[0] >= w[1]) {
             return Err(TimeError::ScheduleNotMonotonic);
         }
         let front_ok = stubs
             .front
-            .is_none_or(|r| unadjusted.get(1).is_some_and(|d| r < *d));
+            .is_none_or(|r| dates.get(1).is_some_and(|d| r < *d));
         let back_ok = stubs.back.is_none_or(|r| {
-            let penultimate = unadjusted.len().checked_sub(2);
+            let penultimate = dates.len().checked_sub(2);
             penultimate
-                .and_then(|i| unadjusted.get(i))
+                .and_then(|i| dates.get(i))
                 .is_some_and(|d| r > *d)
         });
         if !front_ok || !back_ok {
             return Err(TimeError::InvalidReferencePeriod);
         }
         Ok(Self {
-            unadjusted,
             dates,
             payments,
             stubs,
@@ -266,28 +260,16 @@ impl Schedule {
         })
     }
 
-    /// A date list as unadjusted, regular periods paid on their ends.
+    /// A date list as regular periods paid on their ends.
     fn from_parts(dates: Vec<Date>, generation: Option<Generation>) -> Result<Self, TimeError> {
         let payments = dates.iter().skip(1).map(|&d| PaymentDate::new(d)).collect();
-        Self::new(
-            dates.clone(),
-            dates,
-            payments,
-            StubReferences::default(),
-            generation,
-        )
+        Self::new(dates, payments, StubReferences::default(), generation)
     }
 
     /// The accrual dates.
     #[must_use]
     pub fn dates(&self) -> &[Date] {
         &self.dates
-    }
-
-    /// The unadjusted lattice dates, one per accrual date.
-    #[must_use]
-    pub fn unadjusted_dates(&self) -> &[Date] {
-        &self.unadjusted
     }
 
     /// The payment dates, one per period.
@@ -306,15 +288,14 @@ impl Schedule {
     /// The period between accrual dates `i` and `i + 1`, for
     /// `i < self.payments.len()`.
     fn period(&self, i: usize) -> AccrualPeriod {
-        let (u_start, u_end) = (self.unadjusted[i], self.unadjusted[i + 1]);
-        let ref_start = self.stubs.front.filter(|_| i == 0);
-        let ref_end = self.stubs.back.filter(|_| i + 1 == self.payments.len());
-        AccrualPeriod::new(
-            self.dates[i]..self.dates[i + 1],
-            u_start..u_end,
-            ref_start.unwrap_or(u_start)..ref_end.unwrap_or(u_end),
-            self.generation,
-        )
+        let (start, end) = (self.dates[i], self.dates[i + 1]);
+        let ref_start = self.stubs.front.filter(|_| i == 0).unwrap_or(start);
+        let ref_end = self
+            .stubs
+            .back
+            .filter(|_| i + 1 == self.payments.len())
+            .unwrap_or(end);
+        AccrualPeriod::new(start..end, ref_start..ref_end, self.generation)
     }
 
     /// The accrual periods, in order.
@@ -323,7 +304,7 @@ impl Schedule {
     }
 
     /// Each period with its payment date.
-    pub fn coupons(&self) -> impl Iterator<Item = Coupon> + '_ {
+    pub fn coupons(&self) -> impl ExactSizeIterator<Item = Coupon> + '_ {
         self.periods()
             .zip(&self.payments)
             .map(|(accrual, &payment)| Coupon { accrual, payment })
@@ -380,7 +361,6 @@ impl Schedule {
     pub fn after(&self, cutoff: Date) -> Self {
         let idx = self.dates.partition_point(|d| *d < cutoff);
         Self {
-            unadjusted: self.unadjusted[idx..].to_vec(),
             dates: self.dates[idx..].to_vec(),
             payments: self.payments[idx.min(self.payments.len())..].to_vec(),
             stubs: StubReferences {
@@ -397,7 +377,6 @@ impl Schedule {
     pub fn until(&self, cutoff: Date) -> Self {
         let idx = self.dates.partition_point(|d| *d <= cutoff);
         Self {
-            unadjusted: self.unadjusted[..idx].to_vec(),
             dates: self.dates[..idx].to_vec(),
             payments: self.payments[..idx.saturating_sub(1)].to_vec(),
             stubs: StubReferences {
@@ -585,7 +564,8 @@ impl<'cal> ScheduleBuilder<'cal> {
     }
 
     /// The convention rolling each accrual end onto its payment date
-    /// (default `Following`).
+    /// (default `Following`). Ignored when there is a payment lag, as in
+    /// `QuantLib`.
     #[must_use]
     pub fn with_payment_convention(mut self, convention: BusinessDayConvention) -> Self {
         self.payment_convention = convention;
@@ -599,7 +579,8 @@ impl<'cal> ScheduleBuilder<'cal> {
         self
     }
 
-    /// Business days from the rolled accrual end to payment (default 0).
+    /// Business days from the accrual end to payment (default 0), as
+    /// [`Calendar::add_business_days`] counts them.
     #[must_use]
     pub fn with_payment_lag(mut self, business_days: u32) -> Self {
         self.payment_lag = business_days;
@@ -656,26 +637,28 @@ impl<'cal> ScheduleBuilder<'cal> {
             DateGenerationRule::Forward => Generator::forward(&self).generate()?,
             DateGenerationRule::Backward => Generator::backward(&self).generate()?,
         };
-        let (unadjusted, dates, stubs) =
+        let (dates, stubs) =
             BdcAdjuster::new(self.calendar, self.convention, self.termination_convention)
                 .adjust_lattice(dates, stubs)?;
         let pay_calendar = self.payment_calendar.unwrap_or(self.calendar);
         let lag = i32::try_from(self.payment_lag).map_err(|_| TimeError::DateOutOfRange)?;
+        // As QuantLib's `paymentCalendar.advance(end, lag, Days, convention)`:
+        // with no lag, roll under the convention; with one, step that many
+        // business days from the accrual end and ignore the convention.
         let payments = dates
             .iter()
             .skip(1)
             .map(|&end| {
-                let rolled = pay_calendar.adjust(end, self.payment_convention)?;
                 let paid = if lag == 0 {
-                    rolled
+                    pay_calendar.adjust(end, self.payment_convention)?
                 } else {
-                    pay_calendar.add_business_days(rolled, lag)?
+                    pay_calendar.add_business_days(end, lag)?
                 };
                 Ok(PaymentDate::new(paid))
             })
             .collect::<Result<_, TimeError>>()?;
         let generation = (!matches!(self.rule, DateGenerationRule::Zero)).then(|| self.lattice());
-        Schedule::new(unadjusted, dates, payments, stubs, generation)
+        Schedule::new(dates, payments, stubs, generation)
     }
 
     /// The lattice this builder generates on.
@@ -877,8 +860,9 @@ impl Generator {
     }
 }
 
-/// Adjusts a generated lattice: the last date under the terminal
-/// convention, every other date under the interior one.
+/// Adjusts a generated lattice: the last date and back stub under the
+/// terminal convention, every other date and the front stub under the
+/// interior one.
 #[derive(Debug, Clone, Copy)]
 struct BdcAdjuster<'a> {
     calendar: Calendar<'a>,
@@ -899,16 +883,23 @@ impl<'a> BdcAdjuster<'a> {
         }
     }
 
-    /// Adjust the lattice into accrual dates, merge what adjustment
-    /// collapsed, and return the surviving `(unadjusted, accrual)`
-    /// lists with the (unadjusted) stub references.
+    /// Adjust dates and stubs, then merge what adjustment collapsed.
     fn adjust_lattice(
         &self,
-        lattice: Vec<Date>,
+        dates: Vec<Date>,
         stubs: StubReferences,
-    ) -> Result<(Vec<Date>, Vec<Date>, StubReferences), TimeError> {
-        let last = lattice.len().saturating_sub(1);
-        let pairs = lattice
+    ) -> Result<(Vec<Date>, StubReferences), TimeError> {
+        let roll = |d: Option<Date>, c| d.map(|d| self.calendar.adjust(d, c)).transpose();
+        let stubs = StubReferences {
+            front: roll(stubs.front, self.interior)?,
+            back: roll(stubs.back, self.terminal)?,
+        };
+        Ok(Self::merge_collisions(self.apply(dates)?, stubs))
+    }
+
+    fn apply(&self, dates: Vec<Date>) -> Result<Vec<Date>, TimeError> {
+        let last = dates.len().saturating_sub(1);
+        dates
             .into_iter()
             .enumerate()
             .map(|(i, d)| {
@@ -917,48 +908,37 @@ impl<'a> BdcAdjuster<'a> {
                 } else {
                     self.interior
                 };
-                Ok((d, self.calendar.adjust(d, convention)?))
+                self.calendar.adjust(d, convention)
             })
-            .collect::<Result<Vec<_>, TimeError>>()?;
-        let (pairs, stubs) = Self::merge_collisions(pairs, stubs);
-        let (unadjusted, dates) = pairs.into_iter().unzip();
-        Ok((unadjusted, dates, stubs))
+            .collect()
     }
 
-    /// Drop the `(unadjusted, accrual)` pairs whose accrual date
-    /// adjustment rolled onto its predecessor or onto or past the last
-    /// one, joining the periods around them (`QuantLib` skips them the
-    /// same way). Interior dates share one monotone convention, so
-    /// `dedup` catches every tie; only the terminal convention can roll
-    /// a date strictly past the end.
+    /// Drop the dates adjustment rolled onto their predecessor or onto or
+    /// past the last date, joining the periods around them (`QuantLib`
+    /// skips them the same way). Interior dates share one monotone
+    /// convention, so `dedup` catches every tie; only the terminal
+    /// convention can roll a date strictly past the end.
     ///
-    /// Stub references are unadjusted lattice steps. A run tied with
-    /// the first date leaves the first period reaching back past them,
-    /// so the last of the run is its front reference; likewise the first
-    /// pair dropped past the end is the back reference. Crossed ends are
-    /// left for [`Schedule::new`] to refuse.
-    fn merge_collisions(
-        pairs: Vec<(Date, Date)>,
-        stubs: StubReferences,
-    ) -> (Vec<(Date, Date)>, StubReferences) {
-        let (Some(&(_, first)), Some(&end)) = (pairs.first(), pairs.last()) else {
-            return (pairs, stubs);
+    /// A front stub whose period collapsed to nothing goes with it. When
+    /// dates past the end are dropped, the first of them is the lattice
+    /// step the new last period accrues against. Crossed ends are left
+    /// for [`Schedule::new`] to refuse.
+    fn merge_collisions(dates: Vec<Date>, stubs: StubReferences) -> (Vec<Date>, StubReferences) {
+        let (Some(&first), Some(&last)) = (dates.first(), dates.last()) else {
+            return (dates, stubs);
         };
-        if first >= end.1 {
-            return (pairs, stubs);
+        if first >= last {
+            return (dates, stubs);
         }
-        let interior = &pairs[1..pairs.len() - 1];
-        let front = match interior.iter().take_while(|p| p.1 == first).last() {
-            Some(p) => Some(p.0),
-            None => stubs.front,
-        };
-        let back = match interior.iter().find(|p| p.1 >= end.1) {
-            Some(p) => Some(p.0),
+        let interior = &dates[1..dates.len() - 1];
+        let front = stubs.front.filter(|_| interior.first() != Some(&first));
+        let back = match interior.iter().find(|&&d| d >= last) {
+            Some(&step) => (step != last).then_some(step),
             None => stubs.back,
         };
-        let mut kept: Vec<_> = pairs.iter().copied().filter(|p| p.1 < end.1).collect();
-        kept.dedup_by_key(|p| p.1);
-        kept.push(end);
+        let mut kept: Vec<Date> = dates.iter().copied().filter(|&d| d < last).collect();
+        kept.dedup();
+        kept.push(last);
         (kept, StubReferences { front, back })
     }
 }
@@ -988,10 +968,10 @@ mod tests {
         s.periods().map(|p| p.reference()).collect()
     }
 
-    /// A schedule of unadjusted `dates` with the given stub references.
+    /// A schedule of `dates` with the given stub references.
     fn stubbed(dates: Vec<Date>, stubs: StubReferences) -> Result<Schedule, TimeError> {
         let payments = dates.iter().skip(1).map(|&d| PaymentDate::new(d)).collect();
-        Schedule::new(dates.clone(), dates, payments, stubs, None)
+        Schedule::new(dates, payments, stubs, None)
     }
 
     // ---- Zero rule -----------------------------------------------------
@@ -1317,7 +1297,7 @@ mod tests {
         let p = s.periods().next().unwrap();
         assert_eq!(p.start(), ymd(2025, Month::Jan, 15));
         assert_eq!(p.end(), ymd(2025, Month::Feb, 15));
-        assert_eq!(p.unadjusted(), p.range());
+        assert_eq!(p.reference(), p.range());
     }
 
     // ---- Validation errors --------------------------------------------
@@ -1777,9 +1757,8 @@ mod tests {
             BusinessDayConvention::ModifiedFollowing,
             BusinessDayConvention::Unadjusted,
         )
-        .adjust_lattice(dates, StubReferences::default())
-        .unwrap()
-        .1;
+        .apply(dates)
+        .unwrap();
         assert_eq!(
             adjusted,
             vec![ymd(2025, Month::Jan, 6), ymd(2026, Month::Jan, 17)],
@@ -1801,9 +1780,8 @@ mod tests {
             BusinessDayConvention::Following,
             BusinessDayConvention::Preceding,
         )
-        .adjust_lattice(dates, StubReferences::default())
-        .unwrap()
-        .1;
+        .apply(dates)
+        .unwrap();
         assert_eq!(
             adjusted,
             vec![
@@ -1821,9 +1799,8 @@ mod tests {
             BusinessDayConvention::ModifiedFollowing,
             BusinessDayConvention::Unadjusted,
         )
-        .adjust_lattice(Vec::new(), StubReferences::default())
-        .unwrap()
-        .1;
+        .apply(Vec::new())
+        .unwrap();
         assert_eq!(adjusted, Vec::<Date>::new());
     }
 
@@ -2024,19 +2001,15 @@ mod tests {
 
     #[test]
     fn merge_collisions_drops_ties_and_dates_past_the_end() {
-        // (unadjusted, accrual) pairs: unadjusted day = accrual day + 10.
         let d = |day| ymd(2025, Month::Feb, day);
-        let p = |day| (d(day + 10), d(day));
-        let (kept, stubs) = BdcAdjuster::merge_collisions(
-            vec![p(3), p(3), p(4), p(4), p(5), p(10), p(10), p(7)],
+        let (dates, stubs) = BdcAdjuster::merge_collisions(
+            vec![d(3), d(3), d(4), d(4), d(5), d(10), d(10), d(7)],
             StubReferences::default(),
         );
-        assert_eq!(kept, vec![p(3), p(4), p(5), p(7)]);
-        // The tie with the first date and the first date past the end
-        // become the stubs' unadjusted boundaries.
-        assert_eq!(stubs.front, Some(d(13)));
-        assert_eq!(stubs.back, Some(d(20)));
-        let crossed = vec![p(7), p(6), p(5)];
+        assert_eq!(dates, vec![d(3), d(4), d(5), d(7)]);
+        assert_eq!(stubs.back, Some(d(10)));
+        assert_eq!(stubs.front, None);
+        let crossed = vec![d(7), d(6), d(5)];
         assert_eq!(
             BdcAdjuster::merge_collisions(crossed.clone(), StubReferences::default()).0,
             crossed
@@ -2088,16 +2061,16 @@ mod tests {
             ranges(&s).last().cloned(),
             Some(ymd(2025, Month::Jan, 31)..ymd(2025, Month::Feb, 2)),
         );
-        // The last period accrues against the unadjusted lattice step
-        // it absorbed: Friday to the dropped Saturday.
+        // It accrues against the step it absorbed: Friday to the dropped
+        // Saturday, rolled to Monday.
         assert_eq!(
             refs(&s).last().cloned(),
-            Some(ymd(2025, Month::Jan, 31)..ymd(2025, Month::Feb, 1)),
+            Some(ymd(2025, Month::Jan, 31)..ymd(2025, Month::Feb, 3)),
         );
     }
 
     #[test]
-    fn penultimate_date_tying_with_maturity_is_dropped() {
+    fn penultimate_date_tying_with_maturity_leaves_a_regular_last_period() {
         // Saturday and the Sunday maturity both roll to Monday.
         let s = daily(ymd(2025, Month::Jan, 27), ymd(2025, Month::Feb, 2))
             .with_convention(BusinessDayConvention::Following)
@@ -2109,14 +2082,11 @@ mod tests {
             ranges(&s).last().cloned(),
             Some(ymd(2025, Month::Jan, 31)..ymd(2025, Month::Feb, 3)),
         );
-        assert_eq!(
-            refs(&s).last().cloned(),
-            Some(ymd(2025, Month::Jan, 31)..ymd(2025, Month::Feb, 1)),
-        );
+        assert_eq!(refs(&s).last(), ranges(&s).last());
     }
 
     #[test]
-    fn front_stub_that_adjusts_onto_the_effective_date_merges_into_it() {
+    fn front_stub_that_adjusts_onto_the_effective_date_vanishes() {
         // Saturday effective and Sunday stub date both roll to Monday.
         let s = ScheduleBuilder::new(
             ymd(2025, Month::Jan, 4),
@@ -2133,17 +2103,7 @@ mod tests {
             s.dates()[..2],
             [ymd(2025, Month::Jan, 6), ymd(2025, Month::Jan, 13)]
         );
-        // On the lattice the first period still runs Saturday to Sunday,
-        // against the one-week step ending there.
-        let first = s.periods().next().unwrap();
-        assert_eq!(
-            first.unadjusted(),
-            ymd(2025, Month::Jan, 4)..ymd(2025, Month::Jan, 12)
-        );
-        assert_eq!(
-            first.reference(),
-            ymd(2025, Month::Jan, 5)..ymd(2025, Month::Jan, 12)
-        );
+        assert_eq!(refs(&s).first(), ranges(&s).first());
     }
 
     #[test]
@@ -2198,15 +2158,15 @@ mod tests {
     }
 
     #[test]
-    fn payment_lag_and_calendar_apply_after_the_roll() {
+    fn payment_lag_counts_business_days_from_the_accrual_end() {
         let lagged = treasury()
             .with_payment_lag(2)
             .with_payment_calendar(crate::calendars::TARGET)
             .build()
             .unwrap();
-        // Jan 15 2028 rolls Following on TARGET to Monday the 17th, then
-        // two TARGET business days: Wednesday the 19th.
-        assert_eq!(lagged.payment_dates()[5].date(), ymd(2028, Month::Jan, 19));
+        // As QuantLib, a lag counts business days from the accrual end
+        // itself, Saturday Jan 15 2028: Monday 17th, then Tuesday 18th.
+        assert_eq!(lagged.payment_dates()[5].date(), ymd(2028, Month::Jan, 18));
         let preceding = treasury()
             .with_payment_convention(BusinessDayConvention::Preceding)
             .build()
@@ -2258,7 +2218,6 @@ mod tests {
                 part.payment_dates().len(),
                 part.dates().len().saturating_sub(1)
             );
-            assert_eq!(part.unadjusted_dates().len(), part.dates().len());
         }
     }
 
@@ -2267,9 +2226,9 @@ mod tests {
         let d = alloc::vec![ymd(2025, Month::Jan, 15), ymd(2025, Month::Jul, 15)];
         let pay = alloc::vec![PaymentDate::new(ymd(2025, Month::Jul, 15))];
         let none = StubReferences::default();
-        assert!(Schedule::new(d.clone(), d.clone(), pay.clone(), none, None).is_ok());
-        assert!(Schedule::new(d.clone(), d.clone(), Vec::new(), none, None).is_err());
-        assert!(Schedule::new(d[..1].to_vec(), d.clone(), pay, none, None).is_err());
+        assert!(Schedule::new(d.clone(), pay.clone(), none, None).is_ok());
+        assert!(Schedule::new(d.clone(), Vec::new(), none, None).is_err());
+        assert!(Schedule::new(d[..1].to_vec(), pay, none, None).is_err());
     }
 
     proptest! {
@@ -2309,9 +2268,7 @@ mod tests {
                 }
                 for p in s.periods() {
                     prop_assert!(p.reference().start < p.reference().end);
-                    prop_assert!(p.unadjusted().start < p.unadjusted().end);
                 }
-                prop_assert_eq!(s.unadjusted_dates().len(), s.dates().len());
                 prop_assert_eq!(s.payment_dates().len() + 1, s.dates().len());
                 if !weeks {
                     // Nothing a daily schedule could land on is lost.

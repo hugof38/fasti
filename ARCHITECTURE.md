@@ -57,26 +57,25 @@ the constraint wins unless the design discussion says otherwise.
   the trait over an `AccrualPeriod`, with a blanket impl for every
   `DayCount`.
 - **Schedule-defined conventions measure periods, not dates.** ACT/ACT
-  ICMA implements only `AccrualDayCount`: an `AccrualPeriod` carries
-  its unadjusted lattice dates, its reference period and the
-  `Generation` it came from, so ICMA reads its coupon frequency and any
-  stub's notional grid from there. It cannot be handed adjusted dates
-  or a frequency that disagrees with the schedule, because there is
-  nowhere to pass either. `year_fraction_with_reference` stays as the
+  ICMA implements only `AccrualDayCount`: an `AccrualPeriod` carries its
+  reference period and the `Generation` it came from, so ICMA reads its
+  coupon frequency and any stub's notional grid from there, and there is
+  no frequency to pass that could disagree with the schedule. Like every
+  convention it accrues on the schedule's accrual dates: unadjusted for
+  a bond (the builder's default), adjusted when the terms say so, as
+  `QuantLib` and rateslib do. `year_fraction_with_reference` stays as the
   explicit escape hatch. Where QuantLib infers the frequency by
   float-rounding a period length, fasti takes it from the tenor.
-- **Each concept is owned once.** A `Schedule` keeps three parallel
-  lists: unadjusted lattice dates, accrual dates (the accrual
-  convention applied) and one payment date per period (the payment
-  convention, calendar and lag applied to each accrual end), as
-  rateslib's `uschedule`/`aschedule`/`pschedule` and Strata's
-  `SchedulePeriod` do. It computes the stub reference boundaries, on
-  the unadjusted lattice, and retains the `Generation` it was built
-  from. Only the ends can deviate from the regular grid, so a schedule
-  stores those two boundaries rather than a reference date per period.
-  Extending a reference period into notional windows is accrual math,
-  so it lives with ICMA. Collision merging drops `(unadjusted,
-  accrual)` pairs together, so the lists never drift apart.
+- **Each concept is owned once.** A `Schedule` keeps its accrual dates
+  and one payment date per period (the payment convention, calendar and
+  lag applied to each accrual end). Payment dates are stored because a
+  schedule owns no calendar to recompute them; unadjusted dates are not,
+  because nothing that measures accrual should read them. The schedule
+  computes the stub reference boundaries and retains the `Generation`
+  it was built from. Only the ends can deviate from the regular grid,
+  so it stores those two boundaries rather than a reference date per
+  period. Extending a reference period into notional windows is
+  accrual math, so it lives with ICMA.
 - **`year_fraction` returns a `Fraction`** — an `i64 / u64` integer
   rational, signed by direction. Never `f64`, never a decimal type.
   Reversed inputs (`end < start`) produce a negative fraction that

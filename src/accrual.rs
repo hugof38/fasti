@@ -3,9 +3,9 @@
 //! [`AccrualDayCount`]s that measure a period.
 //!
 //! The types keep apart what one list of dates used to blur. An
-//! accrual period can only come from a schedule, carries the unadjusted
-//! lattice dates and reference period ACT/ACT ICMA counts on, and is a
-//! different type from the date its coupon is paid on.
+//! accrual period can only come from a schedule, carries the reference
+//! period and lattice ACT/ACT ICMA counts on, and is a different type
+//! from the date its coupon is paid on.
 
 use core::fmt;
 use core::ops::Range;
@@ -16,14 +16,12 @@ use crate::{Date, DayCount, Fraction, Generation, TimeError};
 /// from [`start`](Self::start) to [`end`](Self::end), half-open.
 ///
 /// It also carries what schedule-defined day counts need: the
-/// [`unadjusted`](Self::unadjusted) lattice dates, the
 /// [`reference`](Self::reference) period a stub accrues against, and
-/// the [`Generation`] they came from. Only a schedule constructs one.
+/// the [`Generation`] it came from. Only a schedule constructs one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccrualPeriod {
     start: Date,
     end: Date,
-    unadjusted: Range<Date>,
     reference: Range<Date>,
     generation: Option<Generation>,
 }
@@ -31,14 +29,12 @@ pub struct AccrualPeriod {
 impl AccrualPeriod {
     pub(crate) const fn new(
         accrual: Range<Date>,
-        unadjusted: Range<Date>,
         reference: Range<Date>,
         generation: Option<Generation>,
     ) -> Self {
         Self {
             start: accrual.start,
             end: accrual.end,
-            unadjusted,
             reference,
             generation,
         }
@@ -63,14 +59,8 @@ impl AccrualPeriod {
         self.start..self.end
     }
 
-    /// The same period on the unadjusted lattice.
-    #[must_use]
-    pub const fn unadjusted(&self) -> Range<Date> {
-        self.unadjusted.start..self.unadjusted.end
-    }
-
-    /// The regular, unadjusted coupon period this one accrues against:
-    /// itself unless it is a stub.
+    /// The regular coupon period this one accrues against: itself unless
+    /// it is a stub.
     #[must_use]
     pub const fn reference(&self) -> Range<Date> {
         self.reference.start..self.reference.end
@@ -92,7 +82,7 @@ impl AccrualPeriod {
     /// This period cut short at `date`, for accrued interest: `None`
     /// unless `start <= date <= end`. On `start` the result has zero
     /// length, so a coupon date accrues nothing. Reference period and
-    /// lattice are kept; the unadjusted end is clamped to `date`.
+    /// lattice are kept.
     ///
     /// ```
     /// use fasti::{Act365Fixed, AccrualDayCount, Date, Fraction, Month, Period, ScheduleBuilder, calendars};
@@ -110,17 +100,8 @@ impl AccrualPeriod {
     /// ```
     #[must_use]
     pub fn until(&self, date: Date) -> Option<Self> {
-        if date < self.start || date > self.end {
-            return None;
-        }
-        let unadjusted_end = if date == self.start {
-            self.unadjusted.start
-        } else {
-            date.clamp(self.unadjusted.start, self.unadjusted.end)
-        };
-        Some(Self {
+        (self.start <= date && date <= self.end).then(|| Self {
             end: date,
-            unadjusted: self.unadjusted.start..unadjusted_end,
             ..self.clone()
         })
     }
@@ -167,9 +148,9 @@ pub struct Coupon {
 /// A convention measuring an [`AccrualPeriod`].
 ///
 /// Every [`DayCount`] is one, measuring `start..end`. ACT/ACT ICMA
-/// ([`ActActICMA`](crate::ActActICMA)) is *only* one: it counts on the
-/// period's unadjusted lattice and reference period, which two bare
-/// dates do not carry.
+/// ([`ActActICMA`](crate::ActActICMA)) is *only* one: it also needs the
+/// period's reference period and coupon frequency, which two bare dates
+/// do not carry.
 ///
 /// Fallible because ICMA needs a coupon frequency the period may not
 /// name ([`TimeError::MissingFrequency`],

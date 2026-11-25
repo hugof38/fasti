@@ -68,24 +68,27 @@ def test_act_act_icma_accrues_a_stub_against_its_notional_grid() -> None:
     ) == Fraction(153, 368)
 
 
-def test_icma_ignores_the_accrual_adjustment() -> None:
-    # The same bond accrued modified-following or unadjusted: ICMA reads
-    # only the unadjusted lattice, so it gives identical fractions.
-    def build(convention: str) -> Schedule:
-        return Schedule(
+def test_icma_accrues_on_the_schedules_own_dates() -> None:
+    # The default bond conventions accrue unadjusted; accrued on adjusted
+    # dates, ICMA counts those dates, as every other convention does.
+    def accrued(convention: str) -> Fraction:
+        schedule = Schedule(
             datetime.date(2024, 5, 2),
             datetime.date(2029, 9, 15),
             "semiannual",
             us.SETTLEMENT,
             convention=convention,
         )
+        settle = datetime.date(2026, 3, 20)
+        period = schedule.accrual_period(settle)
+        assert period is not None
+        to_date = period.until(settle)
+        assert to_date is not None
+        result: Fraction = DayCount.act_act_icma().accrual_fraction(to_date)
+        return result
 
-    icma = DayCount.act_act_icma()
-    unadjusted, adjusted = build("unadjusted"), build("modified following")
-    assert unadjusted.dates() != adjusted.dates()
-    assert [icma.accrual_fraction(p) for p in unadjusted.periods()] == [
-        icma.accrual_fraction(p) for p in adjusted.periods()
-    ]
+    assert accrued("unadjusted") == Fraction(5, 368)
+    assert accrued("modified following") == Fraction(2, 183)
 
 
 def test_every_convention_measures_a_period_but_icma_only_a_period() -> None:

@@ -219,7 +219,7 @@ Two things to know before you go further:
   `with_payment_lag` set the second without touching the first. Swap
   legs that accrue on business days opt in with
   `.with_convention(ModifiedFollowing)`. ACT/ACT ICMA measures periods,
-  not date pairs, and always counts on the unadjusted grid.
+  not date pairs, on the dates the schedule accrues on.
 - **`Calendar::advance` with `Period::Days(n)` counts calendar days,
   then rolls.** For settlement lags use `Calendar::add_business_days`.
 

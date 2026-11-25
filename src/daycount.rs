@@ -179,11 +179,14 @@ impl DayCount for ActActISDA {
 /// `1 / frequency`, days accrue against their period's actual length,
 /// and stubs accrue against a notional coupon grid.
 ///
-/// It measures [`AccrualPeriod`]s, not pairs of dates: it counts on the
-/// period's unadjusted lattice dates and reference period, and takes
-/// the coupon frequency from the schedule that made the period, so
-/// there is no second frequency to disagree with. It deliberately does
-/// not implement [`DayCount`]. The algorithm matches `QuantLib`'s
+/// It measures [`AccrualPeriod`]s, not pairs of dates: it counts the
+/// period's accrual dates against its reference period, and takes the
+/// coupon frequency from the schedule that made the period, so there is
+/// no second frequency to disagree with. It deliberately does not
+/// implement [`DayCount`]. Like every other convention it accrues on the
+/// dates the instrument accrues on: unadjusted for a bond (the
+/// [`ScheduleBuilder`](crate::ScheduleBuilder) default), adjusted when
+/// the terms say so. The algorithm matches `QuantLib`'s
 /// `ActualActual::Old_ISMA_Impl`, with the frequency taken from the
 /// schedule's tenor rather than float-rounded from a period length.
 ///
@@ -255,15 +258,14 @@ impl ActActICMA {
 }
 
 impl AccrualDayCount for ActActICMA {
-    /// Accrues the period's unadjusted span against its reference
-    /// period. Errors with [`TimeError::MissingFrequency`] for a period
+    /// Accrues the period against its reference period. Errors with [`TimeError::MissingFrequency`] for a period
     /// of a schedule built from a bare date list, and
     /// [`TimeError::NonCanonicalPeriod`] for a tenor that is not a
     /// whole number of coupons a year.
     fn accrual_fraction(&self, period: &AccrualPeriod) -> Result<Fraction, TimeError> {
         let lattice = period.generation().ok_or(TimeError::MissingFrequency)?;
         let frequency = Frequency::try_from(lattice.tenor)?;
-        let span = period.unadjusted();
+        let span = period.range();
         if span.start >= span.end {
             return Ok(Fraction::ZERO);
         }
@@ -910,12 +912,13 @@ mod tests {
         assert_eq!(ActActICMA.accrual_fraction(&stub).unwrap(), frac(373, 368));
     }
 
-    /// The review's bond: the same schedule accrued `ModifiedFollowing`
-    /// or unadjusted gives ICMA identical fractions, because ICMA only
-    /// reads the unadjusted lattice. (Bound to the adjusted dates, the
-    /// old API gave 2/183 at 2026-03-20 instead of 5/368.)
+    /// The review's bond. With the default bond conventions it accrues
+    /// unadjusted and ICMA gives 5/368 at 2026-03-20 and 17/46 for the
+    /// front stub. Accrued on adjusted dates (as some terms say), ICMA
+    /// counts those dates, as every convention and `QuantLib` do:
+    /// 2/183 and 137/370.
     #[test]
-    fn act_act_icma_ignores_the_accrual_adjustment() {
+    fn act_act_icma_accrues_on_the_schedules_own_dates() {
         let build = |convention| {
             crate::ScheduleBuilder::new(
                 ymd(2024, Month::May, 2),
@@ -927,26 +930,28 @@ mod tests {
             .build()
             .unwrap()
         };
-        let unadjusted = build(crate::BusinessDayConvention::Unadjusted);
-        let adjusted = build(crate::BusinessDayConvention::ModifiedFollowing);
-        assert_ne!(unadjusted.dates(), adjusted.dates());
-        for (u, a) in unadjusted.periods().zip(adjusted.periods()) {
-            assert_eq!(
-                ActActICMA.accrual_fraction(&u),
-                ActActICMA.accrual_fraction(&a)
-            );
-        }
         let settle = ymd(2026, Month::Mar, 20);
-        let accrued = unadjusted
-            .accrual_period(settle)
-            .and_then(|p| p.until(settle))
-            .unwrap();
-        assert_eq!(ActActICMA.accrual_fraction(&accrued).unwrap(), frac(5, 368));
-        assert_eq!(
-            ActActICMA
-                .accrual_fraction(&unadjusted.periods().next().unwrap())
-                .unwrap(),
-            frac(17, 46)
+        let check = |s: &Schedule, accrued: Fraction, stub: Fraction| {
+            let to_date = s
+                .accrual_period(settle)
+                .and_then(|p| p.until(settle))
+                .unwrap();
+            assert_eq!(ActActICMA.accrual_fraction(&to_date).unwrap(), accrued);
+            let front = s.periods().next().unwrap();
+            assert_eq!(ActActICMA.accrual_fraction(&front).unwrap(), stub);
+            for p in s.periods().skip(1).take(s.periods().len() - 2) {
+                assert_eq!(ActActICMA.accrual_fraction(&p).unwrap(), frac(1, 2));
+            }
+        };
+        check(
+            &build(crate::BusinessDayConvention::Unadjusted),
+            frac(5, 368),
+            frac(17, 46),
+        );
+        check(
+            &build(crate::BusinessDayConvention::ModifiedFollowing),
+            frac(2, 183),
+            frac(137, 370),
         );
     }
 

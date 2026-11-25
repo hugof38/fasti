@@ -215,16 +215,16 @@ def test_coupons_pay_on_the_next_business_day_after_accrual() -> None:
     )
     assert coupon.payment == datetime.date(2028, 1, 18)
     assert len(schedule.payment_dates()) == len(schedule.periods())
-    assert schedule.unadjusted_dates() == schedule.dates()
     lagged = Schedule(
         datetime.date(2025, 1, 15),
         datetime.date(2030, 1, 15),
         "semiannual",
         us.GOVERNMENT_BOND,
-        payment_convention="preceding",
         payment_lag=1,
     )
-    assert lagged.payment_dates()[5] == datetime.date(2028, 1, 18)  # Fri 14th + 1 (MLK) = Tue
+    # A lag counts business days from the accrual end, Saturday the 15th:
+    # Monday is MLK Day, so one business day on is Tuesday.
+    assert lagged.payment_dates()[5] == datetime.date(2028, 1, 18)
     assert lagged.dates() == schedule.dates()
 
 
