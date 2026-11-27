@@ -71,6 +71,13 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
 
 ### Fixed
 
+- ACT/ACT ICMA no longer treats February 28 as a month end on a bond
+  that pays on the 28th. A long first coupon on such a bond stepped back
+  to August 31 instead of August 28 (143/181 instead of 289/368). The
+  schedule lattice snaps to month ends only when end of month is on and
+  the date generation steps from is a month end, as in QuantLib;
+  `year_fraction_with_reference` snaps only when both reference dates
+  are month ends.
 - Python: the `Calendar.advance` stub declared `end_of_month=True`;
   the default is `False`, and `Schedule`'s is `True`.
 - `ScheduleBuilder::build` merges dates that business-day adjustment

@@ -242,7 +242,8 @@ impl ActActICMA {
         if ref_start >= ref_end {
             return Err(TimeError::InvalidReferencePeriod);
         }
-        let (lattice, reference) = (Generation::of(frequency), ref_start..ref_end);
+        let lattice = Generation::through(frequency, &[ref_start, ref_end]);
+        let reference = ref_start..ref_end;
         if start <= end {
             accrue(start..end, &reference, lattice)
         } else {
@@ -946,6 +947,38 @@ mod tests {
             frac(2, 183),
             frac(137, 370),
         );
+    }
+
+    /// A long first coupon steps one coupon back from its reference
+    /// period. February 28 is a month end, but only a month-end bond's
+    /// notional coupon is August 31; a bond paying on the 28th steps
+    /// back to August 28.
+    #[test]
+    fn act_act_icma_long_first_coupon_snaps_only_on_month_end_bonds() {
+        let issue = ymd(2024, Month::Nov, 15);
+        for (day, expected) in [(28, frac(289, 368)), (31, frac(143, 181))] {
+            let first = ymd(2025, Month::Aug, day);
+            let schedule = crate::ScheduleBuilder::new(
+                issue,
+                ymd(2027, Month::Aug, day),
+                Period::Months(6),
+                crate::calendars::NULL_CALENDAR,
+            )
+            .with_first_date(first)
+            .build()
+            .unwrap();
+            let stub = schedule.periods().next().unwrap();
+            assert_eq!(stub.reference(), ymd(2025, Month::Feb, 28)..first);
+            assert_eq!(ActActICMA.accrual_fraction(&stub).unwrap(), expected);
+            let manual = icma(
+                issue,
+                first,
+                ymd(2025, Month::Feb, 28),
+                first,
+                Frequency::Semiannual,
+            );
+            assert_eq!(manual, Ok(expected));
+        }
     }
 
     #[test]

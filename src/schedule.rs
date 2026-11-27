@@ -110,16 +110,19 @@ pub struct Schedule {
 pub struct Generation {
     /// The regular period between coupons.
     pub tenor: Period,
-    /// Whether generation snapped dates to the end of their month.
+    /// Whether the lattice snaps to month ends: asked for, and its seed
+    /// is one. A bond paying on the 28th steps from February 28 to
+    /// August 28, not 31.
     pub end_of_month: bool,
 }
 
 impl Generation {
-    /// The lattice of a `frequency` coupon grid, month-end snapping.
-    pub(crate) fn of(frequency: Frequency) -> Self {
+    /// A `frequency` coupon grid through `dates`, snapping to month ends
+    /// only if every one of them is a month end.
+    pub(crate) fn through(frequency: Frequency, dates: &[Date]) -> Self {
         Self {
             tenor: Period::from(frequency),
-            end_of_month: true,
+            end_of_month: dates.iter().all(|d| d.is_end_of_month()),
         }
     }
 
@@ -173,7 +176,8 @@ impl TryFrom<(Vec<Date>, Frequency)> for Schedule {
 
     /// As [`TryFrom<Vec<Date>>`], on a `frequency` coupon grid.
     fn try_from((dates, frequency): (Vec<Date>, Frequency)) -> Result<Self, Self::Error> {
-        Self::from_parts(dates, Some(Generation::of(frequency)))
+        let lattice = Generation::through(frequency, dates.get(1..).unwrap_or_default());
+        Self::from_parts(dates, Some(lattice))
     }
 }
 
@@ -651,11 +655,16 @@ impl<'cal> ScheduleBuilder<'cal> {
         Schedule::new(dates, payments, stubs, generation)
     }
 
-    /// The lattice this builder generates on.
-    const fn lattice(&self) -> Generation {
+    /// The lattice this builder generates on: month ends only when the
+    /// seed, the date generation steps from, is one (as `QuantLib` checks).
+    fn lattice(&self) -> Generation {
+        let seed = match self.rule {
+            DateGenerationRule::Forward => self.first_date.unwrap_or(self.effective),
+            _ => self.next_to_last_date.unwrap_or(self.termination),
+        };
         Generation {
             tenor: self.tenor,
-            end_of_month: self.end_of_month,
+            end_of_month: self.end_of_month && seed.is_end_of_month(),
         }
     }
 
