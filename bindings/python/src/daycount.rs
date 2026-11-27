@@ -6,8 +6,8 @@
 //! a convention at runtime and never writes an impl.
 
 use fasti::{
-    Act360, Act365Fixed, ActActICMA, ActActISDA, Date, DayCount, Thirty360Bond, Thirty360European,
-    Thirty360ISDA, Thirty360US,
+    AccrualDayCount, Act360, Act365Fixed, ActActICMA, ActActISDA, Date, DayCount, Thirty360Bond,
+    Thirty360European, Thirty360ISDA, Thirty360US,
 };
 use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
@@ -15,8 +15,8 @@ use pyo3::types::{PyTuple, PyTupleMethods};
 
 use crate::convert::{DateArg, FastiError, OrRaise, Reduction, date_out, fraction_out, hook};
 use crate::rule::py_date_repr;
-use crate::schedule::{PySchedule, ScheduleArg};
-use crate::vocab::{FrequencyArg, PyFrequency};
+use crate::schedule::PyAccrualPeriod;
+use crate::vocab::FrequencyArg;
 
 /// Which convention, and the context it carries.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -24,8 +24,8 @@ enum Convention {
     Act360,
     Act365Fixed,
     ActActISDA,
-    /// ACT/ACT ICMA, optionally bound to the schedule it accrues over.
-    ActActICMA(PyFrequency, Option<Box<PySchedule>>),
+    /// ACT/ACT ICMA, which measures a schedule's periods only.
+    ActActICMA,
     Thirty360Bond,
     Thirty360US,
     Thirty360European,
@@ -61,15 +61,12 @@ impl PyDayCount {
             Convention::Act360 => f(&Act360),
             Convention::Act365Fixed => f(&Act365Fixed),
             Convention::ActActISDA => f(&ActActISDA),
-            Convention::ActActICMA(_, None) => {
+            Convention::ActActICMA => {
                 return Err(FastiError::new_err(
-                    "unbound ACT/ACT ICMA cannot tell which coupon period two dates \
-                     belong to; call bind(schedule), or year_fraction_with_reference",
+                    "ACT/ACT ICMA measures a schedule's accrual periods, not two dates: \
+                     use accrual_fraction(period), or year_fraction_with_reference",
                 ));
             }
-            Convention::ActActICMA(frequency, Some(schedule)) => f(&ActActICMA::new(frequency.0)
-                .bind(schedule.inner())
-                .or_raise()?),
             Convention::Thirty360Bond => f(&Thirty360Bond),
             Convention::Thirty360US => f(&Thirty360US),
             Convention::Thirty360European => f(&Thirty360European),
@@ -83,7 +80,7 @@ impl PyDayCount {
             Convention::Act360 => ("act_360", None),
             Convention::Act365Fixed => ("act_365_fixed", None),
             Convention::ActActISDA => ("act_act_isda", None),
-            Convention::ActActICMA(frequency, _) => ("act_act_icma", Some(frequency.__repr__())),
+            Convention::ActActICMA => ("act_act_icma", None),
             Convention::Thirty360Bond => ("thirty_360_bond", None),
             Convention::Thirty360US => ("thirty_360_us", None),
             Convention::Thirty360European => ("thirty_360_european", None),
@@ -114,13 +111,12 @@ impl PyDayCount {
         Self(Convention::ActActISDA)
     }
 
-    /// ACT/ACT as ICMA defines it, over a coupon grid of `frequency`.
-    ///
-    /// Call `bind` to accrue against a schedule's own reference periods,
-    /// which is what a stub needs.
+    /// ACT/ACT as ICMA defines it. It measures a schedule's accrual
+    /// periods (`accrual_fraction`), taking the coupon frequency and any
+    /// stub's reference period from the schedule.
     #[staticmethod]
-    fn act_act_icma(frequency: FrequencyArg) -> Self {
-        Self(Convention::ActActICMA(frequency.0, None))
+    fn act_act_icma() -> Self {
+        Self(Convention::ActActICMA)
     }
 
     /// 30/360 Bond Basis.
@@ -149,8 +145,8 @@ impl PyDayCount {
 
     /// The convention's short name, as the crate spells it.
     fn name(&self) -> PyResult<&'static str> {
-        if let Convention::ActActICMA(frequency, None) = &self.0 {
-            return Ok(ActActICMA::new(frequency.0).name());
+        if let Convention::ActActICMA = &self.0 {
+            return Ok(ActActICMA.name());
         }
         self.apply(|dc| dc.name())
     }
@@ -178,32 +174,32 @@ impl PyDayCount {
         fraction_out(py, fraction)
     }
 
-    /// ACT/ACT ICMA bound to the schedule it accrues over, so that a
-    /// stub accrues against its notional grid.
+    /// The year fraction accrued over a schedule's `period`. Every
+    /// convention measures its start to end; ACT/ACT ICMA also counts
+    /// against its reference period.
     ///
-    /// Raises if the schedule's tenor disagrees with the convention's
-    /// frequency — the alternative is silently accruing against the
-    /// wrong grid — or if the convention is not a schedule-defined one.
-    fn bind(&self, schedule: ScheduleArg) -> PyResult<Self> {
-        let Convention::ActActICMA(frequency, _) = &self.0 else {
-            return Err(FastiError::new_err(format!(
-                "{} takes no schedule; only ACT/ACT ICMA binds to one",
-                self.name()?
-            )));
+    /// >>> import datetime
+    /// >>> from fasti import DayCount, Schedule
+    /// >>> from fasti.calendars import NULL_CALENDAR
+    /// >>> stub = Schedule(datetime.date(2002, 8, 15), datetime.date(2004, 1, 15),
+    /// ...                 "semiannual", NULL_CALENDAR).periods()[0]
+    /// >>> DayCount.act_act_icma().accrual_fraction(stub)
+    /// Fraction(153, 368)
+    fn accrual_fraction<'py>(
+        &self,
+        py: Python<'py>,
+        period: PyRef<'py, PyAccrualPeriod>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let fraction = match &self.0 {
+            Convention::ActActICMA => ActActICMA.accrual_fraction(&period.0),
+            _ => self.apply(|dc| dc.accrual_fraction(&period.0))?,
         };
-        // Bind once here so a mismatched frequency is refused now.
-        ActActICMA::new(frequency.0)
-            .bind(schedule.0.inner())
-            .or_raise()?;
-        Ok(Self(Convention::ActActICMA(
-            *frequency,
-            Some(Box::new(schedule.0)),
-        )))
+        fraction_out(py, fraction.or_raise()?)
     }
 
     /// The ACT/ACT ICMA year fraction against one explicit reference
-    /// period — the manual escape hatch when the accrual has no
-    /// schedule. Prefer `bind`.
+    /// period of a `frequency` coupon grid — the escape hatch for an
+    /// accrual with no schedule.
     fn year_fraction_with_reference<'py>(
         &self,
         py: Python<'py>,
@@ -211,43 +207,29 @@ impl PyDayCount {
         end: DateArg,
         ref_start: DateArg,
         ref_end: DateArg,
+        frequency: FrequencyArg,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let Convention::ActActICMA(frequency, _) = &self.0 else {
+        let Convention::ActActICMA = &self.0 else {
             return Err(FastiError::new_err(format!(
                 "{} has no reference periods; this is the ACT/ACT ICMA escape hatch",
                 self.name()?
             )));
         };
-        let fraction = ActActICMA::new(frequency.0)
-            .year_fraction_with_reference(start.0, end.0, ref_start.0, ref_end.0)
+        let fraction = ActActICMA
+            .year_fraction_with_reference(start.0, end.0, ref_start.0, ref_end.0, frequency.0.0)
             .or_raise()?;
         fraction_out(py, fraction)
     }
 
     fn __repr__(&self) -> String {
         let (name, argument) = self.state();
-        let bound = match &self.0 {
-            Convention::ActActICMA(_, Some(schedule)) => {
-                format!(".bind({})", schedule.__repr__())
-            }
-            _ => String::new(),
-        };
-        format!("DayCount.{name}({}){bound}", argument.unwrap_or_default())
+        format!("DayCount.{name}({})", argument.unwrap_or_default())
     }
 
     fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<Reduction<'py, (Bound<'py, PyTuple>,)>> {
         let mut state: Vec<Bound<'py, PyAny>> = vec![self.state().0.into_bound_py_any(py)?];
-        match &self.0 {
-            Convention::ActActICMA(frequency, schedule) => {
-                state.push(frequency.canonical().into_bound_py_any(py)?);
-                if let Some(schedule) = schedule {
-                    state.push((**schedule).clone().into_bound_py_any(py)?);
-                }
-            }
-            Convention::Thirty360ISDA(termination) => {
-                state.push(date_out(py, *termination)?);
-            }
-            _ => {}
+        if let Convention::Thirty360ISDA(termination) = &self.0 {
+            state.push(date_out(py, *termination)?);
         }
         Ok((hook(py, "_rebuild_daycount")?, (PyTuple::new(py, state)?,)))
     }
@@ -261,13 +243,7 @@ pub fn _rebuild_daycount(state: &Bound<'_, PyTuple>) -> PyResult<PyDayCount> {
         "act_360" => PyDayCount::act_360(),
         "act_365_fixed" => PyDayCount::act_365_fixed(),
         "act_act_isda" => PyDayCount::act_act_isda(),
-        "act_act_icma" => {
-            let icma = PyDayCount::act_act_icma(at(1)?.extract()?);
-            return match state.len() {
-                2 => Ok(icma),
-                _ => icma.bind(at(2)?.extract()?),
-            };
-        }
+        "act_act_icma" => PyDayCount::act_act_icma(),
         "thirty_360_bond" => PyDayCount::thirty_360_bond(),
         "thirty_360_us" => PyDayCount::thirty_360_us(),
         "thirty_360_european" => PyDayCount::thirty_360_european(),

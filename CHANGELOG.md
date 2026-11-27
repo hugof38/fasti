@@ -12,11 +12,31 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
 
 ### Breaking
 
+- **Accrual and payment dates are separate.** A `Schedule` holds its
+  accrual dates and a payment date per period. `periods()` yields
+  `AccrualPeriod`s (`start`, `end`, `range`, `reference`, `until`)
+  instead of ranges; `coupons()` pairs each with a `PaymentDate`;
+  `reference_periods()` is gone (each period has its `reference()`).
+  Payments default to the accrual end rolled `Following`; set them
+  with `ScheduleBuilder::with_payment_convention`,
+  `with_payment_calendar` and `with_payment_lag`. A lag counts
+  business days on the payment calendar from the accrual end; the
+  convention applies only without one.
+- **ACT/ACT ICMA measures periods.** `ActActICMA` is a unit struct
+  implementing the new `AccrualDayCount` (also implemented for every
+  `DayCount`), taking its frequency and stub grid from the period's
+  schedule, so there is no frequency to mismatch. Like every
+  convention it accrues on the schedule's accrual dates.
+  `ActActICMA::new`, `bind`, `BoundActActICMA` and the
+  `FrequencyMismatch` and `ScheduleTooShort` errors are removed;
+  `year_fraction_with_reference` takes the frequency.
+  `TryFrom<Vec<Date>>` schedules name no frequency (ICMA reports
+  `MissingFrequency`); use `TryFrom<(Vec<Date>, Frequency)>`.
 - `serde`: `Date` is `"YYYY-MM-DD"` and `Period` is `"6M"`. The 0.2
   forms (an integer serial, `{"Months": 6}`) are no longer read.
 - `ActActICMA` no longer implements `DayCount`. Unbound, it returned one
-  full coupon for any two dates, even a day apart. Use
-  `ActActICMA::bind(&schedule)`, or `year_fraction_with_reference`.
+  full coupon for any two dates, even a day apart. Measure a schedule's
+  periods with `AccrualDayCount`, or use `year_fraction_with_reference`.
 - `Calendar`'s fields are private. Build one with `const fn
   Calendar::new(name, weekend, rules)` and read it with `name()`,
   `weekend()`, `rules()`.
@@ -30,8 +50,7 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
   wrong under ACT/ACT ICMA. Swap legs opt in with
   `with_convention(ModifiedFollowing)` and `with_end_of_month(false)`.
   The Python `Schedule` follows.
-- `TimeError` is `#[non_exhaustive]`. `ActActICMA::bind` on a schedule
-  with fewer than two dates now returns `ScheduleTooShort`.
+- `TimeError` is `#[non_exhaustive]`.
 
 ### Changed
 
@@ -52,6 +71,15 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
 
 ### Fixed
 
+- ACT/ACT ICMA no longer treats February 28 as a month end on a bond
+  that pays on the 28th. A long first coupon on such a bond stepped back
+  to August 31 instead of August 28 (143/181 instead of 289/368). The
+  schedule lattice snaps to month ends only when end of month is on and
+  the date generation steps from is a month end, as in QuantLib;
+  `year_fraction_with_reference` snaps only when both reference dates
+  are month ends.
+- Python: the `Calendar.advance` stub declared `end_of_month=True`;
+  the default is `False`, and `Schedule`'s is `True`.
 - `ScheduleBuilder::build` merges dates that business-day adjustment
   rolls onto one day, as QuantLib does, instead of failing with
   `ScheduleNotMonotonic`, so daily schedules build on real calendars.
@@ -69,8 +97,6 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
   ICMA on the unadjusted grid with payment dates rolled separately, so
   every coupon on $1mm at 4.25% is exactly $21,250.00. The example also
   computes accrued interest for a T+1 settlement.
-- `BoundActActICMA` no longer turns an arithmetic failure into a silent
-  zero mid-sum; `try_year_fraction` reports it.
 - `Date::literal` and `Year::literal` documented a compile error even
   at run time; the docs now say they panic outside a `const`.
 - `Date`'s `Display` honours width and alignment, so dates line up in
@@ -78,6 +104,15 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
 
 ### Added
 
+- `Schedule::accrual_period(date)`: the period running on a
+  settlement date, half-open, so accrued interest on a coupon date is
+  zero; cut it short with `AccrualPeriod::until(date)`.
+- `Schedule::payment_dates`.
+- Python: `AccrualPeriod` and `Coupon` classes; `Schedule.coupons()`,
+  `accrual_period()`, `payment_dates()`; the
+  `payment_convention`, `payment_calendar` and `payment_lag` keywords;
+  `DayCount.accrual_fraction(period)`; `act_act_icma()` takes no
+  frequency and `bind` is gone.
 - A `jiff` feature: `TryFrom<jiff::civil::Date> for Date`,
   `From<Date> for jiff::civil::Date`, and `Weekday` conversions both
   ways. jiff has no month type; months cross as numbers
@@ -92,10 +127,10 @@ crate is pre-1.0 and they close silent-wrong-answer paths.
 - `FromStr` for `Period` (`"6M"`), `Frequency`,
   `BusinessDayConvention` and `DateGenerationRule`, ignoring case and
   punctuation as the Python bindings do.
-- `BoundActActICMA::try_year_fraction`, `ActActICMA::name`,
+- `ActActICMA::name`,
   `Calendar::is_joint`, `Weekend::bits` / `from_bits`,
   `FixedDate::literal`, `TryFrom<u16> for Year`, and the `TimeError`
-  variants `ScheduleTooShort`, `InvalidPeriodString`, `UnknownName`,
+  variants `MissingFrequency`, `InvalidPeriodString`, `UnknownName`,
   `InvalidWeekendMask`.
 - Python: `Calendar.add_business_days` and
   `Calendar.previous_business_day`. Unbound `DayCount.act_act_icma`

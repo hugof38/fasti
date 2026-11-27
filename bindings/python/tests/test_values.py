@@ -61,8 +61,17 @@ VALUES: list[Any] = [
     Schedule.from_dates([datetime.date(2025, 1, 15), datetime.date(2026, 1, 15)]),
     SCHEDULE.generation(),
     DayCount.act_360(),
-    DayCount.act_act_icma("semiannual"),
-    DayCount.act_act_icma("semiannual").bind(SCHEDULE),
+    DayCount.act_act_icma(),
+    Schedule(
+        datetime.date(2025, 1, 15),
+        datetime.date(2026, 1, 15),
+        "semiannual",
+        us.GOVERNMENT_BOND,
+        payment_convention="preceding",
+        payment_calendar=TARGET,
+        payment_lag=2,
+    ),
+    Schedule.from_dates([datetime.date(2025, 1, 15), datetime.date(2026, 1, 15)], "annual"),
     DayCount.thirty_360_isda(datetime.date(2025, 12, 31)),
 ]
 
@@ -107,8 +116,15 @@ def test_a_derived_calendar_travels_as_the_operations_applied() -> None:
 def test_a_generated_schedule_replays_its_generation_not_its_dates() -> None:
     # The stub reference grid is not recoverable from the dates alone.
     restored = pickle.loads(pickle.dumps(SCHEDULE))
-    assert restored.reference_periods() == SCHEDULE.reference_periods()
-    assert restored.reference_periods()[0] != restored.periods()[0]
+    assert [p.reference for p in restored.periods()] == [
+        p.reference for p in SCHEDULE.periods()
+    ]
+    assert restored.periods() == SCHEDULE.periods()
+    assert restored.periods()[0].reference != (
+        restored.periods()[0].start,
+        restored.periods()[0].end,
+    )
+    assert restored.payment_dates() == SCHEDULE.payment_dates()
     assert restored.generation() == SCHEDULE.generation()
 
 
@@ -160,9 +176,11 @@ def test_the_reprs_that_are_not_constructor_calls_say_what_they_are() -> None:
     assert repr(SCHEDULE) == (
         "Schedule([datetime.date(2002, 8, 15) .. datetime.date(2004, 1, 15)], 4 dates)"
     )
-    assert repr(DayCount.act_act_icma("semiannual").bind(SCHEDULE)) == (
-        "DayCount.act_act_icma(Frequency.SEMIANNUAL).bind(" + repr(SCHEDULE) + ")"
+    period = SCHEDULE.periods()[0]
+    assert repr(period) == (
+        "AccrualPeriod(datetime.date(2002, 8, 15) .. datetime.date(2003, 1, 15))"
     )
+    assert repr(SCHEDULE.coupons()[0]).startswith("Coupon(AccrualPeriod(")
 
 
 def test_a_built_in_calendar_reprs_as_its_path() -> None:

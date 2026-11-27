@@ -16,9 +16,9 @@
 use core::str::FromStr;
 
 use fasti::{
-    Act360, Act365Fixed, ActActICMA, ActActISDA, BusinessDayConvention, Calendar, CalendarBuilder,
-    Date, DateRange, DayCount, EasterMethod, EasterOffset, FixedDate, Fraction, Frequency,
-    Generation, LastWeekday, Month, NthWeekday, OneOff, Ordinal, Period, Rule, Schedule,
+    AccrualDayCount, Act360, Act365Fixed, ActActICMA, ActActISDA, BusinessDayConvention, Calendar,
+    CalendarBuilder, Date, DateRange, DayCount, EasterMethod, EasterOffset, FixedDate, Fraction,
+    Frequency, Generation, LastWeekday, Month, NthWeekday, OneOff, Ordinal, Period, Rule, Schedule,
     ScheduleBuilder, Thirty360Bond, Thirty360European, Thirty360ISDA, Thirty360US, TimeError,
     Weekday, Weekend, Year, YearRange, calendars, easter_monday, easter_sunday,
 };
@@ -48,11 +48,11 @@ fn end_to_end_coupon_accrual() -> Result<(), TimeError> {
     let mut total = Fraction::new(0, 1).expect("0/1 is a valid fraction");
     let mut cursor = schedule.dates()[0];
     for period in schedule.periods() {
-        assert_eq!(period.start, cursor);
-        let yf = ActActISDA.year_fraction(period.start, period.end);
+        assert_eq!(period.start(), cursor);
+        let yf = ActActISDA.accrual_fraction(&period)?;
         assert!(!yf.is_negative() && !yf.is_zero());
         total = total.checked_add(yf).expect("accruals do not overflow i64");
-        cursor = period.end;
+        cursor = period.end();
     }
     assert_eq!(cursor, *schedule.dates().last().expect("non-empty"));
 
@@ -99,7 +99,8 @@ fn every_day_count_is_reachable() -> Result<(), TimeError> {
     assert_eq!(isda.termination(), Date::from_ymd(2030, Month::Jan, 1)?);
     assert!(!isda.year_fraction(start, end).is_negative());
 
-    // ActActICMA binds to a coupon schedule.
+    // ActActICMA measures a schedule's periods; any convention works
+    // as an AccrualDayCount, including behind a trait object.
     let schedule = ScheduleBuilder::new(
         start,
         Date::from_ymd(2026, Month::Jan, 1)?,
@@ -107,11 +108,13 @@ fn every_day_count_is_reachable() -> Result<(), TimeError> {
         calendars::WEEKENDS_ONLY,
     )
     .build()?;
-    let icma = ActActICMA::new(Frequency::Semiannual);
-    assert_eq!(icma.frequency(), Frequency::Semiannual);
-    let bound = icma.bind(&schedule)?;
-    assert_eq!(bound.schedule().dates(), schedule.dates());
-    assert_eq!(bound.year_fraction(start, end).parts(), (1, 2));
+    let first = schedule.periods().next().expect("two periods");
+    let conventions: [&dyn AccrualDayCount; 2] = [&ActActICMA, &Act360];
+    assert_eq!(conventions[0].accrual_fraction(&first)?.parts(), (1, 2));
+    assert!(conventions[1].accrual_fraction(&first)? > Fraction::new(1, 2)?);
+    let coupon = schedule.coupons().next().expect("two coupons");
+    assert_eq!(coupon.accrual, first);
+    assert!(coupon.payment.date() >= first.end());
     Ok(())
 }
 
@@ -332,10 +335,7 @@ fn schedule_exposes_its_generation() -> Result<(), TimeError> {
         generation.step(start, 1)?,
         Date::from_ymd(2025, Month::Jun, 30)?
     );
-    assert_eq!(
-        schedule.reference_periods().count(),
-        schedule.periods().count()
-    );
+    assert!(schedule.periods().all(|p| p.reference() == p.range()));
     Ok(())
 }
 

@@ -11,8 +11,10 @@ float-free, and that survives the boundary.
 
 from ._fasti import (
     __version__ as __version__,
+    AccrualPeriod,
     BusinessDayConvention,
     Calendar,
+    Coupon,
     DateGenerationRule,
     DayCount,
     EasterMethod,
@@ -30,8 +32,10 @@ from ._fasti import (
 from . import calendars
 
 __all__ = [
+    "AccrualPeriod",
     "BusinessDayConvention",
     "Calendar",
+    "Coupon",
     "DateGenerationRule",
     "DayCount",
     "EasterMethod",

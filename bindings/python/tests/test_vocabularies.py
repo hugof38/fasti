@@ -167,7 +167,7 @@ def test_a_spelling_is_accepted_wherever_the_class_is() -> None:
             termination_convention="preceding",
             rule="forward",
         ),
-        DayCount.act_act_icma("quarterly"),
+        DayCount.act_act_icma(),
         WEEKENDS_ONLY.adjust(datetime.date(2025, 1, 4), "following"),
     ]
     assert all(value is not None for value in everywhere)

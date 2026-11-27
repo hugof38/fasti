@@ -72,6 +72,8 @@ fn _fasti(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<rule::PyRule>()?;
     m.add_class::<schedule::PyGeneration>()?;
     m.add_class::<schedule::PySchedule>()?;
+    m.add_class::<schedule::PyAccrualPeriod>()?;
+    m.add_class::<schedule::PyCoupon>()?;
     m.add_class::<vocab::PyBusinessDayConvention>()?;
     m.add_class::<vocab::PyDateGenerationRule>()?;
     m.add_class::<PyEasterMethod>()?;

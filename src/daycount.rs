@@ -10,7 +10,8 @@
 use core::ops::Range;
 
 use crate::{
-    Date, DateRange, Fraction, Frequency, Generation, Month, Period, Schedule, TimeError, Year,
+    AccrualDayCount, AccrualPeriod, Date, DateRange, Fraction, Frequency, Generation, Month,
+    TimeError, Year,
 };
 
 /// A day-count convention.
@@ -33,11 +34,8 @@ pub trait DayCount {
     }
 
     /// The year fraction between `start` and `end`: signed by
-    /// direction, [`Fraction::ZERO`] for equal dates.
-    ///
-    /// Conventions needing schedule context (ACT/ACT ICMA) carry it
-    /// in the implementing value ([`ActActICMA::bind`]), keeping this
-    /// signature uniform.
+    /// direction, [`Fraction::ZERO`] for equal dates. (ACT/ACT ICMA
+    /// needs a schedule's period, so it is an [`AccrualDayCount`] only.)
     fn year_fraction(&self, start: Date, end: Date) -> Fraction;
 }
 
@@ -178,301 +176,128 @@ impl DayCount for ActActISDA {
 
 /// Actual/Actual (ICMA), ICMA Rule 251 — the standard for fixed-rate
 /// bond accruals: a regular coupon period accrues exactly
-/// `1 / frequency`, days accrue proportionally against their period's
-/// actual length, and stubs accrue against a notional coupon grid.
+/// `1 / frequency`, days accrue against their period's actual length,
+/// and stubs accrue against a notional coupon grid.
 ///
-/// ICMA needs schedule context: [`bind`](Self::bind) a [`Schedule`]
-/// (whose parallel reference dates carry the regular grid) to get a
-/// [`BoundActActICMA`] answering plain two-date
-/// [`year_fraction`](DayCount::year_fraction) calls;
-/// [`year_fraction_with_reference`](Self::year_fraction_with_reference)
-/// is the manual escape hatch. Unbound, `year_fraction` returns
-/// `1 / frequency`, matching `QuantLib` without reference dates.
-///
-/// The coupon [`Frequency`] is explicit (where `QuantLib` float-rounds
-/// a month count from the reference-period length); the algorithm
-/// matches `QuantLib`'s `ActualActual::Old_ISMA_Impl`.
+/// It measures [`AccrualPeriod`]s, not pairs of dates: it counts the
+/// period's accrual dates against its reference period, and takes the
+/// coupon frequency from the schedule that made the period, so there is
+/// no second frequency to disagree with. It deliberately does not
+/// implement [`DayCount`]. Like every other convention it accrues on the
+/// dates the instrument accrues on: unadjusted for a bond (the
+/// [`ScheduleBuilder`](crate::ScheduleBuilder) default), adjusted when
+/// the terms say so. The algorithm matches `QuantLib`'s
+/// `ActualActual::Old_ISMA_Impl`, with the frequency taken from the
+/// schedule's tenor rather than float-rounded from a period length.
 ///
 /// ```
-/// use fasti::{ActActICMA, DayCount, Date, Frequency, Month};
-/// let dc = ActActICMA::new(Frequency::Semiannual);
-/// let start = Date::from_ymd(2003, Month::Nov, 1)?;
-/// let end = Date::from_ymd(2004, Month::May, 1)?;
-/// assert_eq!(
-///     dc.year_fraction_with_reference(start, end, start, end)?.parts(),
-///     (1, 2),
-/// );
+/// use fasti::{ActActICMA, AccrualDayCount, Date, Fraction, Month, Period, ScheduleBuilder, calendars};
+/// let schedule = ScheduleBuilder::new(
+///     Date::from_ymd(2002, Month::Aug, 15)?,
+///     Date::from_ymd(2004, Month::Jan, 15)?,
+///     Period::Months(6),
+///     calendars::NULL_CALENDAR,
+/// )
+/// .build()?;
+/// // The front stub accrues against its notional grid.
+/// let stub = schedule.periods().next().unwrap();
+/// assert_eq!(ActActICMA.accrual_fraction(&stub)?, Fraction::new(153, 368)?);
 /// # Ok::<(), fasti::TimeError>(())
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ActActICMA {
-    frequency: Frequency,
-}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct ActActICMA;
 
 impl ActActICMA {
-    /// Construct for the given coupon frequency.
-    #[must_use]
-    pub const fn new(frequency: Frequency) -> Self {
-        Self { frequency }
-    }
-
-    /// The coupon frequency this convention was constructed with.
-    #[must_use]
-    pub const fn frequency(&self) -> Frequency {
-        self.frequency
-    }
-
-    /// `"Actual/Actual (ICMA)"`, the name [`BoundActActICMA`] reports
-    /// through [`DayCount::name`].
-    ///
-    /// The unbound convention deliberately does not implement
-    /// [`DayCount`]: without a schedule it cannot know which coupon
-    /// period two dates belong to, and the only answer it could give
-    /// (one full coupon, whatever the dates) silently overstates
-    /// accrued interest. [`bind`](Self::bind) it to a schedule, or
-    /// pass the reference period to
-    /// [`year_fraction_with_reference`](Self::year_fraction_with_reference).
+    /// `"Actual/Actual (ICMA)"`.
     #[must_use]
     pub const fn name(&self) -> &'static str {
         "Actual/Actual (ICMA)"
     }
 
-    /// The lattice implied by the frequency alone, used when no
-    /// schedule names one. End-of-month snapping is assumed, matching
-    /// how coupon grids are conventionally laid out.
-    fn lattice(self) -> Generation {
-        Generation {
-            tenor: Period::from(self.frequency),
-            end_of_month: true,
-        }
-    }
-
-    /// Bind to a coupon [`Schedule`], yielding a [`BoundActActICMA`]
-    /// that reads the schedule's parallel reference dates — stub
-    /// periods accrue against their notional grid automatically.
-    ///
-    /// Bind an **unadjusted** schedule (ICMA's grid is the natural
-    /// coupon grid): `ScheduleBuilder`'s defaults, which are bond
-    /// conventions, give one. Errors with
-    /// [`TimeError::ScheduleTooShort`] if the schedule has
-    /// fewer than two dates.
-    ///
-    /// ```
-    /// use fasti::{
-    ///     ActActICMA, BusinessDayConvention, Date, DayCount, Frequency,
-    ///     Month, Period, ScheduleBuilder, calendars,
-    /// };
-    /// let schedule = ScheduleBuilder::new(
-    ///     Date::from_ymd(2002, Month::Aug, 15)?,
-    ///     Date::from_ymd(2004, Month::Jan, 15)?,
-    ///     Period::Months(6),
-    ///     calendars::NULL_CALENDAR,
-    /// )
-    /// .backwards()
-    /// .with_convention(BusinessDayConvention::Unadjusted)
-    /// .build()?;
-    ///
-    /// let dc = ActActICMA::new(Frequency::Semiannual).bind(&schedule)?;
-    /// // The front stub accrues against its notional grid:
-    /// let stub = dc.year_fraction(
-    ///     Date::from_ymd(2002, Month::Aug, 15)?,
-    ///     Date::from_ymd(2003, Month::Jan, 15)?,
-    /// );
-    /// assert_eq!(stub.parts(), (153, 368));
-    /// # Ok::<(), fasti::TimeError>(())
-    /// ```
-    pub fn bind(self, schedule: &Schedule) -> Result<BoundActActICMA<'_>, TimeError> {
-        if schedule.len() < 2 {
-            return Err(TimeError::ScheduleTooShort);
-        }
-        // A generated schedule names the lattice it was built on; a
-        // convention whose frequency disagrees with that tenor would
-        // silently accrue against the wrong grid.
-        let lattice = match schedule.generation() {
-            Some(generation) => {
-                if generation.tenor.normalized() != Period::from(self.frequency).normalized() {
-                    return Err(TimeError::FrequencyMismatch);
-                }
-                generation
-            }
-            None => self.lattice(),
-        };
-        Ok(BoundActActICMA {
-            inner: self,
-            schedule,
-            lattice,
-        })
-    }
-
-    /// The year fraction given the (unadjusted) regular reference
-    /// period `ref_start..ref_end` the accrual belongs to. Prefer
-    /// [`bind`](Self::bind) when the accruals come from a
-    /// [`Schedule`].
+    /// The escape hatch for accruals with no schedule: the year
+    /// fraction from `start` to `end` against the regular reference
+    /// period `ref_start..ref_end` of a `frequency` coupon grid.
     ///
     /// Errors: [`TimeError::InvalidReferencePeriod`] when
     /// `ref_start >= ref_end`; [`TimeError::DateOutOfRange`] when a
     /// notional walk escapes the supported range;
     /// [`TimeError::FractionOverflow`] on overflow.
+    ///
+    /// ```
+    /// use fasti::{ActActICMA, Date, Fraction, Frequency, Month};
+    /// let start = Date::from_ymd(2003, Month::Nov, 1)?;
+    /// let end = Date::from_ymd(2004, Month::May, 1)?;
+    /// let yf = ActActICMA.year_fraction_with_reference(start, end, start, end, Frequency::Semiannual)?;
+    /// assert_eq!(yf, Fraction::new(1, 2)?);
+    /// # Ok::<(), fasti::TimeError>(())
+    /// ```
     pub fn year_fraction_with_reference(
-        &self,
+        self,
         start: Date,
         end: Date,
         ref_start: Date,
         ref_end: Date,
+        frequency: Frequency,
     ) -> Result<Fraction, TimeError> {
         if ref_start >= ref_end {
             return Err(TimeError::InvalidReferencePeriod);
         }
-        if start == end {
-            return Ok(Fraction::ZERO);
-        }
+        let lattice = Generation::through(frequency, &[ref_start, ref_end]);
         let reference = ref_start..ref_end;
-        let lattice = self.lattice();
-        if start < end {
-            self.accrue(start..end, reference.clone(), lattice)
+        if start <= end {
+            accrue(start..end, &reference, lattice)
         } else {
-            self.accrue(end..start, reference.clone(), lattice)?
+            accrue(end..start, &reference, lattice)?
                 .checked_neg()
                 .ok_or(TimeError::FractionOverflow)
         }
     }
+}
 
-    /// Accrue an ordered `span` over the grid anchored on
-    /// `reference`: descend to the lowest overlapping window, then
-    /// sum upward until the span is covered.
-    /// The share of one coupon that `chunk` represents inside the
-    /// notional `window` it falls in.
-    fn coupon_share(
-        self,
-        chunk: &Range<Date>,
-        window: &Range<Date>,
-    ) -> Result<Fraction, TimeError> {
-        let window_days =
-            u64::try_from(window.days()).map_err(|_| TimeError::InvalidReferencePeriod)?;
-        let denominator = u64::from(self.frequency.per_year())
-            .checked_mul(window_days)
-            .ok_or(TimeError::FractionOverflow)?;
-        Fraction::new(chunk.days(), denominator)
-    }
-
-    fn accrue(
-        self,
-        span: Range<Date>,
-        reference: Range<Date>,
-        lattice: Generation,
-    ) -> Result<Fraction, TimeError> {
-        let mut i = 0;
-        while lattice.window(&reference, i)?.start > span.start {
-            i -= 1;
-        }
-        let mut total = Fraction::ZERO;
-        loop {
-            let window = lattice.window(&reference, i)?;
-            if let Some(chunk) = span.intersect(&window) {
-                total = total
-                    .checked_add(self.coupon_share(&chunk, &window)?)
-                    .ok_or(TimeError::FractionOverflow)?;
-            }
-            if window.end >= span.end {
-                return Ok(total);
-            }
-            i += 1;
-        }
+impl AccrualDayCount for ActActICMA {
+    /// Accrues the period against its reference period. Errors with
+    /// [`TimeError::MissingFrequency`] for a period of a schedule built
+    /// from a bare date list, and [`TimeError::NonCanonicalPeriod`] for a
+    /// tenor that is not a whole number of coupons a year.
+    fn accrual_fraction(&self, period: &AccrualPeriod) -> Result<Fraction, TimeError> {
+        let lattice = period.generation().ok_or(TimeError::MissingFrequency)?;
+        accrue(period.range(), &period.reference(), lattice)
     }
 }
 
-/// [`ActActICMA`] bound to a coupon [`Schedule`] by
-/// [`ActActICMA::bind`]: the uniform two-date [`DayCount`] API with
-/// stub handling driven by the schedule's parallel reference dates,
-/// mirroring `QuantLib`'s schedule-carrying ISMA day counter.
-///
-/// Dates outside the schedule's span accrue nothing — the schedule
-/// defines the instrument's life. Deliberate semantics, not a
-/// fallback.
-#[derive(Debug, Clone, Copy)]
-pub struct BoundActActICMA<'s> {
-    inner: ActActICMA,
-    schedule: &'s Schedule,
+/// Accrue `span` over the grid anchored on `reference`: descend to the
+/// lowest overlapping window, then add each window's share of a coupon
+/// until the span is covered. An empty span accrues zero.
+fn accrue(
+    span: Range<Date>,
+    reference: &Range<Date>,
     lattice: Generation,
-}
-
-impl BoundActActICMA<'_> {
-    /// The coupon frequency of the underlying convention.
-    #[must_use]
-    pub const fn frequency(&self) -> Frequency {
-        self.inner.frequency()
+) -> Result<Fraction, TimeError> {
+    let frequency = Frequency::try_from(lattice.tenor)?;
+    if span.is_empty() {
+        return Ok(Fraction::ZERO);
     }
-
-    /// The schedule this counter is bound to.
-    #[must_use]
-    pub const fn schedule(&self) -> &Schedule {
-        self.schedule
+    let mut i = 0;
+    while lattice.window(reference, i)?.start > span.start {
+        i -= 1;
     }
-
-    /// The year fraction from `start` to `end`, signed by direction,
-    /// reporting arithmetic failure instead of hiding it.
-    ///
-    /// [`DayCount::year_fraction`] on this type returns the same value
-    /// but, as the trait is infallible, maps an error to zero. Errors
-    /// need a notional window outside the supported date range
-    /// ([`TimeError::DateOutOfRange`]) or a sum overflowing `i64/u64`
-    /// ([`TimeError::FractionOverflow`]); neither arises within one
-    /// schedule's grid in the supported range. Dates outside the
-    /// schedule's span accrue nothing — the schedule defines the
-    /// instrument's life.
-    pub fn try_year_fraction(&self, start: Date, end: Date) -> Result<Fraction, TimeError> {
-        match start.cmp(&end) {
-            core::cmp::Ordering::Equal => Ok(Fraction::ZERO),
-            core::cmp::Ordering::Less => self.ordered_year_fraction(&(start..end)),
-            core::cmp::Ordering::Greater => self
-                .ordered_year_fraction(&(end..start))?
-                .checked_neg()
-                .ok_or(TimeError::FractionOverflow),
-        }
-    }
-
-    /// Sum of per-period accruals for an ordered span, clamped to the
-    /// schedule's own span.
-    fn ordered_year_fraction(&self, span: &Range<Date>) -> Result<Fraction, TimeError> {
-        let (Some(&first), Some(&last)) = (self.schedule.first(), self.schedule.last()) else {
-            // Unreachable: bind requires at least two dates.
-            return Ok(Fraction::ZERO);
-        };
-        let Some(covered) = span.intersect(&(first..last)) else {
-            return Ok(Fraction::ZERO);
-        };
-        let mut total = Fraction::ZERO;
-        for (period, reference) in self
-            .schedule
-            .periods()
-            .zip(self.schedule.reference_periods())
-        {
-            if period.start >= covered.end {
-                break;
-            }
-            let Some(chunk) = covered.intersect(&period) else {
-                continue;
-            };
-            // A regular period is its own reference, so the grid walk
-            // is a single window; a stub extends it.
-            let accrued = self.inner.accrue(chunk, reference, self.lattice)?;
+    let mut total = Fraction::ZERO;
+    loop {
+        let window = lattice.window(reference, i)?;
+        if let Some(chunk) = span.intersect(&window) {
+            let window_days =
+                u64::try_from(window.days()).map_err(|_| TimeError::InvalidReferencePeriod)?;
+            let denominator = u64::from(frequency.per_year())
+                .checked_mul(window_days)
+                .ok_or(TimeError::FractionOverflow)?;
             total = total
-                .checked_add(accrued)
+                .checked_add(Fraction::new(chunk.days(), denominator)?)
                 .ok_or(TimeError::FractionOverflow)?;
         }
-        Ok(total)
-    }
-}
-
-impl DayCount for BoundActActICMA<'_> {
-    fn name(&self) -> &'static str {
-        "Actual/Actual (ICMA)"
-    }
-
-    /// As [`try_year_fraction`](BoundActActICMA::try_year_fraction),
-    /// with an (unreachable in range) error mapped to zero.
-    fn year_fraction(&self, start: Date, end: Date) -> Fraction {
-        self.try_year_fraction(start, end).unwrap_or_default()
+        if window.end >= span.end {
+            return Ok(total);
+        }
+        i += 1;
     }
 }
 
@@ -709,7 +534,7 @@ mod tests {
     extern crate alloc;
 
     use super::*;
-    use crate::Month;
+    use crate::{Month, Period, Schedule};
     use proptest::prelude::*;
 
     fn ymd(y: u16, m: Month, d: u8) -> Date {
@@ -953,262 +778,222 @@ mod tests {
         );
     }
 
-    // ---- ActActICMA examples ------------------------------------------
+    // ---- ActActICMA -----------------------------------------------------
 
-    #[test]
-    fn act_act_icma_name_and_frequency() {
-        let dc = ActActICMA::new(Frequency::Semiannual);
-        assert_eq!(dc.name(), "Actual/Actual (ICMA)");
-        assert_eq!(dc.frequency(), Frequency::Semiannual);
+    fn icma(s: Date, e: Date, rs: Date, re: Date, f: Frequency) -> Result<Fraction, TimeError> {
+        ActActICMA.year_fraction_with_reference(s, e, rs, re, f)
     }
 
-    /// ISDA "EMU and Market Conventions" / `QuantLib` test-suite anchor:
-    /// a regular semiannual US Treasury period accrues exactly 1/2.
+    fn frac(n: i64, d: u64) -> Fraction {
+        Fraction::new(n, d).unwrap()
+    }
+
+    /// EMU paper / `QuantLib` anchors through the reference-period form:
+    /// a regular Treasury period, short and long front stubs, a short
+    /// back stub, and a forward notional walk past the reference.
     #[test]
-    fn act_act_icma_regular_period() {
-        let dc = ActActICMA::new(Frequency::Semiannual);
-        let start = ymd(2003, Month::Nov, 1);
-        let end = ymd(2004, Month::May, 1);
+    fn act_act_icma_with_reference_matches_published_examples() {
+        use Frequency::{Annual, Semiannual};
+        let cases = [
+            (
+                (2003, Month::Nov, 1),
+                (2004, Month::May, 1),
+                (2003, Month::Nov, 1),
+                (2004, Month::May, 1),
+                Semiannual,
+                (1, 2),
+            ),
+            (
+                (1999, Month::Feb, 1),
+                (1999, Month::Jul, 1),
+                (1998, Month::Jul, 1),
+                (1999, Month::Jul, 1),
+                Annual,
+                (30, 73),
+            ),
+            (
+                (2002, Month::Aug, 15),
+                (2003, Month::Jul, 15),
+                (2003, Month::Jan, 15),
+                (2003, Month::Jul, 15),
+                Semiannual,
+                (337, 368),
+            ),
+            (
+                (2000, Month::Jan, 30),
+                (2000, Month::Jun, 30),
+                (2000, Month::Jan, 30),
+                (2000, Month::Jul, 30),
+                Semiannual,
+                (38, 91),
+            ),
+            (
+                (2003, Month::Jan, 15),
+                (2004, Month::Jul, 30),
+                (2003, Month::Jan, 15),
+                (2003, Month::Jul, 15),
+                Semiannual,
+                (567, 368),
+            ),
+        ];
+        for (s, e, rs, re, f, (n, d)) in cases {
+            let d8 = |(y, m, d)| ymd(y, m, d);
+            assert_eq!(
+                icma(d8(s), d8(e), d8(rs), d8(re), f).unwrap(),
+                frac(n, d),
+                "{s:?}"
+            );
+        }
+        let (d, later) = (ymd(2025, Month::Jan, 15), ymd(2025, Month::Jul, 15));
         assert_eq!(
-            dc.year_fraction_with_reference(start, end, start, end)
-                .unwrap()
-                .parts(),
-            (1, 2),
+            icma(d, later, d, d, Semiannual),
+            Err(TimeError::InvalidReferencePeriod)
         );
+        assert_eq!(icma(later, d, d, later, Semiannual).unwrap(), frac(-1, 2));
     }
 
-    /// EMU paper: short first calculation period. Accrual
-    /// 1999-02-01 → 1999-07-01 against annual reference
-    /// 1998-07-01 → 1999-07-01: 150 / (1 × 365) = 30/73.
-    #[test]
-    fn act_act_icma_short_front_stub() {
-        let dc = ActActICMA::new(Frequency::Annual);
-        let yf = dc
-            .year_fraction_with_reference(
-                ymd(1999, Month::Feb, 1),
-                ymd(1999, Month::Jul, 1),
-                ymd(1998, Month::Jul, 1),
-                ymd(1999, Month::Jul, 1),
-            )
-            .unwrap();
-        assert_eq!(yf.parts(), (30, 73)); // 150/365 reduced
-    }
-
-    /// EMU paper / `QuantLib` test-suite: long first calculation
-    /// period. Accrual 2002-08-15 → 2003-07-15, reference period
-    /// 2003-01-15 → 2003-07-15, semiannual. Decomposes as the full
-    /// reference period (181/362 = 1/2) plus the chunk
-    /// 2002-08-15 → 2003-01-15 against the notional period
-    /// 2002-07-15 → 2003-01-15 (153 / (2 × 184)):
-    /// 1/2 + 153/368 = 337/368.
-    #[test]
-    fn act_act_icma_long_front_stub() {
-        let dc = ActActICMA::new(Frequency::Semiannual);
-        let yf = dc
-            .year_fraction_with_reference(
-                ymd(2002, Month::Aug, 15),
-                ymd(2003, Month::Jul, 15),
-                ymd(2003, Month::Jan, 15),
-                ymd(2003, Month::Jul, 15),
-            )
-            .unwrap();
-        assert_eq!(yf.parts(), (337, 368));
-    }
-
-    /// EMU paper: short final calculation period. The regular period
-    /// 1999-07-30 → 2000-01-30 is exactly 1/2; the short final
-    /// accrual 2000-01-30 → 2000-06-30 against its reference period
-    /// 2000-01-30 → 2000-07-30 is 152 / (2 × 182) = 38/91.
-    #[test]
-    fn act_act_icma_short_back_stub() {
-        let dc = ActActICMA::new(Frequency::Semiannual);
-        let regular = dc
-            .year_fraction_with_reference(
-                ymd(1999, Month::Jul, 30),
-                ymd(2000, Month::Jan, 30),
-                ymd(1999, Month::Jul, 30),
-                ymd(2000, Month::Jan, 30),
-            )
-            .unwrap();
-        assert_eq!(regular.parts(), (1, 2));
-        let stub = dc
-            .year_fraction_with_reference(
-                ymd(2000, Month::Jan, 30),
-                ymd(2000, Month::Jun, 30),
-                ymd(2000, Month::Jan, 30),
-                ymd(2000, Month::Jul, 30),
-            )
-            .unwrap();
-        assert_eq!(stub.parts(), (38, 91)); // 152/364 reduced
-    }
-
-    /// Accrual extending several periods past the reference period
-    /// exercises the forward notional walk: mid 1/2, two full
-    /// notional periods (1/2 each), and a 15-day partial against a
-    /// 184-day window → 3/2 + 15/368 = 567/368.
-    #[test]
-    fn act_act_icma_forward_notional_walk() {
-        let dc = ActActICMA::new(Frequency::Semiannual);
-        let yf = dc
-            .year_fraction_with_reference(
-                ymd(2003, Month::Jan, 15),
-                ymd(2004, Month::Jul, 30),
-                ymd(2003, Month::Jan, 15),
-                ymd(2003, Month::Jul, 15),
-            )
-            .unwrap();
-        assert_eq!(yf.parts(), (567, 368));
-    }
-
-    #[test]
-    fn act_act_icma_rejects_degenerate_reference_period() {
-        let dc = ActActICMA::new(Frequency::Semiannual);
-        let d = ymd(2025, Month::Jan, 15);
-        let later = ymd(2025, Month::Jul, 15);
-        assert_eq!(
-            dc.year_fraction_with_reference(d, later, d, d),
-            Err(TimeError::InvalidReferencePeriod),
-        );
-        assert_eq!(
-            dc.year_fraction_with_reference(d, later, later, d),
-            Err(TimeError::InvalidReferencePeriod),
-        );
-    }
-
-    // ---- BoundActActICMA (schedule-bound) -----------------------------
-
-    /// Build an unadjusted schedule for the bound-counter tests.
-    fn unadjusted_schedule(
-        effective: Date,
-        termination: Date,
-        rule: crate::DateGenerationRule,
-    ) -> Schedule {
+    fn semiannual(effective: Date, termination: Date) -> crate::ScheduleBuilder<'static> {
         crate::ScheduleBuilder::new(
             effective,
             termination,
             Period::Months(6),
             crate::calendars::NULL_CALENDAR,
         )
-        .with_rule(rule)
-        .with_convention(crate::BusinessDayConvention::Unadjusted)
-        .with_termination_convention(crate::BusinessDayConvention::Unadjusted)
-        .build()
-        .unwrap()
     }
 
-    /// Long-front-stub schedule (the EMU example, via bind): the stub
-    /// decomposes automatically through the plain two-date API.
     #[test]
-    fn bound_icma_front_stub_schedule() {
-        let schedule = unadjusted_schedule(
-            ymd(2002, Month::Aug, 15),
-            ymd(2004, Month::Jan, 15),
-            crate::DateGenerationRule::Backward,
-        );
-        assert_eq!(
-            schedule.dates(),
-            &[
-                ymd(2002, Month::Aug, 15),
-                ymd(2003, Month::Jan, 15),
-                ymd(2003, Month::Jul, 15),
-                ymd(2004, Month::Jan, 15),
-            ],
-        );
-        let dc = ActActICMA::new(Frequency::Semiannual)
-            .bind(&schedule)
+    fn act_act_icma_accrues_schedule_periods_and_their_stubs() {
+        // Long-ish front stub (EMU example), backward from maturity.
+        let s = semiannual(ymd(2002, Month::Aug, 15), ymd(2004, Month::Jan, 15))
+            .build()
             .unwrap();
-        assert_eq!(dc.name(), "Actual/Actual (ICMA)");
-        // Stub period: 153 days against the notional 184-day period.
-        let stub = dc.year_fraction(ymd(2002, Month::Aug, 15), ymd(2003, Month::Jan, 15));
-        assert_eq!(stub.parts(), (153, 368));
-        // Regular periods: exactly 1/2 each.
-        let regular = dc.year_fraction(ymd(2003, Month::Jan, 15), ymd(2003, Month::Jul, 15));
-        assert_eq!(regular.parts(), (1, 2));
-        // Whole instrument life: stub + two regular periods.
-        let whole = dc.year_fraction(ymd(2002, Month::Aug, 15), ymd(2004, Month::Jan, 15));
-        assert_eq!(whole.parts(), (521, 368)); // 153/368 + 1
-        // Mid-period accrual inside a regular period is proportional.
-        let partial = dc.year_fraction(ymd(2003, Month::Jan, 15), ymd(2003, Month::Apr, 15));
-        assert_eq!(partial.parts(), (45, 181)); // 90/(2×181)
-    }
-
-    /// Short-back-stub schedule via forward generation.
-    #[test]
-    fn bound_icma_back_stub_schedule() {
-        let schedule = unadjusted_schedule(
-            ymd(2003, Month::Jan, 15),
-            ymd(2004, Month::Jun, 30),
-            crate::DateGenerationRule::Forward,
-        );
-        assert_eq!(
-            schedule.dates(),
-            &[
-                ymd(2003, Month::Jan, 15),
-                ymd(2003, Month::Jul, 15),
-                ymd(2004, Month::Jan, 15),
-                ymd(2004, Month::Jun, 30),
-            ],
-        );
-        let dc = ActActICMA::new(Frequency::Semiannual)
-            .bind(&schedule)
-            .unwrap();
-        // The back stub accrues against its notional period
-        // Jan 15 2004 → Jul 15 2004 (182 days): 167/(2×182).
-        let stub = dc.year_fraction(ymd(2004, Month::Jan, 15), ymd(2004, Month::Jun, 30));
-        assert_eq!(stub.parts(), (167, 364));
-        // Regular front periods stay exact halves.
-        let regular = dc.year_fraction(ymd(2003, Month::Jan, 15), ymd(2003, Month::Jul, 15));
-        assert_eq!(regular.parts(), (1, 2));
-    }
-
-    /// Dates outside the schedule's span accrue nothing — deliberate
-    /// clamping semantics.
-    /// A *long* stub is longer than one coupon period, so its accrual
-    /// reaches past the schedule's named reference period into
-    /// adjacent notional ones, which is why the lattice supplies
-    /// windows beyond the one a schedule names.
-    #[test]
-    fn bound_icma_long_stub_spans_several_notional_periods() {
-        // Issued 2002-01-10 with the first coupon at 2003-01-15: a
-        // 12-month front stub on a semiannual bond.
-        let schedule = crate::ScheduleBuilder::new(
-            ymd(2002, Month::Jan, 10),
-            ymd(2004, Month::Jan, 15),
-            Period::Months(6),
-            crate::calendars::NULL_CALENDAR,
-        )
-        .backwards()
-        .with_first_date(ymd(2003, Month::Jan, 15))
-        .with_convention(crate::BusinessDayConvention::Unadjusted)
-        .with_termination_convention(crate::BusinessDayConvention::Unadjusted)
-        .build()
-        .unwrap();
-        assert_eq!(schedule.dates()[0], ymd(2002, Month::Jan, 10));
-        assert_eq!(schedule.dates()[1], ymd(2003, Month::Jan, 15));
-        // The schedule names one reference period per coupon period.
-        assert_eq!(
-            schedule.reference_periods().next().unwrap(),
-            ymd(2002, Month::Jul, 15)..ymd(2003, Month::Jan, 15),
-        );
-
-        let dc = ActActICMA::new(Frequency::Semiannual)
-            .bind(&schedule)
-            .unwrap();
-        let stub = dc.year_fraction(ymd(2002, Month::Jan, 10), ymd(2003, Month::Jan, 15));
-        // Three windows: the named reference period 2002-07-15..
-        // 2003-01-15 (184 days, full), the notional 2002-01-15..
-        // 2002-07-15 (181 days, full), and 5 days of the notional
-        // 2001-07-15..2002-01-15 (184 days).
-        let expected = Fraction::new(1, 2)
+        let fractions: alloc::vec::Vec<_> = s
+            .periods()
+            .map(|p| ActActICMA.accrual_fraction(&p).unwrap())
+            .collect();
+        assert_eq!(fractions, [frac(153, 368), frac(1, 2), frac(1, 2)]);
+        // Part of a regular period is proportional.
+        let partial = s
+            .periods()
+            .nth(1)
             .unwrap()
-            .checked_add(Fraction::new(1, 2).unwrap())
-            .unwrap()
-            .checked_add(Fraction::new(5, 2 * 184).unwrap())
+            .until(ymd(2003, Month::Apr, 15))
             .unwrap();
-        assert_eq!(stub, expected);
-        assert_eq!(stub.parts(), (373, 368));
-        // Over a full coupon of accrual — impossible from one window.
-        assert!(stub > Fraction::new(1, 1).unwrap());
+        assert_eq!(
+            ActActICMA.accrual_fraction(&partial).unwrap(),
+            frac(45, 181)
+        );
+
+        // Short back stub, forward: 167 days of a 182-day notional period.
+        let s = semiannual(ymd(2003, Month::Jan, 15), ymd(2004, Month::Jun, 30))
+            .forwards()
+            .build()
+            .unwrap();
+        let stub = s.periods().last().unwrap();
+        assert_eq!(ActActICMA.accrual_fraction(&stub).unwrap(), frac(167, 364));
+
+        // A 12-month front stub reaches past its reference period into
+        // two notional ones: 1/2 + 1/2 + 5/368.
+        let s = semiannual(ymd(2002, Month::Jan, 10), ymd(2004, Month::Jan, 15))
+            .with_first_date(ymd(2003, Month::Jan, 15))
+            .build()
+            .unwrap();
+        let stub = s.periods().next().unwrap();
+        assert_eq!(
+            stub.reference(),
+            ymd(2002, Month::Jul, 15)..ymd(2003, Month::Jan, 15)
+        );
+        assert_eq!(ActActICMA.accrual_fraction(&stub).unwrap(), frac(373, 368));
+    }
+
+    /// The review's bond. With the default bond conventions it accrues
+    /// unadjusted and ICMA gives 5/368 at 2026-03-20 and 17/46 for the
+    /// front stub. Accrued on adjusted dates (as some terms say), ICMA
+    /// counts those dates, as every convention and `QuantLib` do:
+    /// 2/183 and 137/370.
+    #[test]
+    fn act_act_icma_accrues_on_the_schedules_own_dates() {
+        let build = |convention| {
+            crate::ScheduleBuilder::new(
+                ymd(2024, Month::May, 2),
+                ymd(2029, Month::Sep, 15),
+                Period::Months(6),
+                crate::calendars::us::SETTLEMENT,
+            )
+            .with_convention(convention)
+            .build()
+            .unwrap()
+        };
+        let settle = ymd(2026, Month::Mar, 20);
+        let check = |s: &Schedule, accrued: Fraction, stub: Fraction| {
+            let to_date = s
+                .accrual_period(settle)
+                .and_then(|p| p.until(settle))
+                .unwrap();
+            assert_eq!(ActActICMA.accrual_fraction(&to_date).unwrap(), accrued);
+            let front = s.periods().next().unwrap();
+            assert_eq!(ActActICMA.accrual_fraction(&front).unwrap(), stub);
+            for p in s.periods().skip(1).take(s.periods().len() - 2) {
+                assert_eq!(ActActICMA.accrual_fraction(&p).unwrap(), frac(1, 2));
+            }
+        };
+        check(
+            &build(crate::BusinessDayConvention::Unadjusted),
+            frac(5, 368),
+            frac(17, 46),
+        );
+        check(
+            &build(crate::BusinessDayConvention::ModifiedFollowing),
+            frac(2, 183),
+            frac(137, 370),
+        );
+    }
+
+    /// A long first coupon steps one coupon back from its reference
+    /// period. February 28 is a month end, but only a month-end bond's
+    /// notional coupon is August 31; a bond paying on the 28th steps
+    /// back to August 28.
+    #[test]
+    fn act_act_icma_long_first_coupon_snaps_only_on_month_end_bonds() {
+        let issue = ymd(2024, Month::Nov, 15);
+        for (day, expected) in [(28, frac(289, 368)), (31, frac(143, 181))] {
+            let first = ymd(2025, Month::Aug, day);
+            let schedule = crate::ScheduleBuilder::new(
+                issue,
+                ymd(2027, Month::Aug, day),
+                Period::Months(6),
+                crate::calendars::NULL_CALENDAR,
+            )
+            .with_first_date(first)
+            .build()
+            .unwrap();
+            let stub = schedule.periods().next().unwrap();
+            assert_eq!(stub.reference(), ymd(2025, Month::Feb, 28)..first);
+            assert_eq!(ActActICMA.accrual_fraction(&stub).unwrap(), expected);
+            let manual = icma(
+                issue,
+                first,
+                ymd(2025, Month::Feb, 28),
+                first,
+                Frequency::Semiannual,
+            );
+            assert_eq!(manual, Ok(expected));
+        }
+    }
+
+    #[test]
+    fn act_act_icma_needs_a_coupon_frequency() {
+        let dates = alloc::vec![ymd(2025, Month::Jan, 15), ymd(2025, Month::Jul, 15)];
+        let bare = Schedule::try_from(dates.clone()).unwrap();
+        let period = bare.periods().next().unwrap();
+        assert_eq!(
+            ActActICMA.accrual_fraction(&period),
+            Err(TimeError::MissingFrequency)
+        );
+        let framed = Schedule::try_from((dates, Frequency::Semiannual)).unwrap();
+        let period = framed.periods().next().unwrap();
+        assert_eq!(ActActICMA.accrual_fraction(&period), Ok(frac(1, 2)));
+        assert_eq!(ActActICMA.name(), "Actual/Actual (ICMA)");
     }
 
     /// The accrual math treats a `Range<Date>` as the half-open
@@ -1239,84 +1024,6 @@ mod tests {
             (ymd(2025, Month::Apr, 1)..ymd(2025, Month::Jan, 1)).days(),
             -90
         );
-    }
-
-    #[test]
-    fn bound_icma_clamps_outside_schedule_span() {
-        let schedule = unadjusted_schedule(
-            ymd(2003, Month::Jan, 15),
-            ymd(2004, Month::Jan, 15),
-            crate::DateGenerationRule::Backward,
-        );
-        let dc = ActActICMA::new(Frequency::Semiannual)
-            .bind(&schedule)
-            .unwrap();
-        // Entirely before / after the schedule: zero.
-        assert!(
-            dc.year_fraction(ymd(2002, Month::Jan, 1), ymd(2003, Month::Jan, 14))
-                .is_zero()
-        );
-        assert!(
-            dc.year_fraction(ymd(2004, Month::Feb, 1), ymd(2005, Month::Jan, 1))
-                .is_zero()
-        );
-        // Straddling the start: only the in-schedule part counts.
-        assert_eq!(
-            dc.year_fraction(ymd(2002, Month::Nov, 1), ymd(2003, Month::Jul, 15))
-                .parts(),
-            (1, 2),
-        );
-    }
-
-    #[test]
-    fn bound_icma_reversal_negates() {
-        let schedule = unadjusted_schedule(
-            ymd(2002, Month::Aug, 15),
-            ymd(2004, Month::Jan, 15),
-            crate::DateGenerationRule::Backward,
-        );
-        let dc = ActActICMA::new(Frequency::Semiannual)
-            .bind(&schedule)
-            .unwrap();
-        let a = ymd(2002, Month::Sep, 1);
-        let b = ymd(2003, Month::Oct, 1);
-        let sum = dc
-            .year_fraction(a, b)
-            .checked_add(dc.year_fraction(b, a))
-            .unwrap();
-        assert_eq!(sum, Fraction::ZERO);
-        assert!(dc.year_fraction(a, a).is_zero());
-    }
-
-    /// Bound accruals are additive across any split of the schedule
-    /// span, including splits at and across stub boundaries.
-    #[test]
-    fn bound_icma_additive_across_periods() {
-        let schedule = unadjusted_schedule(
-            ymd(2002, Month::Aug, 15),
-            ymd(2004, Month::Jan, 15),
-            crate::DateGenerationRule::Backward,
-        );
-        let dc = ActActICMA::new(Frequency::Semiannual)
-            .bind(&schedule)
-            .unwrap();
-        let a = ymd(2002, Month::Sep, 1);
-        let b = ymd(2003, Month::Mar, 1);
-        let c = ymd(2003, Month::Dec, 1);
-        let split = dc
-            .year_fraction(a, b)
-            .checked_add(dc.year_fraction(b, c))
-            .unwrap();
-        assert_eq!(split, dc.year_fraction(a, c));
-    }
-
-    #[test]
-    fn bound_icma_rejects_too_short_schedules() {
-        let single = Schedule::try_from(alloc::vec![ymd(2003, Month::Jan, 15)]).unwrap();
-        assert!(matches!(
-            ActActICMA::new(Frequency::Semiannual).bind(&single),
-            Err(TimeError::ScheduleTooShort),
-        ));
     }
 
     // ---- ActActISDA examples ------------------------------------------
@@ -1665,8 +1372,7 @@ mod tests {
                 Frequency::Monthly,
                 Frequency::Weekly,
             ] {
-                let dc = ActActICMA::new(freq);
-                let yf = dc.year_fraction_with_reference(r1, r2, r1, r2).unwrap();
+                let yf = ActActICMA.year_fraction_with_reference(r1, r2, r1, r2, freq).unwrap();
                 prop_assert_eq!(yf.parts(), (1, u64::from(freq.per_year())));
             }
         }
@@ -1687,12 +1393,10 @@ mod tests {
             let a = Date::from_serial(serial + offsets[0]).unwrap();
             let b = Date::from_serial(serial + offsets[1]).unwrap();
             let c = Date::from_serial(serial + offsets[2]).unwrap();
-            let dc = ActActICMA::new(Frequency::Semiannual);
-            let split = dc
-                .year_fraction_with_reference(a, b, r1, r2).unwrap()
-                .checked_add(dc.year_fraction_with_reference(b, c, r1, r2).unwrap())
+            let split = icma(a, b, r1, r2, Frequency::Semiannual).unwrap()
+                .checked_add(icma(b, c, r1, r2, Frequency::Semiannual).unwrap())
                 .expect("shared denominator");
-            let direct = dc.year_fraction_with_reference(a, c, r1, r2).unwrap();
+            let direct = icma(a, c, r1, r2, Frequency::Semiannual).unwrap();
             prop_assert_eq!(split, direct);
         }
     }

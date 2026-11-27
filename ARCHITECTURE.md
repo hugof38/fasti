@@ -51,44 +51,31 @@ the constraint wins unless the design discussion says otherwise.
 
 ## Day-count conventions
 
-- **Trait-based.** `DayCount` is a trait; concrete impls are mostly
-  zero-sized structs (`Act360`, `Act365Fixed`, `Thirty360Bond`, …),
-  though schedule-aware conventions carry their parameters
-  (`ActActICMA` holds its coupon `Frequency`, `Thirty360ISDA` its
-  termination date). This is the one place in the crate where traits +
-  generics carry their weight, driven by the goal of covering
-  QuantLib's full day-count surface over time.
-- **Schedule context lives in the value, not the signature.** The
-  trait is exactly `name` / `day_count` / `year_fraction(start, end)`
-  for every convention. Schedule-defined conventions (ACT/ACT ICMA
-  today; ACT/365 Canadian later) bind their context at construction —
-  `ActActICMA::bind(&Schedule)` — instead of adding reference-period
-  parameters to the trait, mirroring QuantLib's schedule-carrying
-  `ActualActual(ISMA, schedule)` and keeping generic accrual code free
-  of ref-period plumbing. A fallible inherent
-  `year_fraction_with_reference` remains on `ActActICMA` as a manual
-  escape hatch. Where QuantLib infers the coupon frequency by
-  float-rounding the reference-period length, fasti takes the
-  `Frequency` explicitly — no floats, no inference.
-- **Each concept is owned once.** A `Schedule` knows its own coupon
-  grid, so it — not the day counter — computes the stub reference
-  boundaries and retains the `Generation` parameters (tenor,
-  end-of-month) it was built from. The two are not redundant and
-  neither derives the other: a `Period` cannot be recovered from a day
-  count (184 days does not say "6 months"), and business-day
-  adjustment destroys the arithmetic test for regularity, which is why
-  QuantLib stores `isRegular_` flags. Only the ends can deviate from
-  the regular grid, so a schedule stores those two boundaries rather
-  than a parallel date list. A day counter would otherwise have to re-derive the
-  lattice and re-classify stubs from already-adjusted dates. This
-  mirrors QuantLib, whose `Schedule` keeps `tenor_`, `endOfMonth_`,
-  and per-period `isRegular_` flags for exactly this purpose, while
-  the quasi-payment derivation lives in `actualactual.cpp` — the
-  day-count side. `ReferenceGrid` sits there for the same reason:
-  extending a reference period into notional windows is accrual math.
-  Because the schedule names its lattice, `ActActICMA::bind` can
-  refuse a convention whose frequency disagrees with the schedule's
-  tenor instead of silently accruing against the wrong grid.
+- **Trait-based.** `DayCount` is a trait over two dates; concrete
+  impls are mostly zero-sized structs (`Act360`, `Thirty360Bond`, …),
+  `Thirty360ISDA` carrying its termination date. `AccrualDayCount` is
+  the trait over an `AccrualPeriod`, with a blanket impl for every
+  `DayCount`.
+- **Schedule-defined conventions measure periods, not dates.** ACT/ACT
+  ICMA implements only `AccrualDayCount`: an `AccrualPeriod` carries its
+  reference period and the `Generation` it came from, so ICMA reads its
+  coupon frequency and any stub's notional grid from there, and there is
+  no frequency to pass that could disagree with the schedule. Like every
+  convention it accrues on the schedule's accrual dates: unadjusted for
+  a bond (the builder's default), adjusted when the terms say so, as
+  `QuantLib` and rateslib do. `year_fraction_with_reference` stays as the
+  explicit escape hatch. Where QuantLib infers the frequency by
+  float-rounding a period length, fasti takes it from the tenor.
+- **Each concept is owned once.** A `Schedule` keeps its accrual dates
+  and one payment date per period (the payment convention, calendar and
+  lag applied to each accrual end). Payment dates are stored because a
+  schedule owns no calendar to recompute them; unadjusted dates are not,
+  because nothing that measures accrual should read them. The schedule
+  computes the stub reference boundaries and retains the `Generation`
+  it was built from. Only the ends can deviate from the regular grid,
+  so it stores those two boundaries rather than a reference date per
+  period. Extending a reference period into notional windows is
+  accrual math, so it lives with ICMA.
 - **`year_fraction` returns a `Fraction`** — an `i64 / u64` integer
   rational, signed by direction. Never `f64`, never a decimal type.
   Reversed inputs (`end < start`) produce a negative fraction that
